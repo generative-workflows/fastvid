@@ -715,27 +715,23 @@ fn encode_spatial_tile(plane: &Plane, tile: Tile, quantizer: &Quantizer) -> Enco
     let plane_width = plane.width as usize;
     let origin_x = tile.x as usize;
     let origin_y = tile.y as usize;
-    let mut reconstructed = vec![0u8; width * height];
+    let mut reconstructed_row = vec![0u8; width];
     let mut residuals = ResidualAccumulator::new(width * height);
     for y in 0..height {
-        for x in 0..width {
-            let index = y * width + x;
-            let left = if x > 0 { reconstructed[index - 1] } else { 0 };
-            let above = if y > 0 {
-                reconstructed[index - width]
-            } else {
-                0
-            };
-            let upper_left = if x > 0 && y > 0 {
-                reconstructed[index - width - 1]
-            } else {
-                0
-            };
-            let plane_index = (origin_y + y) * plane_width + origin_x + x;
+        let row_start = (origin_y + y) * plane_width + origin_x;
+        let mut left = 0;
+        let mut upper_left = 0;
+        for (&sample, reconstructed_slot) in plane.data[row_start..row_start + width]
+            .iter()
+            .zip(&mut reconstructed_row)
+        {
+            let above = *reconstructed_slot;
             let prediction = i32::from(paeth(left, above, upper_left));
-            let sample = i32::from(plane.data[plane_index]);
-            let quantized = quantizer.quantize(sample - prediction);
-            reconstructed[index] = (prediction + quantized * quantizer.step).clamp(0, 255) as u8;
+            let quantized = quantizer.quantize(i32::from(sample) - prediction);
+            let reconstructed = (prediction + quantized * quantizer.step).clamp(0, 255) as u8;
+            *reconstructed_slot = reconstructed;
+            upper_left = above;
+            left = reconstructed;
             residuals.push(quantized);
         }
     }
@@ -1367,6 +1363,44 @@ mod tests {
         Frame::yuv422p8(width, height, FrameRate::new(24_000, 1_001), luma, cb, cr).unwrap()
     }
 
+    fn encode_spatial_tile_full_reference(
+        plane: &Plane,
+        tile: Tile,
+        quantizer: &Quantizer,
+    ) -> EncodedTile {
+        let width = tile.width as usize;
+        let height = tile.height as usize;
+        let plane_width = plane.width as usize;
+        let origin_x = tile.x as usize;
+        let origin_y = tile.y as usize;
+        let mut reconstructed = vec![0u8; width * height];
+        let mut residuals = ResidualAccumulator::new(width * height);
+        for y in 0..height {
+            for x in 0..width {
+                let index = y * width + x;
+                let left = if x > 0 { reconstructed[index - 1] } else { 0 };
+                let above = if y > 0 {
+                    reconstructed[index - width]
+                } else {
+                    0
+                };
+                let upper_left = if x > 0 && y > 0 {
+                    reconstructed[index - width - 1]
+                } else {
+                    0
+                };
+                let plane_index = (origin_y + y) * plane_width + origin_x + x;
+                let prediction = i32::from(paeth(left, above, upper_left));
+                let sample = i32::from(plane.data[plane_index]);
+                let quantized = quantizer.quantize(sample - prediction);
+                reconstructed[index] =
+                    (prediction + quantized * quantizer.step).clamp(0, 255) as u8;
+                residuals.push(quantized);
+            }
+        }
+        residuals.finish(PREDICT_SPATIAL)
+    }
+
     #[test]
     fn stream_info_mode_counts_cover_every_tile() {
         let frame = patterned_frame(513, 257);
@@ -1413,6 +1447,26 @@ mod tests {
             for residual in -255..=255 {
                 assert_eq!(table.quantize(residual), quantize(residual, step));
             }
+        }
+    }
+
+    #[test]
+    fn rolling_spatial_row_matches_full_reconstruction() {
+        let frame = patterned_frame(37, 23);
+        let tile = Tile {
+            plane: 0,
+            x: 3,
+            y: 2,
+            width: 31,
+            height: 19,
+        };
+        for quality in [90, 100] {
+            let quantizer = Quantizer::new(quantization_step(quality));
+            let rolling = encode_spatial_tile(&frame.planes[0], tile, &quantizer);
+            let reference = encode_spatial_tile_full_reference(&frame.planes[0], tile, &quantizer);
+            assert_eq!(rolling.entropy_mode, reference.entropy_mode);
+            assert_eq!(rolling.prediction_mode, reference.prediction_mode);
+            assert_eq!(rolling.payload, reference.payload);
         }
     }
 

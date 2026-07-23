@@ -201,7 +201,9 @@ Benchmark cost is proportional to confidence required:
    pinned spatial/temporal, one/four-thread cases. It targets a sub-minute
    runtime and reports per-case medians plus encode/decode geomeans. Use it
    while shaping an optimization; a result inside its measured 5% noise band
-   is not evidence of improvement.
+   is not evidence of improvement. Preserved-binary optimization comparisons
+   use `scripts/benchmark-ab-feedback.sh`, an even trial count, warm-up of both
+   binaries, and alternating execution order.
 2. **Focused confirmation:** run every applicable corpus sample at the
    affected qualities, thread counts, and coding track, normally with three
    trials. Use this only after the fast tier shows a material effect.

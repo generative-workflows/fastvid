@@ -25,3 +25,5 @@ before entering the format.
 | [0018](0018-modern-perceptual-metrics.md) | Recent SSIM descendants, FUNQUE+, DISTS, ColorVideoVDP | Fast/slow metric tiers, texture, temporal, color, and HDR quality | Reviewed |
 | [0019](0019-modern-integer-entropy-kernels.md) | Stream VByte, exact reciprocal arithmetic, recent Rice LUT work | Control/data separation, lookup tables, and exact integer kernels | Reviewed |
 | [0020](0020-modern-parallel-codec-kernels.md) | vecSZ, JPEG XL, AV1 | Dependency removal, SIMD structure, cache-aware block architecture | Reviewed |
+| [0021](0021-rayon-work-stealing.md) | Rayon 1.12 documentation and source | Persistent work-stealing pools and ordered parallel tile collection | Reviewed |
+| [0022](0022-parking-lot-mutex.md) | `parking_lot` 0.12.5 documentation and source | Adaptive userspace mutex fast path for tile-output coordination | Reviewed |

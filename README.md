@@ -33,10 +33,10 @@ warm-up and one recorded development trial per cell.
 
 | Quality | Threads | Geo. ratio | Encode | Raw encode | Decode | Raw decode | Mean Y PSNR | Mean SSIM |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 90 | 1 | 7.308x | 40.58 MP/s | 81.15 MB/s | 53.87 MP/s | 107.74 MB/s | 49.868 dB | 0.996557 |
-| 90 | 4 | 7.308x | 148.82 MP/s | 297.64 MB/s | 174.24 MP/s | 348.47 MB/s | 49.868 dB | 0.996557 |
-| 100 | 1 | 5.013x | 38.49 MP/s | 76.99 MB/s | 54.64 MP/s | 109.28 MB/s | exact | 1.000000 |
-| 100 | 4 | 5.013x | 145.79 MP/s | 291.59 MB/s | 176.98 MP/s | 353.95 MB/s | exact | 1.000000 |
+| 90 | 1 | 7.308x | 49.22 MP/s | 98.45 MB/s | 56.07 MP/s | 112.13 MB/s | 49.868 dB | 0.996557 |
+| 90 | 4 | 7.308x | 183.57 MP/s | 367.14 MB/s | 186.65 MP/s | 373.31 MB/s | 49.868 dB | 0.996557 |
+| 100 | 1 | 5.013x | 43.79 MP/s | 87.58 MB/s | 52.80 MP/s | 105.60 MB/s | exact | 1.000000 |
+| 100 | 4 | 5.013x | 168.06 MP/s | 336.11 MB/s | 181.26 MP/s | 362.51 MB/s | exact | 1.000000 |
 
 Compression is the geometric mean of per-sample raw/encoded ratios. Throughput
 and quality columns are arithmetic means of per-sample results; MP/s counts
