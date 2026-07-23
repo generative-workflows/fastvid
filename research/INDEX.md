@@ -27,3 +27,4 @@ before entering the format.
 | [0020](0020-modern-parallel-codec-kernels.md) | vecSZ, JPEG XL, AV1 | Dependency removal, SIMD structure, cache-aware block architecture | Reviewed |
 | [0021](0021-rayon-work-stealing.md) | Rayon 1.12 documentation and source | Persistent work-stealing pools and ordered parallel tile collection | Reviewed |
 | [0022](0022-parking-lot-mutex.md) | `parking_lot` 0.12.5 documentation and source | Adaptive userspace mutex fast path for tile-output coordination | Reviewed |
+| [0023](0023-forward-citation-space-savings.md) | Recent predictor papers, WebP lossless, ANS/FSE, and codec benchmarks | Forward-citation pass for bounded residuals, block predictors, and exact byte savings | Reviewed |
