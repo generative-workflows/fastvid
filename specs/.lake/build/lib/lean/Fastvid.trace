@@ -1,0 +1,26 @@
+{"synthetic": false,
+ "outputs":
+ {"o": ["3938896942046140398"],
+  "i": "14795213655500807796",
+  "c": "12627543985296264280"},
+ "log":
+ [{"message":
+   ".> LEAN_PATH=/home/robert/projects/fastvid/specs/.lake/build/lib/lean /home/robert/.elan/toolchains/leanprover--lean4---v4.22.0/bin/lean /home/robert/projects/fastvid/specs/Fastvid.lean -o /home/robert/projects/fastvid/specs/.lake/build/lib/lean/Fastvid.olean -i /home/robert/projects/fastvid/specs/.lake/build/lib/lean/Fastvid.ilean -c /home/robert/projects/fastvid/specs/.lake/build/ir/Fastvid.c --setup /home/robert/projects/fastvid/specs/.lake/build/ir/Fastvid.setup.json --json",
+   "level": "trace"}],
+ "inputs":
+ [["Fastvid:deps",
+   [["deps",
+     [["«fastvid-spec»/Fastvid:extraDep",
+       [["@«fastvid-spec»:extraDep", "1723"]]],
+      ["import oleans", "1723"]]],
+    ["libs",
+     [["import dynlibs", "1723"],
+      ["package external libraries", "1723"],
+      ["module dynlibs", "1723"],
+      ["module plugins", "1723"]]]]],
+  ["Lean 4.22.0, commit ba2cbbf09d4978f416e0ebd1fceeebc2c4138c05",
+   "8739116525927611134"],
+  ["/home/robert/projects/fastvid/specs/Fastvid.lean", "4490884092204105127"],
+  ["options", "1723"],
+  ["Module.leanArgs: #[]", "1723"]],
+ "depHash": "14859596486118512579"}

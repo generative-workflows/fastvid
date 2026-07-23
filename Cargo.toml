@@ -1,0 +1,21 @@
+[package]
+name = "fastvid"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Experimental high-throughput intermediate video codec"
+
+[lib]
+name = "fastvid"
+path = "src/lib.rs"
+
+[[bin]]
+name = "fastvid"
+path = "src/bin/fastvid.rs"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[lints.rust]
+unsafe_code = "forbid"
