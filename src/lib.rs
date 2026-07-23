@@ -7,6 +7,7 @@
 //! explicit.
 
 mod codec;
+mod codec16;
 mod metrics;
 mod model;
 
@@ -14,5 +15,11 @@ pub use codec::{
     DecodedTile, StreamInfo, decode, decode_tile, decode_with_reference, encode,
     encode_with_reference, inspect,
 };
-pub use metrics::{QualityMetrics, compare_plane, ssim_plane};
-pub use model::{CodecError, CodecOptions, Frame, FrameRate, PixelFormat, Plane};
+pub use codec16::{
+    DecodedTile16, decode_tile16, decode16, decode16_with_reference, encode16,
+    encode16_with_reference, inspect16,
+};
+pub use metrics::{
+    QualityMetrics, QualityMetrics16, compare_plane, compare_plane16, ssim_plane, ssim_plane16,
+};
+pub use model::{CodecError, CodecOptions, Frame, Frame16, FrameRate, PixelFormat, Plane, Plane16};

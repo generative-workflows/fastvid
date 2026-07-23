@@ -19,3 +19,7 @@ before entering the format.
 | [0010](0010-single-frame-random-access.md) | RFC 6386, RFC 8761, AV2 CTC | Single-frame access cost and GOP preroll | Reviewed |
 | [0011](0011-openapv.md) | Academy Software Foundation OpenAPV | Royalty-free professional intra-codec architecture and comparison target | Reviewed |
 | [0012](0012-simd-cache-profiling.md) | Rust `std::arch`/`std::simd`, Cachegrind | Safe SIMD strategy, cache profiling, and current hot-path candidates | Reviewed |
+| [0013](0013-high-bit-depth-codec-design.md) | OpenAPV, FFV1 | Native 10/12/16-bit formats, arithmetic bounds, and compatibility | Reviewed |
+| [0014](0014-sampling-and-high-bit-quantization.md) | Samply, Rust `Vec` | On-CPU codec profiles and high-bit quantizer working-set design | Reviewed |
+| [0015](0015-openapv-matched-comparison.md) | OpenAPV v0.3.0.0 applications and Fastvid high-bit metrics | Matched-input, matched-quality comparison protocol | Reviewed |
+| [0016](0016-rolling-reconstruction-state.md) | Fastvid high-bit predictor working-set analysis | Rolling spatial state and temporal write elimination | Reviewed |

@@ -1,6 +1,7 @@
 use fastvid::{
-    CodecOptions, Frame, FrameRate, PixelFormat, compare_plane, decode, decode_with_reference,
-    encode, encode_with_reference, inspect, ssim_plane,
+    CodecOptions, Frame, Frame16, FrameRate, PixelFormat, compare_plane, compare_plane16, decode,
+    decode_with_reference, decode16, decode16_with_reference, encode, encode_with_reference,
+    encode16, encode16_with_reference, inspect, inspect16, ssim_plane, ssim_plane16,
 };
 use std::env;
 use std::fs;
@@ -22,9 +23,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     match arguments.get(1).map(String::as_str) {
         Some("demo") => demo(&arguments[2..]),
         Some("encode-yuv422") => encode_yuv422(&arguments[2..]),
+        Some("encode-yuv422p16le") => encode_yuv422p16le(&arguments[2..]),
         Some("benchmark-yuv422") => benchmark_yuv422(&arguments[2..]),
+        Some("benchmark-yuv422p16le") => benchmark_yuv422p16le(&arguments[2..]),
+        Some("metrics-yuv422p16le") => metrics_yuv422p16le(&arguments[2..]),
         Some("benchmark-access-yuv422") => benchmark_access_yuv422(&arguments[2..]),
         Some("decode") => decode_file(&arguments[2..]),
+        Some("decode16") => decode16_file(&arguments[2..]),
         Some("inspect") => inspect_file(&arguments[2..]),
         Some("-h" | "--help" | "help") | None => {
             print_help();
@@ -32,6 +37,42 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(command) => Err(format!("unknown command `{command}`; use --help").into()),
     }
+}
+
+fn encode_yuv422p16le(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    if arguments.len() != 9 {
+        return Err(
+            "encode-yuv422p16le needs INPUT OUTPUT WIDTH HEIGHT FPS_NUM/FPS_DEN BIT_DEPTH QUALITY THREADS TILE_SIZE"
+                .into(),
+        );
+    }
+    let width = arguments[2].parse()?;
+    let height = arguments[3].parse()?;
+    let (fps_numerator, fps_denominator) = parse_rate(&arguments[4])?;
+    let bit_depth = arguments[5].parse()?;
+    let quality = arguments[6].parse()?;
+    let threads = arguments[7].parse()?;
+    let tile_size = arguments[8].parse()?;
+    let frame = frame16_from_yuv422le(
+        &fs::read(&arguments[0])?,
+        width,
+        height,
+        bit_depth,
+        FrameRate::new(fps_numerator, fps_denominator),
+    )?;
+    fs::write(
+        &arguments[1],
+        encode16(
+            &frame,
+            CodecOptions {
+                quality,
+                tile_width: tile_size,
+                tile_height: tile_size,
+                threads,
+            },
+        )?,
+    )?;
+    Ok(())
 }
 
 fn demo(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
@@ -291,6 +332,216 @@ fn benchmark_yuv422(arguments: &[String]) -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
+fn benchmark_yuv422p16le(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    if !(8..=9).contains(&arguments.len()) {
+        return Err(
+            "benchmark-yuv422p16le needs INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES BIT_DEPTH QUALITY THREADS [GOP]"
+                .into(),
+        );
+    }
+    let input = &arguments[0];
+    let width: u32 = arguments[1].parse()?;
+    let height: u32 = arguments[2].parse()?;
+    let (fps_numerator, fps_denominator) = parse_rate(&arguments[3])?;
+    let frame_count: usize = arguments[4].parse()?;
+    let bit_depth: u8 = arguments[5].parse()?;
+    let quality: u8 = arguments[6].parse()?;
+    let threads: usize = arguments[7].parse()?;
+    let gop: usize = arguments.get(8).map_or(Ok(1), |value| value.parse())?;
+    if frame_count == 0 || gop == 0 {
+        return Err("frame count and GOP must be nonzero".into());
+    }
+    let raw = fs::read(input)?;
+    let sample_count = yuv422_sample_count(width, height)?;
+    let frame_len = sample_count
+        .checked_mul(size_of::<u16>())
+        .ok_or("frame is too large")?;
+    if raw.len()
+        != frame_len
+            .checked_mul(frame_count)
+            .ok_or("input is too large")?
+    {
+        return Err("input length does not match the declared YUV422p16le sequence".into());
+    }
+    let frame_rate = FrameRate::new(fps_numerator, fps_denominator);
+    let options = CodecOptions {
+        quality,
+        threads,
+        ..CodecOptions::default()
+    };
+    let mut encoded_bytes = 0usize;
+    let mut encode_time = std::time::Duration::ZERO;
+    let mut decode_time = std::time::Duration::ZERO;
+    let mut squared_errors = [0.0; 3];
+    let mut plane_samples = [0usize; 3];
+    let mut max_error = 0u16;
+    let mut luma_ssim = 0.0;
+    let mut previous = None;
+    for (frame_index, bytes) in raw.chunks_exact(frame_len).enumerate() {
+        let frame = frame16_from_yuv422le(bytes, width, height, bit_depth, frame_rate)?;
+        let predicted = !frame_index.is_multiple_of(gop);
+        let start = Instant::now();
+        let encoded = if predicted {
+            encode16_with_reference(
+                &frame,
+                previous
+                    .as_ref()
+                    .expect("non-key frame has a preceding decoded frame"),
+                options,
+            )?
+        } else {
+            encode16(&frame, options)?
+        };
+        encode_time += start.elapsed();
+        encoded_bytes = encoded_bytes
+            .checked_add(encoded.len())
+            .ok_or("encoded sequence is too large")?;
+        let start = Instant::now();
+        let decoded = if predicted {
+            decode16_with_reference(
+                &encoded,
+                previous
+                    .as_ref()
+                    .expect("non-key frame has a preceding decoded frame"),
+                threads,
+            )?
+        } else {
+            decode16(&encoded, threads)?
+        };
+        decode_time += start.elapsed();
+        for (plane, (reference, actual)) in frame.planes.iter().zip(&decoded.planes).enumerate() {
+            let metrics = compare_plane16(&reference.data, &actual.data, bit_depth)
+                .ok_or("metric input mismatch")?;
+            squared_errors[plane] += metrics.mse * metrics.samples as f64;
+            plane_samples[plane] += metrics.samples;
+            max_error = max_error.max(metrics.max_error);
+        }
+        luma_ssim += ssim_plane16(
+            &frame.planes[0].data,
+            &decoded.planes[0].data,
+            width as usize,
+            height as usize,
+            bit_depth,
+        )
+        .ok_or("SSIM input mismatch")?;
+        previous = Some(decoded);
+    }
+    let encode_seconds = encode_time.as_secs_f64();
+    let decode_seconds = decode_time.as_secs_f64();
+    let megapixels = f64::from(width) * f64::from(height) * frame_count as f64 / 1_000_000.0;
+    let source_seconds = frame_count as f64 * f64::from(fps_denominator) / f64::from(fps_numerator);
+    let peak = if bit_depth == 16 {
+        f64::from(u16::MAX)
+    } else {
+        f64::from((1u16 << bit_depth) - 1)
+    };
+    let psnr = |plane: usize| {
+        let mse = squared_errors[plane] / plane_samples[plane] as f64;
+        if mse == 0.0 {
+            f64::INFINITY
+        } else {
+            10.0 * (peak * peak / mse).log10()
+        }
+    };
+    println!(
+        "input\tframes\tbit_depth\tquality\tthreads\tgop\traw_bytes\tencoded_bytes\tratio\tencode_ms\tdecode_ms\tencode_mpps\tdecode_mpps\tencode_raw_mb_s\tdecode_raw_mb_s\tencoded_stream_mb_s\tencoded_stream_mbps\ty_psnr\tcb_psnr\tcr_psnr\ty_block_ssim\tmax_error"
+    );
+    println!(
+        "{input}\t{frame_count}\t{bit_depth}\t{quality}\t{threads}\t{gop}\t{}\t{encoded_bytes}\t{:.6}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.8}\t{max_error}",
+        raw.len(),
+        raw.len() as f64 / encoded_bytes as f64,
+        encode_seconds * 1000.0,
+        decode_seconds * 1000.0,
+        megapixels / encode_seconds,
+        megapixels / decode_seconds,
+        raw.len() as f64 / encode_seconds / 1_000_000.0,
+        raw.len() as f64 / decode_seconds / 1_000_000.0,
+        encoded_bytes as f64 / source_seconds / 1_000_000.0,
+        encoded_bytes as f64 / source_seconds / 1_000_000.0 * 8.0,
+        psnr(0),
+        psnr(1),
+        psnr(2),
+        luma_ssim / frame_count as f64,
+    );
+    Ok(())
+}
+
+fn metrics_yuv422p16le(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    if arguments.len() != 6 {
+        return Err(
+            "metrics-yuv422p16le needs REFERENCE DECODED WIDTH HEIGHT FRAMES BIT_DEPTH".into(),
+        );
+    }
+    let reference = fs::read(&arguments[0])?;
+    let decoded = fs::read(&arguments[1])?;
+    let width: u32 = arguments[2].parse()?;
+    let height: u32 = arguments[3].parse()?;
+    let frame_count: usize = arguments[4].parse()?;
+    let bit_depth: u8 = arguments[5].parse()?;
+    if frame_count == 0 {
+        return Err("frame count must be nonzero".into());
+    }
+    let frame_len = yuv422_sample_count(width, height)?
+        .checked_mul(size_of::<u16>())
+        .ok_or("frame is too large")?;
+    let sequence_len = frame_len
+        .checked_mul(frame_count)
+        .ok_or("sequence is too large")?;
+    if reference.len() != sequence_len || decoded.len() != sequence_len {
+        return Err("input length does not match the declared YUV422p16le sequence".into());
+    }
+    let frame_rate = FrameRate::new(24, 1);
+    let mut squared_errors = [0.0; 3];
+    let mut plane_samples = [0usize; 3];
+    let mut max_error = 0u16;
+    let mut luma_ssim = 0.0;
+    for (reference_bytes, decoded_bytes) in reference
+        .chunks_exact(frame_len)
+        .zip(decoded.chunks_exact(frame_len))
+    {
+        let expected =
+            frame16_from_yuv422le(reference_bytes, width, height, bit_depth, frame_rate)?;
+        let actual = frame16_from_yuv422le(decoded_bytes, width, height, bit_depth, frame_rate)?;
+        for (plane, (expected, actual)) in expected.planes.iter().zip(&actual.planes).enumerate() {
+            let metrics = compare_plane16(&expected.data, &actual.data, bit_depth)
+                .ok_or("metric input mismatch")?;
+            squared_errors[plane] += metrics.mse * metrics.samples as f64;
+            plane_samples[plane] += metrics.samples;
+            max_error = max_error.max(metrics.max_error);
+        }
+        luma_ssim += ssim_plane16(
+            &expected.planes[0].data,
+            &actual.planes[0].data,
+            width as usize,
+            height as usize,
+            bit_depth,
+        )
+        .ok_or("SSIM input mismatch")?;
+    }
+    let peak = if bit_depth == 16 {
+        f64::from(u16::MAX)
+    } else {
+        f64::from((1u16 << bit_depth) - 1)
+    };
+    let psnr = |plane: usize| {
+        let mse = squared_errors[plane] / plane_samples[plane] as f64;
+        if mse == 0.0 {
+            f64::INFINITY
+        } else {
+            10.0 * (peak * peak / mse).log10()
+        }
+    };
+    println!("frames\tbit_depth\ty_psnr\tcb_psnr\tcr_psnr\ty_block_ssim\tmax_error");
+    println!(
+        "{frame_count}\t{bit_depth}\t{:.6}\t{:.6}\t{:.6}\t{:.8}\t{max_error}",
+        psnr(0),
+        psnr(1),
+        psnr(2),
+        luma_ssim / frame_count as f64,
+    );
+    Ok(())
+}
+
 fn benchmark_access_yuv422(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     // Codec-only warm-cache random access; source/container I/O and sequence
     // encoding are intentionally outside the timed region (research/0010).
@@ -458,6 +709,53 @@ fn frame_from_yuv422(
     )?)
 }
 
+fn yuv422_sample_count(width: u32, height: u32) -> Result<usize, Box<dyn std::error::Error>> {
+    let y_len = (width as usize)
+        .checked_mul(height as usize)
+        .ok_or("frame is too large")?;
+    let chroma_len = (width.div_ceil(2) as usize)
+        .checked_mul(height as usize)
+        .ok_or("frame is too large")?;
+    y_len
+        .checked_add(2 * chroma_len)
+        .ok_or_else(|| "frame is too large".into())
+}
+
+fn frame16_from_yuv422le(
+    raw: &[u8],
+    width: u32,
+    height: u32,
+    bit_depth: u8,
+    frame_rate: FrameRate,
+) -> Result<Frame16, Box<dyn std::error::Error>> {
+    let sample_count = yuv422_sample_count(width, height)?;
+    let byte_count = sample_count
+        .checked_mul(size_of::<u16>())
+        .ok_or("frame is too large")?;
+    if raw.len() != byte_count {
+        return Err("input length does not match one planar YUV422p16le frame".into());
+    }
+    let samples: Vec<u16> = raw
+        .chunks_exact(2)
+        .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
+        .collect();
+    let y_len = (width as usize)
+        .checked_mul(height as usize)
+        .ok_or("frame is too large")?;
+    let chroma_len = (width.div_ceil(2) as usize)
+        .checked_mul(height as usize)
+        .ok_or("frame is too large")?;
+    Ok(Frame16::yuv422(
+        width,
+        height,
+        bit_depth,
+        frame_rate,
+        samples[..y_len].to_vec(),
+        samples[y_len..y_len + chroma_len].to_vec(),
+        samples[y_len + chroma_len..].to_vec(),
+    )?)
+}
+
 fn decode_file(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     if arguments.len() != 3 {
         return Err("decode needs INPUT OUTPUT THREADS".into());
@@ -473,11 +771,30 @@ fn decode_file(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn decode16_file(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    if arguments.len() != 3 {
+        return Err("decode16 needs INPUT OUTPUT THREADS".into());
+    }
+    let frame = decode16(&fs::read(&arguments[0])?, arguments[2].parse()?)?;
+    let raw: Vec<u8> = frame
+        .planes
+        .iter()
+        .flat_map(|plane| plane.data.iter().flat_map(|sample| sample.to_le_bytes()))
+        .collect();
+    fs::write(&arguments[1], raw)?;
+    Ok(())
+}
+
 fn inspect_file(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     if arguments.len() != 1 {
         return Err("inspect needs INPUT".into());
     }
-    let info = inspect(&fs::read(&arguments[0])?)?;
+    let bytes = fs::read(&arguments[0])?;
+    let info = if bytes.get(4) == Some(&1) {
+        inspect16(&bytes)?
+    } else {
+        inspect(&bytes)?
+    };
     println!("{info:#?}");
     Ok(())
 }
@@ -538,12 +855,17 @@ fn print_help() {
 USAGE:
   fastvid demo [WIDTH HEIGHT QUALITY THREADS OUTPUT]
   fastvid encode-yuv422 INPUT OUTPUT WIDTH HEIGHT FPS_NUM/FPS_DEN QUALITY THREADS TILE_SIZE
+  fastvid encode-yuv422p16le INPUT OUTPUT WIDTH HEIGHT FPS_NUM/FPS_DEN BIT_DEPTH QUALITY THREADS TILE_SIZE
   fastvid benchmark-yuv422 INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES QUALITY THREADS [GOP]
+  fastvid benchmark-yuv422p16le INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES BIT_DEPTH QUALITY THREADS [GOP]
+  fastvid metrics-yuv422p16le REFERENCE DECODED WIDTH HEIGHT FRAMES BIT_DEPTH
   fastvid benchmark-access-yuv422 INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES QUALITY THREADS GOP TARGETS
   fastvid decode INPUT OUTPUT THREADS
+  fastvid decode16 INPUT OUTPUT THREADS
   fastvid inspect INPUT
 
-Raw YUV422 input/output is planar 8-bit Y, Cb, Cr. The bitstream is unstable."
+Raw high-bit input/output is planar Y, Cb, Cr in tightly packed little-endian
+u16 words; BIT_DEPTH is 10, 12, or 16. The bitstream is unstable."
     );
 }
 
@@ -552,5 +874,11 @@ fn _pixel_format_name(format: PixelFormat) -> &'static str {
     match format {
         PixelFormat::Gray8 => "Gray8",
         PixelFormat::Yuv422p8 => "YUV422p8",
+        PixelFormat::Gray10 => "Gray10",
+        PixelFormat::Yuv422p10 => "YUV422p10",
+        PixelFormat::Gray12 => "Gray12",
+        PixelFormat::Yuv422p12 => "YUV422p12",
+        PixelFormat::Gray16 => "Gray16",
+        PixelFormat::Yuv422p16 => "YUV422p16",
     }
 }

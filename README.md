@@ -4,10 +4,11 @@ Fastvid is an experimental CPU-oriented intermediate video codec focused on
 high fidelity, high throughput, compact frames, and inexpensive frame/tile
 access.
 
-The current version supports planar 8-bit YUV 4:2:2 and grayscale, independently
-coded tiles, spatial prediction, optional short-GOP temporal prediction, and
-per-tile adaptive zero-run or Rice entropy coding. The bitstream is experimental
-and does not promise backward compatibility.
+The current version supports planar 8/10/12/16-bit YUV 4:2:2 and grayscale,
+independently coded tiles, spatial prediction, optional short-GOP temporal
+prediction, and per-tile adaptive zero-run or Rice entropy coding. High-bit
+raw interchange uses tightly packed little-endian `u16` samples. The bitstream
+is experimental and does not promise backward compatibility.
 
 ## Quick start
 
@@ -48,22 +49,43 @@ Performance decisions use warm-up plus repeated, balanced trials as defined in
 be retained because synthetic content compresses much more strongly than
 camera/noisy content.
 
+### Native high-bit smoke snapshot
+
+Six balanced trials, one thread, GOP 1, using the checksummed native high-bit
+supplement:
+
+| Depth/sample | Quality | Ratio | Encode | Decode | Quality |
+|---|---:|---:|---:|---:|---:|
+| 10-bit HDR gradient | 90 | 4.434x | 29.12 MP/s | 44.32 MP/s | 52.00 dB Y PSNR |
+| 10-bit HDR gradient | 100 | 2.397x | 28.20 MP/s | 44.15 MP/s | exact |
+| 12-bit precision UI | 90 | 6.583x | 34.83 MP/s | 46.22 MP/s | 52.69 dB Y PSNR |
+| 12-bit precision UI | 100 | 2.402x | 26.93 MP/s | 41.25 MP/s | exact |
+| 16-bit precision motion | 90 | 24.325x | 44.28 MP/s | 64.89 MP/s | 52.93 dB Y PSNR |
+| 16-bit precision motion | 100 | 2.339x | 29.01 MP/s | 52.37 MP/s | exact |
+
+High-bit planar 4:2:2 storage uses four raw bytes per luma pixel, so its raw
+decimal MB/s is four times the listed MP/s. The procedural supplement is a
+precision and performance smoke set, not a calibrated natural-HDR quality
+corpus.
+
 ## Project documentation
 
 - [Evaluation methodology](EVALUATION_METHODOLOGY.md) defines corpus, quality,
   throughput, bitrate, random-access, and fast/slow feedback protocols.
 - [Corpus documentation](corpus/README.md) describes reproducible media,
   checksums, capability tracks, and licenses.
-- [Format specification](specs/format-v0.md) defines the current bitstream.
+- [Format specifications](specs/format-v0.md) define the 8-bit v0 syntax;
+  [version 1](specs/format-v1.md) adds native 10/12/16-bit samples.
 - [Research index](research/INDEX.md) records openly usable technical sources.
 - [`experiments/`](experiments) contains immutable accepted/rejected
   experimental design records and detailed performance history.
 
 ## Current limitations
 
-Fastvid does not yet have native 10/12-bit, 4:4:4, HDR metadata, or alpha
-profiles. HDR and alpha assets remain capability diagnostics rather than being
-silently converted into headline scores. A direct comparison with
-[OpenAPV](https://github.com/AcademySoftwareFoundation/openapv) awaits the
-native 10-bit path so throughput, bitrate, and reconstruction quality can be
-matched fairly.
+Fastvid does not yet have 4:4:4, HDR metadata, alpha profiles, or a calibrated
+natural/production high-bit corpus. High-bit YUV 4:2:2 is benchmarked
+separately from the 8-bit headline table. HDR and alpha assets remain
+capability diagnostics rather than being silently converted or discarded. A
+matched direct comparison with
+[OpenAPV](https://github.com/AcademySoftwareFoundation/openapv) remains to be
+run.

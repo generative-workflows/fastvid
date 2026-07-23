@@ -39,4 +39,39 @@ theorem temporal_recompose (current previous : Int) :
   simp only [temporalResidual]
   omega
 
+/-- Largest unsigned sample represented by `bitDepth` bits. -/
+def sampleMax (bitDepth : Nat) : Nat := 2 ^ bitDepth - 1
+
+/-- Version-one quantizer scaling, stated without implementation-width details. -/
+def quantStep (quality bitDepth : Nat) : Nat :=
+  1 + ((100 - quality) / 5) * 2 ^ (bitDepth - 8)
+
+/-- Quality 100 is lossless at every bit depth because its step is one. -/
+theorem quant_step_quality_100 (bitDepth : Nat) :
+    quantStep 100 bitDepth = 1 := by
+  simp [quantStep]
+
+/-- A nonnegative in-range residual folds below twice the sample maximum. -/
+theorem zigzag_positive_bound (residual maximum : Nat)
+    (h : residual ≤ maximum) :
+    zigzag (Int.ofNat residual) ≤ 2 * maximum := by
+  simp [zigzag]
+  omega
+
+/-- A negative residual of magnitude at most `maximum` has the same bound. -/
+theorem zigzag_negative_bound (predecessor maximum : Nat)
+    (h : predecessor < maximum) :
+    zigzag (Int.negSucc predecessor) ≤ 2 * maximum := by
+  simp [zigzag]
+  omega
+
+theorem max_folded_10 : 2 * sampleMax 10 = 2046 := by
+  decide
+
+theorem max_folded_12 : 2 * sampleMax 12 = 8190 := by
+  decide
+
+theorem max_folded_16 : 2 * sampleMax 16 = 131070 := by
+  decide
+
 end Fastvid

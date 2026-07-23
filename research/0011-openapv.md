@@ -67,4 +67,6 @@ No OpenAPV source code is incorporated into Fastvid.
   Fastvid iteration gate.
 - [EXP-0011](../experiments/EXP-0011-parallel-map-contention.md) measures a
   threading/layout optimization motivated by the architectural comparison.
-
+- [EXP-0031](../experiments/EXP-0031-openapv-matched-baseline.md) applies the
+  native-10-bit matched comparison defined by
+  [research 0015](0015-openapv-matched-comparison.md).

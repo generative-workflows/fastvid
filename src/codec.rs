@@ -354,6 +354,11 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, CodecError> {
         return Err(CodecError::Malformed("unsupported version"));
     }
     let format = PixelFormat::try_from(bytes[5])?;
+    if format.bit_depth() != 8 {
+        return Err(CodecError::Malformed(
+            "version zero supports only 8-bit pixel formats",
+        ));
+    }
     let quality = bytes[6];
     if !(1..=100).contains(&quality) {
         return Err(CodecError::Malformed("quality is out of range"));
@@ -530,13 +535,14 @@ fn expected_tiles(
 }
 
 fn plane_dimensions(width: u32, height: u32, format: PixelFormat) -> Vec<(u32, u32)> {
-    match format {
-        PixelFormat::Gray8 => vec![(width, height)],
-        PixelFormat::Yuv422p8 => vec![
+    if format.is_grayscale() {
+        vec![(width, height)]
+    } else {
+        vec![
             (width, height),
             (width.div_ceil(2), height),
             (width.div_ceil(2), height),
-        ],
+        ]
     }
 }
 

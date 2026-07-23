@@ -179,5 +179,8 @@ cargo build --release --manifest-path "$repo_dir/Cargo.toml" --bin corpusgen
 if [[ -f "$repo_dir/corpus/derived-checksums.sha256" ]]; then
   (cd "$destination" && sha256sum --check "$repo_dir/corpus/derived-checksums.sha256")
 fi
+if [[ -f "$repo_dir/corpus/high-bit-checksums.sha256" ]]; then
+  (cd "$destination" && sha256sum --check "$repo_dir/corpus/high-bit-checksums.sha256")
+fi
 
 echo "corpus ready: $destination"

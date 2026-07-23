@@ -10,6 +10,12 @@ struct Frame422 {
     cr: Vec<u8>,
 }
 
+struct Frame422High {
+    y: Vec<u16>,
+    cb: Vec<u16>,
+    cr: Vec<u16>,
+}
+
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -65,8 +71,105 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         resolution_grid_frame,
     )?;
     write_hdr(&destination.join("native/hdr-pq-gradient-3840x2160-yuv444p10le.raw"))?;
+    write_high_sequence(
+        &destination.join("native/hdr-gradient-1920x1080-yuv422p10le.raw"),
+        1920,
+        1080,
+        1,
+        10,
+        high_precision_frame,
+    )?;
+    write_high_sequence(
+        &destination.join("native/high-precision-ui-1920x1080-yuv422p12le.raw"),
+        1920,
+        1080,
+        1,
+        12,
+        high_precision_frame,
+    )?;
+    write_high_sequence(
+        &destination.join("native/high-precision-motion-1280x720-24f-yuv422p10le.raw"),
+        1280,
+        720,
+        24,
+        10,
+        high_precision_frame,
+    )?;
+    write_high_sequence(
+        &destination.join("native/high-precision-motion-1280x720-24f-yuv422p16le.raw"),
+        1280,
+        720,
+        24,
+        16,
+        high_precision_frame,
+    )?;
     write_alpha(&destination.join("native/alpha-overlays-1024x1024-rgba.raw"))?;
     Ok(())
+}
+
+fn write_high_sequence<F>(
+    path: &Path,
+    width: usize,
+    height: usize,
+    frames: usize,
+    bit_depth: u8,
+    generator: F,
+) -> std::io::Result<()>
+where
+    F: Fn(usize, usize, usize, u8) -> Frame422High,
+{
+    let mut output = BufWriter::new(File::create(path)?);
+    for frame_index in 0..frames {
+        let frame = generator(width, height, frame_index, bit_depth);
+        for plane in [&frame.y, &frame.cb, &frame.cr] {
+            for sample in plane {
+                output.write_all(&sample.to_le_bytes())?;
+            }
+        }
+    }
+    output.flush()
+}
+
+fn high_precision_frame(width: usize, height: usize, frame: usize, bit_depth: u8) -> Frame422High {
+    let chroma_width = width.div_ceil(2);
+    let peak = if bit_depth == 16 {
+        u32::from(u16::MAX)
+    } else {
+        (1u32 << bit_depth) - 1
+    };
+    let mut y_plane = Vec::with_capacity(width * height);
+    let mut cb_plane = Vec::with_capacity(chroma_width * height);
+    let mut cr_plane = Vec::with_capacity(chroma_width * height);
+    for y in 0..height {
+        for x in 0..width {
+            let gradient = x as u32 * peak / (width - 1) as u32;
+            let sub_code_detail = hash32(x as u32, y as u32, frame as u32) & 15;
+            let moving_edge = if (x + frame * 13) % 257 < 5 {
+                peak / 7
+            } else {
+                0
+            };
+            y_plane.push(
+                (gradient
+                    .saturating_add(sub_code_detail + moving_edge)
+                    .min(peak)) as u16,
+            );
+        }
+        for x in 0..chroma_width {
+            let phase = frame as u32 * 29;
+            let cb = (peak / 2)
+                .saturating_add((x as u32 * 193 + y as u32 * 17 + phase) % (peak / 4 + 1));
+            let cr = (peak / 2)
+                .saturating_sub((x as u32 * 61 + y as u32 * 101 + phase) % (peak / 4 + 1));
+            cb_plane.push(cb.min(peak) as u16);
+            cr_plane.push(cr as u16);
+        }
+    }
+    Frame422High {
+        y: y_plane,
+        cb: cb_plane,
+        cr: cr_plane,
+    }
 }
 
 fn write_sequence<F>(

@@ -1,6 +1,6 @@
 # Fastvid evaluation methodology
 
-Version: 3 (2026-07-23)
+Version: 4 (2026-07-23)
 
 This document defines the standard target used to evaluate Fastvid changes.
 Experiments may add diagnostics or deliberately diverge, but an optimization
@@ -50,6 +50,15 @@ headline codec scores while the format lacks HDR metadata, greater bit depth,
 future implementations must benchmark the native assets without silently
 tone-mapping or discarding alpha.
 
+The native high-bit supplement is defined by
+[`corpus/high-bit-manifest.json`](corpus/high-bit-manifest.json) and its
+checksums. It contains deterministic 10- and 12-bit 1080p stills plus a
+24-frame 16-bit 720p motion sequence. This is the required correctness and
+performance smoke corpus for every high-bit change. It supplements rather
+than replaces the broader 8-bit corpus: procedural content alone cannot
+support general natural-image quality claims. Native camera and production
+HDR sequences remain a required corpus addition.
+
 The corpus is fetched/generated rather than committed because raw media is
 large, except for the small AI source PNG needed for exact reproducibility.
 `scripts/fetch-corpus.sh` performs and verifies the exact conversion. Core
@@ -75,6 +84,13 @@ Odd dimensions, grayscale, malformed streams, and alternate tile sizes remain
 conformance tests rather than corpus performance rows. HDR and RGBA remain
 capability-track rows until their native formats are implemented.
 
+High-bit rows use planar YUV 4:2:2 with 10, 12, or 16 significant bits stored
+in little-endian `u16` words. Results are grouped by bit depth and may not be
+pooled with 8-bit results. Inputs must not be downshifted or tone-mapped.
+Color primaries, transfer, matrix, and range are reported when known; the
+current procedural supplement exercises numerical precision but does not
+claim calibrated HDR colorimetry.
+
 ## Quality measurements
 
 For every sample and quality:
@@ -83,6 +99,11 @@ For every sample and quality:
 - maximum absolute sample error;
 - mean per-frame luma 8x8 block SSIM;
 - exact byte equality at quality 100.
+
+PSNR and SSIM stabilization constants use the signaled peak
+`2^bit_depth - 1`, not 255, for high-bit rows. MSE remains expressed in
+native code-value units. Reports include bit depth so absolute MSE and maximum
+error are not compared across depths without normalization.
 
 Luma MS-SSIM and VMAF are required future additions before subjective quality
 claims. Metrics must be reported per sample and as corpus arithmetic means;
@@ -116,6 +137,11 @@ idle. For each matrix cell:
 3. report median encode and decode wall time, luma MP/s, and raw decimal MB/s;
 4. separately report peak resident memory when the harness supports it.
 
+Only one CPU-bound benchmark process may run at a time on the measurement
+host. Independent benchmark matrices must execute serially; concurrent tool
+dispatch invalidates their timing rows even when each matrix internally uses
+balanced baseline/candidate order.
+
 Quality metric calculation, source conversion, and file I/O are outside timed
 encode/decode regions. A candidate fails the default speed gate if the
 one-thread corpus median regresses by more than 5% without a documented,
@@ -127,6 +153,11 @@ For the canonical planar 8-bit YUV 4:2:2 input, an even-width frame contains
 2 raw bytes per luma pixel, so 1 MP/s equals 2 decimal MB/s (approximately
 1.907 MiB/s). Raw MB/s must be computed from actual plane byte counts so the
 metric remains correct for odd widths and future pixel formats.
+
+For planar 10/12/16-bit YUV 4:2:2 stored in `u16`, an even-width frame contains
+4 raw bytes per luma pixel, so 1 MP/s equals 4 decimal MB/s. This storage
+throughput is intentionally the same for all three depths; compressed bitrate
+and bits per luma pixel expose their coding differences.
 
 ## Feedback tiers
 
@@ -150,6 +181,9 @@ must use the same binary configuration, warm-up, corpus bytes, and host.
 Direct performance comparisons should use separately preserved binaries and
 `scripts/benchmark-ab-corpus.sh`. Its trial count must be even so each binary
 runs first and second equally often within every sample/settings cell.
+Native high-bit comparisons use `scripts/benchmark-ab-high-bit.sh`, the
+checksummed high-bit manifest, and the same balanced-order rule. High-bit and
+8-bit geomeans remain separate.
 
 ## Single-frame access measurements
 
