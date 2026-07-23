@@ -1080,7 +1080,17 @@ impl<'a> BitWriter<'a> {
     }
 
     fn put_rice(&mut self, value: u32, parameter: u8) {
-        self.put_zeros(value >> parameter);
+        let quotient = value >> parameter;
+        let code_bits = quotient + 1 + u32::from(parameter);
+        if code_bits <= u32::from(64 - self.buffered_bits) {
+            let remainder_mask = (1u64 << parameter) - 1;
+            let code = (1u64 << quotient) | ((u64::from(value) & remainder_mask) << (quotient + 1));
+            self.buffer |= code << self.buffered_bits;
+            self.buffered_bits += code_bits as u8;
+            self.flush_bytes();
+            return;
+        }
+        self.put_zeros(quotient);
         self.put_bits(1, 1);
         self.put_bits(value, parameter);
     }
@@ -1324,6 +1334,21 @@ fn get_u64(input: &[u8], offset: usize) -> Result<u64, CodecError> {
 mod tests {
     use super::*;
 
+    fn rice_bytes(value: u32, parameter: u8, alignment: u8, fused: bool) -> Vec<u8> {
+        let mut output = Vec::new();
+        let mut writer = BitWriter::new(&mut output);
+        writer.put_bits((1u32 << alignment) - 1, alignment);
+        if fused {
+            writer.put_rice(value, parameter);
+        } else {
+            writer.put_zeros(value >> parameter);
+            writer.put_bits(1, 1);
+            writer.put_bits(value, parameter);
+        }
+        writer.finish();
+        output
+    }
+
     fn patterned_frame(width: u32, height: u32) -> Frame {
         let luma: Vec<u8> = (0..width * height)
             .map(|index| {
@@ -1497,6 +1522,20 @@ mod tests {
                 .contains(&encoded[HEADER_LEN + 1])
         );
         assert_eq!(decode(&encoded, 1).unwrap(), frame);
+    }
+
+    #[test]
+    fn fused_rice_writer_matches_reference_exhaustively() {
+        for parameter in 0..=MAX_RICE_PARAMETER {
+            for value in 0..=510 {
+                for alignment in 0..8 {
+                    assert_eq!(
+                        rice_bytes(value, parameter, alignment, true),
+                        rice_bytes(value, parameter, alignment, false)
+                    );
+                }
+            }
+        }
     }
 
     #[test]

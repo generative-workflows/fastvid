@@ -33,10 +33,10 @@ warm-up and one recorded development trial per cell.
 
 | Quality | Threads | Geo. ratio | Encode | Raw encode | Decode | Raw decode | Mean Y PSNR | Mean SSIM |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 90 | 1 | 7.308x | 38.43 MP/s | 76.87 MB/s | 56.13 MP/s | 112.25 MB/s | 49.868 dB | 0.996557 |
-| 90 | 4 | 7.308x | 141.52 MP/s | 283.04 MB/s | 177.67 MP/s | 355.34 MB/s | 49.868 dB | 0.996557 |
-| 100 | 1 | 5.013x | 32.27 MP/s | 64.54 MB/s | 50.72 MP/s | 101.45 MB/s | exact | 1.000000 |
-| 100 | 4 | 5.013x | 131.62 MP/s | 263.24 MB/s | 179.44 MP/s | 358.89 MB/s | exact | 1.000000 |
+| 90 | 1 | 7.308x | 40.58 MP/s | 81.15 MB/s | 53.87 MP/s | 107.74 MB/s | 49.868 dB | 0.996557 |
+| 90 | 4 | 7.308x | 148.82 MP/s | 297.64 MB/s | 174.24 MP/s | 348.47 MB/s | 49.868 dB | 0.996557 |
+| 100 | 1 | 5.013x | 38.49 MP/s | 76.99 MB/s | 54.64 MP/s | 109.28 MB/s | exact | 1.000000 |
+| 100 | 4 | 5.013x | 145.79 MP/s | 291.59 MB/s | 176.98 MP/s | 353.95 MB/s | exact | 1.000000 |
 
 Compression is the geometric mean of per-sample raw/encoded ratios. Throughput
 and quality columns are arithmetic means of per-sample results; MP/s counts
@@ -56,14 +56,14 @@ supplement:
 
 | Depth/sample | Quality | Ratio | Encode | Decode | Quality |
 |---|---:|---:|---:|---:|---:|
-| 10-bit HDR gradient | 90 | 4.434x | 32.30 MP/s | 44.51 MP/s | 52.00 dB Y PSNR |
-| 10-bit HDR gradient | 100 | 2.397x | 31.59 MP/s | 44.35 MP/s | exact |
-| 12-bit precision UI | 90 | 6.583x | 41.73 MP/s | 46.33 MP/s | 52.69 dB Y PSNR |
-| 12-bit precision UI | 100 | 2.402x | 31.22 MP/s | 42.83 MP/s | exact |
-| 10-bit precision motion | 90 | 4.432x | 34.83 MP/s | 53.74 MP/s | 52.00 dB Y PSNR |
-| 10-bit precision motion | 100 | 2.396x | 34.29 MP/s | 49.86 MP/s | exact |
-| 16-bit precision motion | 90 | 24.325x | 54.24 MP/s | 65.35 MP/s | 52.93 dB Y PSNR |
-| 16-bit precision motion | 100 | 2.339x | 34.16 MP/s | 53.44 MP/s | exact |
+| 10-bit HDR gradient | 90 | 4.434x | 37.27 MP/s | 44.60 MP/s | 52.00 dB Y PSNR |
+| 10-bit HDR gradient | 100 | 2.397x | 34.66 MP/s | 41.65 MP/s | exact |
+| 12-bit precision UI | 90 | 6.583x | 41.65 MP/s | 44.67 MP/s | 52.69 dB Y PSNR |
+| 12-bit precision UI | 100 | 2.402x | 35.18 MP/s | 41.52 MP/s | exact |
+| 10-bit precision motion | 90 | 4.432x | 38.58 MP/s | 52.08 MP/s | 52.00 dB Y PSNR |
+| 10-bit precision motion | 100 | 2.396x | 38.06 MP/s | 47.04 MP/s | exact |
+| 16-bit precision motion | 90 | 24.325x | 52.47 MP/s | 62.12 MP/s | 52.93 dB Y PSNR |
+| 16-bit precision motion | 100 | 2.339x | 37.54 MP/s | 51.22 MP/s | exact |
 
 High-bit planar 4:2:2 storage uses four raw bytes per luma pixel, so its raw
 decimal MB/s is four times the listed MP/s. The procedural supplement is a

@@ -105,3 +105,4 @@ architecture-specific code cannot define the stream.
 - [EXP-0034: perf, Samply, and Cachegrind profile](../experiments/EXP-0034-perf-samply-cache-profile.md)
 - [EXP-0036: fused entropy analysis](../experiments/EXP-0036-fused-entropy-analysis.md)
 - [EXP-0038: byte-oriented residual modeling](../experiments/EXP-0038-byte-oriented-residual-model.md)
+- [EXP-0041: fresh-build Rice emission correction](../experiments/EXP-0041-fresh-build-rice-emission-correction.md)

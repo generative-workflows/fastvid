@@ -1063,7 +1063,17 @@ impl<'a> BitWriter<'a> {
     }
 
     fn put_rice(&mut self, value: u32, parameter: u8) {
-        self.put_zeros(value >> parameter);
+        let quotient = value >> parameter;
+        let code_bits = quotient + 1 + u32::from(parameter);
+        if code_bits <= u32::from(64 - self.buffered_bits) {
+            let remainder_mask = (1u64 << parameter) - 1;
+            let code = (1u64 << quotient) | ((u64::from(value) & remainder_mask) << (quotient + 1));
+            self.buffer |= code << self.buffered_bits;
+            self.buffered_bits += code_bits as u8;
+            self.flush_bytes();
+            return;
+        }
+        self.put_zeros(quotient);
         self.put_bits(1, 1);
         self.put_bits(value, parameter);
     }
@@ -1281,6 +1291,21 @@ where
 mod tests {
     use super::*;
 
+    fn rice_bytes(value: u32, parameter: u8, alignment: u8, fused: bool) -> Vec<u8> {
+        let mut output = Vec::new();
+        let mut writer = BitWriter::new(&mut output);
+        writer.put_bits((1u32 << alignment) - 1, alignment);
+        if fused {
+            writer.put_rice(value, parameter);
+        } else {
+            writer.put_zeros(value >> parameter);
+            writer.put_bits(1, 1);
+            writer.put_bits(value, parameter);
+        }
+        writer.finish();
+        output
+    }
+
     fn options(quality: u8) -> CodecOptions {
         CodecOptions {
             quality,
@@ -1411,6 +1436,30 @@ mod tests {
                 assert_eq!(reader.get_rice(parameter, 131_070).unwrap(), value);
             }
             reader.finish().unwrap();
+        }
+    }
+
+    #[test]
+    fn fused_high_bit_rice_writer_matches_boundaries_and_fallbacks() {
+        let mut values = vec![0, 1, 2, 255, 256, 65_535, 65_536, 131_070];
+        for parameter in 0..=MAX_RICE_PARAMETER {
+            for quotient in [0, 1, 47, 48, 55, 56, 62, 63, 64, 65] {
+                let value = (quotient << parameter).min(131_070u32);
+                values.push(value);
+                values.push(value.saturating_add(1).min(131_070));
+            }
+        }
+        values.sort_unstable();
+        values.dedup();
+        for parameter in 0..=MAX_RICE_PARAMETER {
+            for &value in &values {
+                for alignment in 0..8 {
+                    assert_eq!(
+                        rice_bytes(value, parameter, alignment, true),
+                        rice_bytes(value, parameter, alignment, false)
+                    );
+                }
+            }
         }
     }
 

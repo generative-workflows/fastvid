@@ -219,6 +219,14 @@ Native high-bit comparisons use `scripts/benchmark-ab-high-bit.sh`, the
 checksummed high-bit manifest, and the same balanced-order rule. High-bit and
 8-bit geomeans remain separate.
 
+Before preserving a candidate, run `cargo build --release` explicitly:
+`cargo test --release` builds test executables but does not guarantee that the
+standalone `target/release/fastvid` has been relinked. Record SHA-256 for both
+preserved binaries and require distinct hashes whenever the candidate changes
+code reachable by the CLI. Also record an exact-stream control hash. A stale
+or identical candidate binary invalidates performance conclusions and must be
+corrected by a new experiment record rather than silently reused.
+
 ## Single-frame access measurements
 
 Single-frame access is a separate editing/random-access result, not a
