@@ -13,6 +13,10 @@ path = "src/lib.rs"
 name = "fastvid"
 path = "src/bin/fastvid.rs"
 
+[[bin]]
+name = "corpusgen"
+path = "src/bin/corpusgen.rs"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

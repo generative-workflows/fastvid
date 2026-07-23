@@ -57,6 +57,7 @@ Quality 90 misses the methodology's 10x high-fidelity target, establishing a
 clear optimization objective. The harness now performs a warm-up and five
 recorded trials by default.
 
-The experiment remains pending until luma MS-SSIM is implemented, deterministic
-procedural noise/screen samples and permissively licensed camera material fill
-the corpus gaps, and the standard five-trial results are recorded.
+The experiment remains pending until luma MS-SSIM is implemented, corpus-v2
+coverage from EXP-0008 is fully benchmarked, and the standard five-trial
+results are recorded. EXP-0009 now covers the previously missing single-frame
+access portion of this experiment's test plan.

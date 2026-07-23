@@ -15,6 +15,7 @@ cargo test
 cargo run --release -- demo 1920 1080 90 4 artifacts/demo.fvid
 scripts/fetch-corpus.sh
 scripts/benchmark-corpus.sh
+scripts/benchmark-access-corpus.sh
 ```
 
 The demo generates a deterministic synthetic YUV 4:2:2 frame, measures encode
@@ -26,16 +27,19 @@ data-backed development records in `experiments/`.
 
 ## Current benchmark
 
-Corpus v1, 4-vCPU AMD EPYC-Genoa VM, Rust 1.97.1, release mode. These are
+Corpus v2, 4-vCPU AMD EPYC-Genoa VM, Rust 1.97.1, release mode. These are
 single-trial development baselines; release comparisons use the warm-up plus
 five-trial protocol in [the evaluation methodology](EVALUATION_METHODOLOGY.md).
 
 | Quality | Threads | Geo. ratio | Mean encode | Raw encode | Mean decode | Raw decode | Mean Y PSNR | Mean SSIM |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 90 | 1 | 5.797x | 26.82 MP/s | 53.64 MB/s | 61.58 MP/s | 123.16 MB/s | 49.787 dB | 0.994824 |
-| 90 | 4 | 5.797x | 96.93 MP/s | 193.86 MB/s | 189.83 MP/s | 379.66 MB/s | 49.787 dB | 0.994824 |
-| 100 | 1 | 3.641x | 24.41 MP/s | 48.82 MB/s | 57.22 MP/s | 114.44 MB/s | exact | 1.000000 |
-| 100 | 4 | 3.641x | 92.27 MP/s | 184.54 MB/s | 177.51 MP/s | 355.02 MB/s | exact | 1.000000 |
+| 90 | 1 | 7.308x | 27.90 MP/s | 55.81 MB/s | 55.41 MP/s | 110.83 MB/s | 49.868 dB | 0.996557 |
+| 100 | 1 | 5.013x | 27.38 MP/s | 54.77 MB/s | 54.01 MP/s | 108.03 MB/s | exact | 1.000000 |
+
+The aggregate ratio is strongly influenced by procedural UI/chroma content;
+natural-camera quality-100 outliers range from 1.777x to 1.970x. Results must
+therefore remain grouped by content class and resolution. See
+[EXP-0008](experiments/EXP-0008-corpus-v2-expansion.md).
 
 On the three-video subset, gated GOP-12 temporal prediction improves the
 quality-90 geometric ratio from 5.190x to 6.550x while increasing one-thread
@@ -46,3 +50,9 @@ At quality 100, GOP-12 reduces aggregate bitrate from 247.66 to 206.73 Mb/s
 encode/decode throughput. See
 [EXP-0005](experiments/EXP-0005-gated-temporal-prediction.md) and
 [EXP-0007](experiments/EXP-0007-temporal-write-elision.md).
+
+For isolated quality-90 one-thread frame access across all six corpus-v2
+videos, all-intra has 34.65/39.20/39.70 ms median/p95/worst latency. GOP-12
+has 88.33/409.69/434.13 ms and averages 5.5 decoded frames per requested
+frame. These are five-trial codec-only warm-cache results; see
+[EXP-0009](experiments/EXP-0009-single-frame-access.md).

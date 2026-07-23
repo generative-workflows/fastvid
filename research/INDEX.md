@@ -15,3 +15,5 @@ before entering the format.
 | [0006](0006-standard-evaluation-methodology.md) | RFC 8761, AOM CTC, Xiph methodology | Standard corpus and evaluation protocol | Reviewed |
 | [0007](0007-temporal-dpcm-gating.md) | Rice/Plaunt and CCSDS | Previous-frame DPCM and activity gating | Reviewed |
 | [0008](0008-block-local-inter-intra-selection.md) | RFC 6386 and AV1 specification | Block-local spatial/temporal prediction selection | Reviewed |
+| [0009](0009-corpus-v2-diversity.md) | Wikimedia CC0 TIFFs, Xiph, RFC 8761 | Camera/procedural corpus coverage and licensing | Reviewed |
+| [0010](0010-single-frame-random-access.md) | RFC 6386, RFC 8761, AV2 CTC | Single-frame access cost and GOP preroll | Reviewed |

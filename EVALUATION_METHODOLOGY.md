@@ -1,6 +1,6 @@
 # Fastvid evaluation methodology
 
-Version: 1 (2026-07-23)
+Version: 2 (2026-07-23)
 
 This document defines the standard target used to evaluate Fastvid changes.
 Experiments may add diagnostics or deliberately diverge, but an optimization
@@ -26,32 +26,44 @@ There are two coding tracks:
 ## Standard core corpus
 
 The versioned, machine-readable definition is
-[`corpus/manifest.json`](corpus/manifest.json). It contains:
+[`corpus/manifest.json`](corpus/manifest.json). Corpus v2 is a strict superset
+of the archived v1 manifest and checksums. Its codec track contains:
 
-- six 1920x1080 still frames spanning fine organic detail, smooth gradients,
-  text, dark sparse content, high-frequency lines, and dense geometry;
-- three 24-frame 1920x1080 clips spanning fine-detail motion, foliage motion,
-  and dense articulated motion;
-- lossless PNG sources from *Big Buck Bunny* and *Elephants Dream*, with
-  explicit CC BY licenses and upstream SHA-256 verification;
+- twelve still frames spanning camera photography, AI-generated detail,
+  chroma-only edges, synthetic grids, fine organic detail, text, dark sparse
+  content, high-frequency lines, and dense geometry;
+- six 24-frame clips spanning natural/rendered motion, deliberately noisy
+  camera footage, synthetic UI scrolling, temporally independent grain, and
+  hard scene cuts;
+- 640x360, 1280x720, 1920x1080, and 3840x2160 dimensions;
+- lossless Blender PNGs and CC0 TIFF camera sources, one explicitly
+  public-domain camera clip, and a project-owned AI PNG with its exact prompt;
+- deterministic procedural source code for graphics, UI-like animation,
+  chroma edges, noise/grain, cuts, resolution scaling, HDR, and alpha;
 - canonical BT.709 limited-range planar YUV422p8 derivatives with committed
   SHA-256 values.
 
-The corpus is fetched rather than committed because raw media is large.
-`scripts/fetch-corpus.sh` performs and verifies the exact conversion. Core
-corpus samples are immutable within a corpus version. Changing a sample,
-conversion, or frame range requires a new version.
+The capability track additionally contains source-native 3840x2160
+BT.2020/PQ YUV444p10 and 1024x1024 RGBA assets. They are not converted into
+headline codec scores while the format lacks HDR metadata, greater bit depth,
+4:4:4, and alpha. Evaluation records those capabilities as unsupported;
+future implementations must benchmark the native assets without silently
+tone-mapping or discarding alpha.
 
-The core is intentionally small enough for every meaningful experiment. It
-currently overrepresents rendered content. The **extended corpus** must add
-permissively licensed camera footage, screen capture, deterministic noise,
-film grain, animation, scene cuts, and low/high-motion clips before broad
-release claims. Restricted or non-commercial media may be used only in a
-separately reported diagnostic suite, never the standard corpus.
+The corpus is fetched/generated rather than committed because raw media is
+large, except for the small AI source PNG needed for exact reproducibility.
+`scripts/fetch-corpus.sh` performs and verifies the exact conversion. Core
+samples are immutable within a corpus version. Changing a sample, conversion,
+or frame range requires a new version.
+
+Procedural and AI samples expose controlled failure modes but cannot support
+natural-image quality claims by themselves. Restricted or non-commercial
+media may be used only in a separately reported diagnostic suite.
 
 ## Canonical input and dimensions
 
-- Resolution: 1920x1080 progressive.
+- Resolutions: 640x360, 1280x720, 1920x1080, and 3840x2160 progressive;
+  aggregate results must also be grouped by resolution.
 - Pixel format: planar 8-bit YUV 4:2:2.
 - Matrix/range: BT.709, limited range.
 - Frame rate: source rational rate, currently 24/1 for core media.
@@ -60,7 +72,8 @@ separately reported diagnostic suite, never the standard corpus.
 - Threads: 1 and `min(4, available logical CPUs)`.
 
 Odd dimensions, grayscale, malformed streams, and alternate tile sizes remain
-conformance tests rather than corpus performance rows.
+conformance tests rather than corpus performance rows. HDR and RGBA remain
+capability-track rows until their native formats are implemented.
 
 ## Quality measurements
 
@@ -114,6 +127,33 @@ For the canonical planar 8-bit YUV 4:2:2 input, an even-width frame contains
 2 raw bytes per luma pixel, so 1 MP/s equals 2 decimal MB/s (approximately
 1.907 MiB/s). Raw MB/s must be computed from actual plane byte counts so the
 metric remains correct for odd widths and future pixel formats.
+
+## Single-frame access measurements
+
+Single-frame access is a separate editing/random-access result, not a
+sequential throughput result. For each standard 24-frame video, quality,
+thread count, and coding track, request targets 0, 1, 6, 11, 12, 13, 18, and
+23 from a fresh decoder state. For short-GOP video, begin at the nearest
+preceding keyframe, decode dependencies through the target, and discard
+preroll output. For all-intra, decode only the requested frame.
+
+The initial benchmark is warm-cache and codec-only: sequence encoding, index
+lookup, source/container I/O, and quality metrics remain outside the timed
+region. Record per target:
+
+- target and keyframe indices;
+- dependency/preroll frames and total decoded frames;
+- compressed bytes read from the keyframe through the target;
+- target access wall time;
+- useful-target MP/s and raw MB/s;
+- actual decoded-work MP/s;
+- access amplification in decoded frames per requested frame.
+
+Report median, p95, and worst access latency plus the target responsible for
+the worst result. Preserve all per-target rows. GOP 1 and GOP 12 must use the
+same requested target indices. State the maximum dependency depth and never
+mix these access results with sequential decode MP/s. A future indexed
+sequence container must add cold-cache lookup and I/O latency separately.
 
 ## Rate-distortion and acceptance
 

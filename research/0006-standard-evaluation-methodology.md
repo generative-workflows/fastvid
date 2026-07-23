@@ -49,4 +49,7 @@ making small verified excerpts practical without downloading entire films.
 
 - [EXP-0003](../experiments/EXP-0003-regression-corpus.md) implements the
   initial versioned core corpus and rate-distortion harness.
-- Future short-GOP experiments will use the video track defined here.
+- [EXP-0008](../experiments/EXP-0008-corpus-v2-expansion.md) broadens the
+  standard content and resolution classes without mutating corpus v1.
+- [EXP-0009](../experiments/EXP-0009-single-frame-access.md) separates
+  isolated-frame editing cost from sequential decode throughput.
