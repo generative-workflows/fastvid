@@ -10,6 +10,8 @@ const MAX_TILES: usize = 1 << 20;
 const ENTROPY_ZERO_RUN: u8 = 0;
 const ENTROPY_RICE_BASE: u8 = 1;
 const MAX_RICE_PARAMETER: u8 = 8;
+const PREDICT_SPATIAL: u8 = 0;
+const PREDICT_TEMPORAL: u8 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Tile {
@@ -24,13 +26,22 @@ struct Tile {
 struct DirectoryEntry {
     tile: Tile,
     entropy_mode: u8,
+    prediction_mode: u8,
     offset: usize,
     length: usize,
 }
 
 struct EncodedTile {
     entropy_mode: u8,
+    prediction_mode: u8,
     payload: Vec<u8>,
+}
+
+#[derive(Clone, Copy)]
+struct PredictionContext<'a> {
+    mode: u8,
+    reference: Option<&'a Plane>,
+    tile: Tile,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -63,6 +74,31 @@ struct Parsed<'a> {
 }
 
 pub fn encode(frame: &Frame, options: CodecOptions) -> Result<Vec<u8>, CodecError> {
+    encode_internal(frame, None, options)
+}
+
+/// Encodes a predicted frame using the previously reconstructed frame.
+///
+/// The reference must be the decoder output for the preceding coded frame,
+/// not the original input, so lossy encoder and decoder state cannot drift.
+pub fn encode_with_reference(
+    frame: &Frame,
+    reference: &Frame,
+    options: CodecOptions,
+) -> Result<Vec<u8>, CodecError> {
+    validate_reference(frame, reference)?;
+    // research/0007: temporal prediction wins on low/moderate motion but can
+    // expand high-motion frames. A luma SAD prepass avoids running two encoders.
+    let selected_reference =
+        temporal_prediction_is_promising(frame, reference).then_some(reference);
+    encode_internal(frame, selected_reference, options)
+}
+
+fn encode_internal(
+    frame: &Frame,
+    reference: Option<&Frame>,
+    options: CodecOptions,
+) -> Result<Vec<u8>, CodecError> {
     frame.validate()?;
     options.validate()?;
     let tiles = expected_tiles(
@@ -74,7 +110,12 @@ pub fn encode(frame: &Frame, options: CodecOptions) -> Result<Vec<u8>, CodecErro
     )?;
     let step = options.quantization_step();
     let payloads = parallel_map(tiles.len(), options.threads, |index| {
-        encode_tile(&frame.planes[tiles[index].plane], tiles[index], step)
+        encode_tile(
+            &frame.planes[tiles[index].plane],
+            reference.map(|frame| &frame.planes[tiles[index].plane]),
+            tiles[index],
+            step,
+        )
     });
 
     let directory_bytes = tiles
@@ -115,7 +156,8 @@ pub fn encode(frame: &Frame, options: CodecOptions) -> Result<Vec<u8>, CodecErro
             u8::try_from(tile.plane).map_err(|_| CodecError::LimitExceeded("too many planes"))?,
         );
         output.push(encoded.entropy_mode);
-        output.extend_from_slice(&[0; 2]);
+        output.push(encoded.prediction_mode);
+        output.push(0);
         put_u32(&mut output, tile.x);
         put_u32(&mut output, tile.y);
         put_u32(&mut output, tile.width);
@@ -139,10 +181,30 @@ pub fn encode(frame: &Frame, options: CodecOptions) -> Result<Vec<u8>, CodecErro
 }
 
 pub fn decode(bytes: &[u8], threads: usize) -> Result<Frame, CodecError> {
+    decode_internal(bytes, None, threads)
+}
+
+/// Decodes a predicted frame using the preceding reconstructed frame.
+pub fn decode_with_reference(
+    bytes: &[u8],
+    reference: &Frame,
+    threads: usize,
+) -> Result<Frame, CodecError> {
+    decode_internal(bytes, Some(reference), threads)
+}
+
+fn decode_internal(
+    bytes: &[u8],
+    reference: Option<&Frame>,
+    threads: usize,
+) -> Result<Frame, CodecError> {
     if threads == 0 {
         return Err(CodecError::InvalidInput("thread count must be nonzero"));
     }
     let parsed = parse(bytes)?;
+    if let Some(reference) = reference {
+        validate_reference_info(&parsed.info, reference)?;
+    }
     let step = quantization_step(parsed.info.quality);
     let decoded = parallel_map(parsed.entries.len(), threads, |index| {
         let entry = parsed.entries[index];
@@ -151,6 +213,8 @@ pub fn decode(bytes: &[u8], threads: usize) -> Result<Frame, CodecError> {
             &parsed.bytes[entry.offset..entry.offset + entry.length],
             step,
             entry.entropy_mode,
+            entry.prediction_mode,
+            reference.map(|frame| &frame.planes[entry.tile.plane]),
         )
     });
     let mut decoded_tiles = Vec::with_capacity(decoded.len());
@@ -171,6 +235,8 @@ pub fn decode_tile(bytes: &[u8], tile_index: usize) -> Result<DecodedTile, Codec
         &parsed.bytes[entry.offset..entry.offset + entry.length],
         quantization_step(parsed.info.quality),
         entry.entropy_mode,
+        entry.prediction_mode,
+        None,
     )?;
     Ok(DecodedTile {
         plane: entry.tile.plane,
@@ -184,6 +250,45 @@ pub fn decode_tile(bytes: &[u8], tile_index: usize) -> Result<DecodedTile, Codec
 
 pub fn inspect(bytes: &[u8]) -> Result<StreamInfo, CodecError> {
     Ok(parse(bytes)?.info)
+}
+
+fn validate_reference(frame: &Frame, reference: &Frame) -> Result<(), CodecError> {
+    frame.validate()?;
+    reference.validate()?;
+    if frame.width != reference.width
+        || frame.height != reference.height
+        || frame.format != reference.format
+    {
+        return Err(CodecError::InvalidInput(
+            "reference dimensions or format do not match frame",
+        ));
+    }
+    Ok(())
+}
+
+fn temporal_prediction_is_promising(frame: &Frame, reference: &Frame) -> bool {
+    const MAX_MEAN_LUMA_DIFFERENCE: u64 = 5;
+    let current = &frame.planes[0].data;
+    let previous = &reference.planes[0].data;
+    let absolute_difference: u64 = current
+        .iter()
+        .zip(previous)
+        .map(|(&current, &previous)| u64::from(current.abs_diff(previous)))
+        .sum();
+    absolute_difference <= current.len() as u64 * MAX_MEAN_LUMA_DIFFERENCE
+}
+
+fn validate_reference_info(info: &StreamInfo, reference: &Frame) -> Result<(), CodecError> {
+    reference.validate()?;
+    if info.width != reference.width
+        || info.height != reference.height
+        || info.format != reference.format
+    {
+        return Err(CodecError::InvalidInput(
+            "reference dimensions or format do not match stream",
+        ));
+    }
+    Ok(())
 }
 
 fn assemble_frame(info: &StreamInfo, tiles: Vec<Vec<u8>>) -> Result<Frame, CodecError> {
@@ -288,7 +393,7 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, CodecError> {
     let mut next_payload_offset = directory_end;
     for (index, expected_tile) in expected.into_iter().enumerate() {
         let start = HEADER_LEN + index * DIRECTORY_ENTRY_LEN;
-        if bytes[start + 2..start + 4] != [0; 2] {
+        if bytes[start + 3] != 0 {
             return Err(CodecError::Malformed("nonzero reserved directory bytes"));
         }
         let entropy_mode = bytes[start + 1];
@@ -296,6 +401,10 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, CodecError> {
             && !(ENTROPY_RICE_BASE..=ENTROPY_RICE_BASE + MAX_RICE_PARAMETER).contains(&entropy_mode)
         {
             return Err(CodecError::Malformed("unknown tile entropy mode"));
+        }
+        let prediction_mode = bytes[start + 2];
+        if prediction_mode > PREDICT_TEMPORAL {
+            return Err(CodecError::Malformed("unknown tile prediction mode"));
         }
         let tile = Tile {
             plane: usize::from(bytes[start]),
@@ -323,6 +432,7 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, CodecError> {
         entries.push(DirectoryEntry {
             tile,
             entropy_mode,
+            prediction_mode,
             offset,
             length,
         });
@@ -407,7 +517,7 @@ fn plane_dimensions(width: u32, height: u32, format: PixelFormat) -> Vec<(u32, u
     }
 }
 
-fn encode_tile(plane: &Plane, tile: Tile, step: i32) -> EncodedTile {
+fn encode_tile(plane: &Plane, reference: Option<&Plane>, tile: Tile, step: i32) -> EncodedTile {
     let width = tile.width as usize;
     let height = tile.height as usize;
     let plane_width = plane.width as usize;
@@ -432,8 +542,13 @@ fn encode_tile(plane: &Plane, tile: Tile, step: i32) -> EncodedTile {
             } else {
                 0
             };
-            let prediction = i32::from(paeth(left, above, upper_left));
-            let sample = i32::from(plane.data[(origin_y + y) * plane_width + origin_x + x]);
+            let plane_index = (origin_y + y) * plane_width + origin_x + x;
+            let prediction = if let Some(reference) = reference {
+                i32::from(reference.data[plane_index])
+            } else {
+                i32::from(paeth(left, above, upper_left))
+            };
+            let sample = i32::from(plane.data[plane_index]);
             let quantized = quantize(sample - prediction, step);
             reconstructed[index] = (prediction + quantized * step).clamp(0, 255) as u8;
             let folded = zigzag(quantized);
@@ -454,6 +569,11 @@ fn encode_tile(plane: &Plane, tile: Tile, step: i32) -> EncodedTile {
     if rice_bytes >= zero_run_payload.len() {
         return EncodedTile {
             entropy_mode: ENTROPY_ZERO_RUN,
+            prediction_mode: if reference.is_some() {
+                PREDICT_TEMPORAL
+            } else {
+                PREDICT_SPATIAL
+            },
             payload: zero_run_payload,
         };
     }
@@ -467,6 +587,11 @@ fn encode_tile(plane: &Plane, tile: Tile, step: i32) -> EncodedTile {
     debug_assert_eq!(rice_payload.len(), rice_bytes);
     EncodedTile {
         entropy_mode: ENTROPY_RICE_BASE + rice_parameter,
+        prediction_mode: if reference.is_some() {
+            PREDICT_TEMPORAL
+        } else {
+            PREDICT_SPATIAL
+        },
         payload: rice_payload,
     }
 }
@@ -476,17 +601,31 @@ fn decode_tile_payload(
     payload: &[u8],
     step: i32,
     mode: u8,
+    prediction_mode: u8,
+    reference: Option<&Plane>,
 ) -> Result<Vec<u8>, CodecError> {
     let sample_count = checked_area(tile.width, tile.height)?;
     let width =
         usize::try_from(tile.width).map_err(|_| CodecError::LimitExceeded("tile is too large"))?;
+    let prediction = PredictionContext {
+        mode: prediction_mode,
+        reference,
+        tile,
+    };
     if mode == ENTROPY_ZERO_RUN {
-        return decode_zero_run_payload(payload, sample_count, width, step);
+        return decode_zero_run_payload(payload, sample_count, width, step, prediction);
     }
     if !(ENTROPY_RICE_BASE..=ENTROPY_RICE_BASE + MAX_RICE_PARAMETER).contains(&mode) {
         return Err(CodecError::Malformed("unknown tile entropy mode"));
     }
-    decode_rice_payload(payload, sample_count, width, step, mode - ENTROPY_RICE_BASE)
+    decode_rice_payload(
+        payload,
+        sample_count,
+        width,
+        step,
+        mode - ENTROPY_RICE_BASE,
+        prediction,
+    )
 }
 
 fn decode_zero_run_payload(
@@ -494,6 +633,7 @@ fn decode_zero_run_payload(
     sample_count: usize,
     width: usize,
     step: i32,
+    prediction: PredictionContext<'_>,
 ) -> Result<Vec<u8>, CodecError> {
     let mut output = vec![0u8; sample_count];
     let mut cursor = 0usize;
@@ -512,7 +652,7 @@ fn decode_zero_run_payload(
                 return Err(CodecError::Malformed("zero run exceeds tile"));
             }
             while sample_index < run_end {
-                reconstruct_sample(&mut output, sample_index, width, 0, step);
+                reconstruct_sample(&mut output, sample_index, width, 0, step, prediction)?;
                 sample_index += 1;
             }
         } else {
@@ -521,7 +661,14 @@ fn decode_zero_run_payload(
             if quantized == 0 {
                 return Err(CodecError::Malformed("non-canonical zero residual"));
             }
-            reconstruct_sample(&mut output, sample_index, width, quantized, step);
+            reconstruct_sample(
+                &mut output,
+                sample_index,
+                width,
+                quantized,
+                step,
+                prediction,
+            )?;
             sample_index += 1;
         }
     }
@@ -537,6 +684,7 @@ fn decode_rice_payload(
     width: usize,
     step: i32,
     parameter: u8,
+    prediction: PredictionContext<'_>,
 ) -> Result<Vec<u8>, CodecError> {
     let mut output = vec![0u8; sample_count];
     let mut reader = BitReader::new(payload);
@@ -545,13 +693,27 @@ fn decode_rice_payload(
         if folded > 510 {
             return Err(CodecError::Malformed("Rice residual is out of range"));
         }
-        reconstruct_sample(&mut output, sample_index, width, unzigzag(folded), step);
+        reconstruct_sample(
+            &mut output,
+            sample_index,
+            width,
+            unzigzag(folded),
+            step,
+            prediction,
+        )?;
     }
     reader.finish()?;
     Ok(output)
 }
 
-fn reconstruct_sample(output: &mut [u8], index: usize, width: usize, quantized: i32, step: i32) {
+fn reconstruct_sample(
+    output: &mut [u8],
+    index: usize,
+    width: usize,
+    quantized: i32,
+    step: i32,
+    context: PredictionContext<'_>,
+) -> Result<(), CodecError> {
     let x = index % width;
     let y = index / width;
     let left = if x > 0 { output[index - 1] } else { 0 };
@@ -561,8 +723,19 @@ fn reconstruct_sample(output: &mut [u8], index: usize, width: usize, quantized: 
     } else {
         0
     };
-    let prediction = i32::from(paeth(left, above, upper_left));
+    let prediction = if context.mode == PREDICT_TEMPORAL {
+        let reference = context.reference.ok_or(CodecError::InvalidInput(
+            "predicted frame requires a reference",
+        ))?;
+        let plane_width = reference.width as usize;
+        let reference_index =
+            (context.tile.y as usize + y) * plane_width + context.tile.x as usize + x;
+        i32::from(reference.data[reference_index])
+    } else {
+        i32::from(paeth(left, above, upper_left))
+    };
     output[index] = (prediction + quantized * step).clamp(0, 255) as u8;
+    Ok(())
 }
 
 fn paeth(left: u8, above: u8, upper_left: u8) -> u8 {
@@ -1073,5 +1246,61 @@ mod tests {
             }
             reader.finish().unwrap();
         }
+    }
+
+    #[test]
+    fn temporal_frames_require_reference_and_round_trip_exactly() {
+        let reference = patterned_frame(65, 33);
+        let mut frame = reference.clone();
+        for (plane_index, plane) in frame.planes.iter_mut().enumerate() {
+            for (index, sample) in plane.data.iter_mut().enumerate() {
+                if (index + plane_index) % 17 == 0 {
+                    *sample = sample.saturating_add(3);
+                }
+            }
+        }
+        let options = CodecOptions {
+            quality: 100,
+            tile_width: 16,
+            tile_height: 15,
+            threads: 2,
+        };
+        let encoded = encode_with_reference(&frame, &reference, options).unwrap();
+        assert_eq!(encoded[HEADER_LEN + 2], PREDICT_TEMPORAL);
+        assert!(decode(&encoded, 2).is_err());
+        assert_eq!(
+            decode_with_reference(&encoded, &reference, 2).unwrap(),
+            frame
+        );
+
+        let wrong_reference = patterned_frame(64, 33);
+        assert!(decode_with_reference(&encoded, &wrong_reference, 1).is_err());
+        assert!(encode_with_reference(&frame, &wrong_reference, options).is_err());
+    }
+
+    #[test]
+    fn unknown_prediction_modes_are_rejected() {
+        let frame = patterned_frame(16, 16);
+        let mut encoded = encode(&frame, CodecOptions::default()).unwrap();
+        encoded[HEADER_LEN + 2] = PREDICT_TEMPORAL + 1;
+        assert!(decode(&encoded, 1).is_err());
+    }
+
+    #[test]
+    fn high_motion_frames_fall_back_to_spatial_prediction() {
+        let reference = patterned_frame(32, 24);
+        let mut frame = reference.clone();
+        for plane in &mut frame.planes {
+            for sample in &mut plane.data {
+                *sample = 255 - *sample;
+            }
+        }
+        let options = CodecOptions {
+            quality: 100,
+            ..CodecOptions::default()
+        };
+        let encoded = encode_with_reference(&frame, &reference, options).unwrap();
+        assert_eq!(encoded[HEADER_LEN + 2], PREDICT_SPATIAL);
+        assert_eq!(decode(&encoded, 1).unwrap(), frame);
     }
 }

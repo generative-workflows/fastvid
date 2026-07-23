@@ -39,3 +39,10 @@ Rice parameters over partitions because residual statistics vary.
    access and has no per-payload byte overhead.
 5. Bound decoded folded residuals to 510, require zero padding, and reject
    trailing data to keep the experimental stream canonical.
+
+## Relevant experiments
+
+- [EXP-0004](../experiments/EXP-0004-adaptive-rice-tiles.md) implements
+  per-tile zero-run/Rice selection.
+- [EXP-0005](../experiments/EXP-0005-gated-temporal-prediction.md) reuses the
+  adaptive entropy layer for temporal residuals.

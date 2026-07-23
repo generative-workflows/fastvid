@@ -20,3 +20,7 @@ Use Paeth as the first spatial baseline. Reset its context at every tile edge
 to preserve tile independence. In lossy modes, prediction must use
 reconstructed—not original—neighbors, or encoder and decoder states drift.
 
+## Relevant experiments
+
+- [EXP-0001](../experiments/EXP-0001-paeth-varint-baseline.md) implements and
+  measures the tile-local Paeth baseline.

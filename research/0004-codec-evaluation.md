@@ -29,3 +29,7 @@ terms differ by clip and must be checked in each accompanying copyright file.
 5. Do not add a clip to the repository merely because Xiph mirrors it; verify
    that clip's explicit terms first.
 
+## Relevant experiments
+
+- [EXP-0003](../experiments/EXP-0003-regression-corpus.md) implements the
+  provenance-checked core corpus and rate-distortion matrix.

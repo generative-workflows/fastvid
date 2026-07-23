@@ -12,3 +12,5 @@ before entering the format.
 | [0003](0003-ssim.md) | Wang et al., SSIM | Perceptual-quality measurement | Reviewed |
 | [0004](0004-codec-evaluation.md) | IETF RFC 8761 and Xiph test media | Reproducible codec evaluation | Reviewed |
 | [0005](0005-adaptive-rice-coding.md) | Rice/Plaunt, RFC 9043, RFC 9639 | Adaptive coding of predictor residuals | Reviewed |
+| [0006](0006-standard-evaluation-methodology.md) | RFC 8761, AOM CTC, Xiph methodology | Standard corpus and evaluation protocol | Reviewed |
+| [0007](0007-temporal-dpcm-gating.md) | Rice/Plaunt and CCSDS | Previous-frame DPCM and activity gating | Reviewed |

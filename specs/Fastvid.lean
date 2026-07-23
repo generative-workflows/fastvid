@@ -30,4 +30,13 @@ theorem rice_recompose (n k : Nat) :
     riceQuotient n k * riceDivisor k + riceRemainder n k = n := by
   simp [riceQuotient, riceRemainder, riceDivisor, Nat.mul_comm, Nat.div_add_mod]
 
+/-- Signed residual from a co-located reconstructed reference sample. -/
+def temporalResidual (current previous : Int) : Int := current - previous
+
+/-- Adding a temporal residual to its reference reconstructs the sample. -/
+theorem temporal_recompose (current previous : Int) :
+    previous + temporalResidual current previous = current := by
+  simp only [temporalResidual]
+  omega
+
 end Fastvid

@@ -32,5 +32,31 @@ an adaptive entropy mode.
 
 ## Results
 
-Pending corpus licensing and harness implementation.
+In progress. Corpus v1 now provides six 1920x1080 stills and three 24-frame
+1920x1080 clips from SHA-256-verified, CC-BY lossless Blender Open Movie PNG
+masters. Canonical YUV422p8 derivatives, exact hashes, provenance, fetch and
+conversion tooling, a machine-readable manifest, and a sequence benchmark
+command are implemented. Benchmark rows now record both luma MP/s and actual
+raw-byte encode/decode throughput, plus encoded-stream MB/s and Mb/s derived
+from source duration. For canonical even-width YUV422p8, 1 MP/s corresponds
+to 2 decimal MB/s.
 
+The complete five-quality, one/four-thread development matrix exposed the
+synthetic-fixture bias. Selected one-thread corpus summaries:
+
+| Quality | Geo. ratio | Mean encode | Mean decode | Mean Y PSNR | Mean block SSIM |
+|---:|---:|---:|---:|---:|---:|
+| 60 | 9.435x | 28.73 MP/s | 66.85 MP/s | 40.364 dB | 0.965007 |
+| 75 | 5.712x | 25.72 MP/s | 58.94 MP/s | 42.946 dB | 0.973432 |
+| 90 | 5.797x | 26.82 MP/s | 61.58 MP/s | 49.787 dB | 0.994824 |
+| 95 | 3.440x | 24.98 MP/s | 56.26 MP/s | 51.420 dB | 0.994981 |
+| 100 | 3.641x | 24.41 MP/s | 57.22 MP/s | exact | 1.000000 |
+
+No quality-100 sample expands; the worst is `ed-dense-motion` at 2.765x.
+Quality 90 misses the methodology's 10x high-fidelity target, establishing a
+clear optimization objective. The harness now performs a warm-up and five
+recorded trials by default.
+
+The experiment remains pending until luma MS-SSIM is implemented, deterministic
+procedural noise/screen samples and permissively licensed camera material fill
+the corpus gaps, and the standard five-trial results are recorded.

@@ -8,6 +8,7 @@ It balances three goals simultaneously:
 This project is based around experimental research and formal verification.
 Every experiment MUST be logged (see experiments section below).
 Every research artifact MUST be logged (see research section below).
+Evaluation methodology MUST be clearly defined by research and experiments, so fastvid has a clear target to optimize against (see evaluation methodology below).
 
 ## Implementation
 
@@ -49,6 +50,10 @@ Most of the codecs this will be measured against were written over 15 years ago.
 
 Keep track of research references in the `research` subdirectory, using `research/INDEX.md` as an index. Independently verify results and try many paths. Each research reference should have a dedicated file, e.g. `research/0001-some-paper.md` that catalogues key findings and insights.
 
+Research references should contain a section linking them to relevant experiments.
+
+Code that is based on research should link to the research reference.
+
 ## Specification
 
 We want to have a formal specification, described in the `specs` subdirectory, written in Lean.
@@ -70,6 +75,8 @@ Experiments can be in 4 states:
   - REJECTED: the experimental results did not give the desired result
   - SUPERSEDED: the experiment was superseded by a later experiment, with a link to that experiment.
 
+Experiments, after completion, are IMMUTABLE RECORDS.
+
 ## Perceptual Similarity
 
 This is an engineering goal rather than a hard metric. However, concrete metrics like PSNR, SSIM, 
@@ -78,6 +85,16 @@ VMAF, and per-pixel error should be used to measure error rates concretely.
 We don't need to use "lossless" compression, but we do need to avoid as much perceptual destruction
 as possible. This is an intermediate codec like ProRes, which is designed for high-fidelity editing
 and storage.
+
+## Evaluation Methodology
+
+The evaluation methodology and metrics should be clearly defined and backed by research.
+Keep a record in `EVALUATION_METHODOLOGY.md` with links to research.
+
+This methodology defines clear targets to optimize against: quality, speed, and compression ratios.
+Experiments MAY diverge from the standard methodology.
+
+Evaluation methodology may evolve over time as new research is discovered and performed.
 
 ## Encoding and Decoding Speed
 

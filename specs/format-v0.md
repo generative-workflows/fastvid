@@ -33,7 +33,8 @@ Each entry is 32 bytes:
 |---:|---:|---|
 | 0 | 1 | plane index |
 | 1 | 1 | entropy mode: 0 = zero-run varints; 1…9 = Rice parameter 0…8 |
-| 2 | 2 | reserved, zero |
+| 2 | 1 | prediction mode: 0 = spatial Paeth; 1 = previous-frame sample |
+| 3 | 1 | reserved, zero |
 | 4 | 4 | plane-local x |
 | 8 | 4 | plane-local y |
 | 12 | 4 | width |
@@ -50,7 +51,8 @@ padding or trailing bytes.
 ## Tile payload
 
 Samples are processed in raster order. For each sample, predict from already
-reconstructed samples in the same tile with Paeth:
+reconstructed samples in the same tile with Paeth when prediction mode is
+zero:
 
 ```
 p = left + above - upper_left
@@ -58,6 +60,12 @@ predict = argmin([left, above, upper_left], |p - candidate|)
 ```
 
 Ties prefer left, then above, then upper-left. Missing neighbors are zero.
+
+Prediction mode one uses the co-located sample from a required reference frame.
+The reference is the fully reconstructed preceding coded frame and must have
+identical dimensions and pixel format. A decoder without that reference
+rejects the frame. Keyframes use mode zero; mode one therefore preserves tile
+parallelism but introduces a frame dependency.
 
 Quality selects quantization step `q = 1 + floor((100-quality) / 5)`. The
 signed residual `sample - predict` is divided by `q` with symmetric
