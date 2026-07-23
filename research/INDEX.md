@@ -14,3 +14,4 @@ before entering the format.
 | [0005](0005-adaptive-rice-coding.md) | Rice/Plaunt, RFC 9043, RFC 9639 | Adaptive coding of predictor residuals | Reviewed |
 | [0006](0006-standard-evaluation-methodology.md) | RFC 8761, AOM CTC, Xiph methodology | Standard corpus and evaluation protocol | Reviewed |
 | [0007](0007-temporal-dpcm-gating.md) | Rice/Plaunt and CCSDS | Previous-frame DPCM and activity gating | Reviewed |
+| [0008](0008-block-local-inter-intra-selection.md) | RFC 6386 and AV1 specification | Block-local spatial/temporal prediction selection | Reviewed |

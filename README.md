@@ -39,8 +39,10 @@ five-trial protocol in [the evaluation methodology](EVALUATION_METHODOLOGY.md).
 
 On the three-video subset, gated GOP-12 temporal prediction improves the
 quality-90 geometric ratio from 5.190x to 6.550x while increasing one-thread
-encode/decode throughput from 25.94/59.81 to 40.25/72.43 MP/s. Its aggregate
+encode/decode throughput from 25.94/59.81 to 47.04/75.33 MP/s. Its aggregate
 encoded bitrate falls from 154.67 to 127.56 Mb/s (19.33 to 15.95 MB/s).
 At quality 100, GOP-12 reduces aggregate bitrate from 247.66 to 206.73 Mb/s
-(30.96 to 25.84 MB/s). See
-[EXP-0005](experiments/EXP-0005-gated-temporal-prediction.md).
+(30.96 to 25.84 MB/s) while reaching 38.67/62.48 MP/s one-thread
+encode/decode throughput. See
+[EXP-0005](experiments/EXP-0005-gated-temporal-prediction.md) and
+[EXP-0007](experiments/EXP-0007-temporal-write-elision.md).

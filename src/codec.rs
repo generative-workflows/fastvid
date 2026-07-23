@@ -518,16 +518,95 @@ fn plane_dimensions(width: u32, height: u32, format: PixelFormat) -> Vec<(u32, u
 }
 
 fn encode_tile(plane: &Plane, reference: Option<&Plane>, tile: Tile, step: i32) -> EncodedTile {
+    if let Some(reference) = reference {
+        return encode_temporal_tile(plane, reference, tile, step);
+    }
+    encode_spatial_tile(plane, tile, step)
+}
+
+struct ResidualAccumulator {
+    folded: Vec<u16>,
+    histogram: [u32; 511],
+    zero_run_payload: Vec<u8>,
+    zero_run: u32,
+}
+
+impl ResidualAccumulator {
+    fn new(sample_count: usize) -> Self {
+        Self {
+            folded: Vec::with_capacity(sample_count),
+            histogram: [0; 511],
+            zero_run_payload: Vec::with_capacity(sample_count),
+            zero_run: 0,
+        }
+    }
+
+    fn push(&mut self, quantized: i32) {
+        let folded = zigzag(quantized);
+        self.folded.push(folded as u16);
+        self.histogram[folded as usize] += 1;
+        if quantized == 0 {
+            self.zero_run += 1;
+        } else {
+            flush_zero_run(&mut self.zero_run_payload, &mut self.zero_run);
+            put_varint(&mut self.zero_run_payload, folded * 2 - 1);
+        }
+    }
+
+    fn finish(mut self, prediction_mode: u8) -> EncodedTile {
+        flush_zero_run(&mut self.zero_run_payload, &mut self.zero_run);
+        let (rice_parameter, rice_bits) = best_rice_parameter(&self.histogram, self.folded.len());
+        let rice_bytes = rice_bits.div_ceil(8);
+        if rice_bytes >= self.zero_run_payload.len() {
+            return EncodedTile {
+                entropy_mode: ENTROPY_ZERO_RUN,
+                prediction_mode,
+                payload: self.zero_run_payload,
+            };
+        }
+
+        let mut rice_payload = Vec::with_capacity(rice_bytes);
+        let mut writer = BitWriter::new(&mut rice_payload);
+        for folded in self.folded {
+            writer.put_rice(u32::from(folded), rice_parameter);
+        }
+        writer.finish();
+        debug_assert_eq!(rice_payload.len(), rice_bytes);
+        EncodedTile {
+            entropy_mode: ENTROPY_RICE_BASE + rice_parameter,
+            prediction_mode,
+            payload: rice_payload,
+        }
+    }
+}
+
+fn encode_temporal_tile(plane: &Plane, reference: &Plane, tile: Tile, step: i32) -> EncodedTile {
+    let width = tile.width as usize;
+    let height = tile.height as usize;
+    let plane_width = plane.width as usize;
+    let origin_x = tile.x as usize;
+    let origin_y = tile.y as usize;
+    let mut residuals = ResidualAccumulator::new(width * height);
+    for y in 0..height {
+        let start = (origin_y + y) * plane_width + origin_x;
+        for (&sample, &prediction) in plane.data[start..start + width]
+            .iter()
+            .zip(&reference.data[start..start + width])
+        {
+            residuals.push(quantize(i32::from(sample) - i32::from(prediction), step));
+        }
+    }
+    residuals.finish(PREDICT_TEMPORAL)
+}
+
+fn encode_spatial_tile(plane: &Plane, tile: Tile, step: i32) -> EncodedTile {
     let width = tile.width as usize;
     let height = tile.height as usize;
     let plane_width = plane.width as usize;
     let origin_x = tile.x as usize;
     let origin_y = tile.y as usize;
     let mut reconstructed = vec![0u8; width * height];
-    let mut residuals = Vec::with_capacity(width * height);
-    let mut histogram = [0u32; 511];
-    let mut zero_run_payload = Vec::with_capacity(width * height);
-    let mut zero_run = 0u32;
+    let mut residuals = ResidualAccumulator::new(width * height);
     for y in 0..height {
         for x in 0..width {
             let index = y * width + x;
@@ -543,57 +622,14 @@ fn encode_tile(plane: &Plane, reference: Option<&Plane>, tile: Tile, step: i32) 
                 0
             };
             let plane_index = (origin_y + y) * plane_width + origin_x + x;
-            let prediction = if let Some(reference) = reference {
-                i32::from(reference.data[plane_index])
-            } else {
-                i32::from(paeth(left, above, upper_left))
-            };
+            let prediction = i32::from(paeth(left, above, upper_left));
             let sample = i32::from(plane.data[plane_index]);
             let quantized = quantize(sample - prediction, step);
             reconstructed[index] = (prediction + quantized * step).clamp(0, 255) as u8;
-            let folded = zigzag(quantized);
-            residuals.push(folded as u16);
-            histogram[folded as usize] += 1;
-            if quantized == 0 {
-                zero_run += 1;
-            } else {
-                flush_zero_run(&mut zero_run_payload, &mut zero_run);
-                put_varint(&mut zero_run_payload, folded * 2 - 1);
-            }
+            residuals.push(quantized);
         }
     }
-    flush_zero_run(&mut zero_run_payload, &mut zero_run);
-
-    let (rice_parameter, rice_bits) = best_rice_parameter(&histogram, residuals.len());
-    let rice_bytes = rice_bits.div_ceil(8);
-    if rice_bytes >= zero_run_payload.len() {
-        return EncodedTile {
-            entropy_mode: ENTROPY_ZERO_RUN,
-            prediction_mode: if reference.is_some() {
-                PREDICT_TEMPORAL
-            } else {
-                PREDICT_SPATIAL
-            },
-            payload: zero_run_payload,
-        };
-    }
-
-    let mut rice_payload = Vec::with_capacity(rice_bytes);
-    let mut writer = BitWriter::new(&mut rice_payload);
-    for folded in residuals {
-        writer.put_rice(u32::from(folded), rice_parameter);
-    }
-    writer.finish();
-    debug_assert_eq!(rice_payload.len(), rice_bytes);
-    EncodedTile {
-        entropy_mode: ENTROPY_RICE_BASE + rice_parameter,
-        prediction_mode: if reference.is_some() {
-            PREDICT_TEMPORAL
-        } else {
-            PREDICT_SPATIAL
-        },
-        payload: rice_payload,
-    }
+    residuals.finish(PREDICT_SPATIAL)
 }
 
 fn decode_tile_payload(

@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "canonical_format": {
+    "width": 1920,
+    "height": 1080,
+    "pixel_format": "yuv422p8",
+    "color_matrix": "bt709",
+    "range": "limited"
+  },
+  "sources": [
+    {
+      "id": "bbb",
+      "title": "Big Buck Bunny",
+      "license": "CC-BY-3.0",
+      "frame_rate": "24/1",
+      "base_url": "https://media.xiph.org/BBB/BBB-1080-png/",
+      "upstream_sha256": "https://media.xiph.org/BBB/BBB-1080-png/SHA256SUMS.txt"
+    },
+    {
+      "id": "ed",
+      "title": "Elephants Dream",
+      "license": "CC-BY-2.5",
+      "frame_rate": "24/1",
+      "base_url": "https://media.xiph.org/ED/ED-1080-png/",
+      "upstream_sha256": "https://media.xiph.org/ED/ED-1080-png/SHA256SUMS"
+    }
+  ],
+  "samples": [
+    {"id": "bbb-grass-fur", "kind": "image", "source": "bbb", "source_frame": 3000, "frames": 1, "path": "stills/bbb-grass-fur-03000.yuv"},
+    {"id": "bbb-foliage-sky", "kind": "image", "source": "bbb", "source_frame": 9000, "frames": 1, "path": "stills/bbb-foliage-sky-09000.yuv"},
+    {"id": "bbb-credits-text", "kind": "image", "source": "bbb", "source_frame": 12000, "frames": 1, "path": "stills/bbb-credits-text-12000.yuv"},
+    {"id": "ed-monochrome-lines", "kind": "image", "source": "ed", "source_frame": 3000, "frames": 1, "path": "stills/ed-monochrome-lines-03000.yuv"},
+    {"id": "ed-dark-motion", "kind": "image", "source": "ed", "source_frame": 6000, "frames": 1, "path": "stills/ed-dark-motion-06000.yuv"},
+    {"id": "ed-dense-warm", "kind": "image", "source": "ed", "source_frame": 12000, "frames": 1, "path": "stills/ed-dense-warm-12000.yuv"},
+    {"id": "bbb-grass-motion", "kind": "video", "source": "bbb", "source_frame": 2989, "frames": 24, "path": "videos/bbb-grass-motion-02989-24f.yuv"},
+    {"id": "bbb-foliage-motion", "kind": "video", "source": "bbb", "source_frame": 8989, "frames": 24, "path": "videos/bbb-foliage-motion-08989-24f.yuv"},
+    {"id": "ed-dense-motion", "kind": "video", "source": "ed", "source_frame": 11989, "frames": 24, "path": "videos/ed-dense-motion-11989-24f.yuv"}
+  ]
+}
