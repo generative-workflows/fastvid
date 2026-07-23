@@ -20,6 +20,5 @@ before entering the format.
 | [0011](0011-openapv.md) | Academy Software Foundation OpenAPV | Royalty-free professional intra-codec architecture and comparison target | Reviewed |
 | [0012](0012-simd-cache-profiling.md) | Rust `std::arch`/`std::simd`, Cachegrind | Safe SIMD strategy, cache profiling, and current hot-path candidates | Reviewed |
 | [0013](0013-high-bit-depth-codec-design.md) | OpenAPV, FFV1 | Native 10/12/16-bit formats, arithmetic bounds, and compatibility | Reviewed |
-| [0014](0014-sampling-and-high-bit-quantization.md) | Samply, Rust `Vec` | On-CPU codec profiles and high-bit quantizer working-set design | Reviewed |
-| [0015](0015-openapv-matched-comparison.md) | OpenAPV v0.3.0.0 applications and Fastvid high-bit metrics | Matched-input, matched-quality comparison protocol | Reviewed |
-| [0016](0016-rolling-reconstruction-state.md) | Fastvid high-bit predictor working-set analysis | Rolling spatial state and temporal write elimination | Reviewed |
+| [0014](0014-sampling-and-high-bit-quantization.md) | Samply, Linux perf security, Rust `Vec` | Statistical sampling limits and contiguous lookup-table guarantees | Reviewed |
+| [0015](0015-openapv-matched-comparison.md) | OpenAPV v0.3.0.0 source | Preset defaults, application clocks, tiling, and SIMD build behavior | Reviewed |

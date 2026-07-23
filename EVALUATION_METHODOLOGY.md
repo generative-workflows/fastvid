@@ -228,3 +228,28 @@ An experiment may be accepted when:
 
 Synthetic/demo fixtures remain useful diagnostics but cannot support general
 compression or quality claims.
+
+## External codec comparisons
+
+External comparisons use the same source bytes, sample precision, coding
+track, tile geometry where configurable, and thread count. Controls such as
+Fastvid quality and another codec's QP are not assumed equivalent. Sweep the
+reference codec, then select the measured point with minimum Y-PSNR distance;
+report that distance and both SSIM values. Do not present interpolated timing
+or bitrate as a measured row.
+
+The standard OpenAPV diagnostic uses the high-bit corpus-v2
+`high-precision-motion-10` sequence at 1280x720, 24 frames, and 24 fps:
+
+- Fastvid GOP 1 versus OpenAPV's intra-only coding;
+- explicit 256x128 tiles and 1/4 threads;
+- OpenAPV `medium` (upstream default) and `fastest` reported separately;
+- one warm-up and five serial trials;
+- each codec application's internal codec clocks, with file I/O excluded;
+- common Fastvid PSNR, SSIM, and maximum-error measurement.
+
+Fastvid q100 may be called matched only when the other reconstruction is also
+exact. Version, compiler, architecture dispatch, command lines, encoded bytes,
+bits/luma-pixel, stream MB/s and Mb/s, and all timing/quality rows are retained.
+OpenAPV implementation details supporting this protocol are recorded in
+[research 0015](research/0015-openapv-matched-comparison.md).

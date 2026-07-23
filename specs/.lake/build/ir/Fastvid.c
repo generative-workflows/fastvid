@@ -13,15 +13,28 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+LEAN_EXPORT lean_object* l_Fastvid_riceDivisor___boxed(lean_object*);
+LEAN_EXPORT lean_object* l_Fastvid_riceQuotient(lean_object*, lean_object*);
+LEAN_EXPORT lean_object* l_Fastvid_riceRemainder___boxed(lean_object*, lean_object*);
+LEAN_EXPORT lean_object* l_Fastvid_riceDivisor(lean_object*);
 lean_object* lean_nat_shiftr(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l___private_Fastvid_0__Fastvid_zigzag_match__1_splitter___boxed(lean_object*, lean_object*, lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l___private_Fastvid_0__Fastvid_zigzag_match__1_splitter___redArg___closed__0;
 lean_object* lean_nat_to_int(lean_object*);
+lean_object* lean_nat_div(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l___private_Fastvid_0__Fastvid_zigzag_match__1_splitter___redArg(lean_object*, lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_unzigzag(lean_object*);
+LEAN_EXPORT lean_object* l_Fastvid_riceRemainder(lean_object*, lean_object*);
+LEAN_EXPORT lean_object* l_Fastvid_riceQuotient___boxed(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l___private_Fastvid_0__Fastvid_zigzag_match__1_splitter___redArg___boxed(lean_object*, lean_object*, lean_object*);
+LEAN_EXPORT lean_object* l_Fastvid_temporalResidual___boxed(lean_object*, lean_object*);
+LEAN_EXPORT lean_object* l_Fastvid_sampleMax___boxed(lean_object*);
+lean_object* lean_int_sub(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_zigzag___boxed(lean_object*);
+LEAN_EXPORT lean_object* l_Fastvid_quantStep(lean_object*, lean_object*);
 lean_object* lean_nat_abs(lean_object*);
+lean_object* lean_nat_pow(lean_object*, lean_object*);
+LEAN_EXPORT lean_object* l_Fastvid_sampleMax(lean_object*);
 uint8_t lean_nat_dec_eq(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_unzigzag___boxed(lean_object*);
 lean_object* lean_nat_mod(lean_object*, lean_object*);
@@ -31,8 +44,10 @@ lean_object* lean_nat_mul(lean_object*, lean_object*);
 lean_object* lean_int_neg_succ_of_nat(lean_object*);
 static lean_object* l_Fastvid_zigzag___closed__0;
 LEAN_EXPORT lean_object* l___private_Fastvid_0__Fastvid_zigzag_match__1_splitter(lean_object*, lean_object*, lean_object*, lean_object*);
+LEAN_EXPORT lean_object* l_Fastvid_quantStep___boxed(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_zigzag(lean_object*);
 lean_object* lean_nat_add(lean_object*, lean_object*);
+LEAN_EXPORT lean_object* l_Fastvid_temporalResidual(lean_object*, lean_object*);
 static lean_object* _init_l_Fastvid_zigzag___closed__0() {
 _start:
 {
@@ -178,6 +193,136 @@ lean_object* x_5;
 x_5 = l___private_Fastvid_0__Fastvid_zigzag_match__1_splitter(x_1, x_2, x_3, x_4);
 lean_dec(x_2);
 return x_5;
+}
+}
+LEAN_EXPORT lean_object* l_Fastvid_riceDivisor(lean_object* x_1) {
+_start:
+{
+lean_object* x_2; lean_object* x_3; 
+x_2 = lean_unsigned_to_nat(2u);
+x_3 = lean_nat_pow(x_2, x_1);
+return x_3;
+}
+}
+LEAN_EXPORT lean_object* l_Fastvid_riceDivisor___boxed(lean_object* x_1) {
+_start:
+{
+lean_object* x_2; 
+x_2 = l_Fastvid_riceDivisor(x_1);
+lean_dec(x_1);
+return x_2;
+}
+}
+LEAN_EXPORT lean_object* l_Fastvid_riceQuotient(lean_object* x_1, lean_object* x_2) {
+_start:
+{
+lean_object* x_3; lean_object* x_4; 
+x_3 = l_Fastvid_riceDivisor(x_2);
+x_4 = lean_nat_div(x_1, x_3);
+lean_dec(x_3);
+return x_4;
+}
+}
+LEAN_EXPORT lean_object* l_Fastvid_riceQuotient___boxed(lean_object* x_1, lean_object* x_2) {
+_start:
+{
+lean_object* x_3; 
+x_3 = l_Fastvid_riceQuotient(x_1, x_2);
+lean_dec(x_2);
+lean_dec(x_1);
+return x_3;
+}
+}
+LEAN_EXPORT lean_object* l_Fastvid_riceRemainder(lean_object* x_1, lean_object* x_2) {
+_start:
+{
+lean_object* x_3; lean_object* x_4; 
+x_3 = l_Fastvid_riceDivisor(x_2);
+x_4 = lean_nat_mod(x_1, x_3);
+lean_dec(x_3);
+return x_4;
+}
+}
+LEAN_EXPORT lean_object* l_Fastvid_riceRemainder___boxed(lean_object* x_1, lean_object* x_2) {
+_start:
+{
+lean_object* x_3; 
+x_3 = l_Fastvid_riceRemainder(x_1, x_2);
+lean_dec(x_2);
+lean_dec(x_1);
+return x_3;
+}
+}
+LEAN_EXPORT lean_object* l_Fastvid_temporalResidual(lean_object* x_1, lean_object* x_2) {
+_start:
+{
+lean_object* x_3; 
+x_3 = lean_int_sub(x_1, x_2);
+return x_3;
+}
+}
+LEAN_EXPORT lean_object* l_Fastvid_temporalResidual___boxed(lean_object* x_1, lean_object* x_2) {
+_start:
+{
+lean_object* x_3; 
+x_3 = l_Fastvid_temporalResidual(x_1, x_2);
+lean_dec(x_2);
+lean_dec(x_1);
+return x_3;
+}
+}
+LEAN_EXPORT lean_object* l_Fastvid_sampleMax(lean_object* x_1) {
+_start:
+{
+lean_object* x_2; lean_object* x_3; lean_object* x_4; lean_object* x_5; 
+x_2 = lean_unsigned_to_nat(2u);
+x_3 = lean_nat_pow(x_2, x_1);
+x_4 = lean_unsigned_to_nat(1u);
+x_5 = lean_nat_sub(x_3, x_4);
+lean_dec(x_3);
+return x_5;
+}
+}
+LEAN_EXPORT lean_object* l_Fastvid_sampleMax___boxed(lean_object* x_1) {
+_start:
+{
+lean_object* x_2; 
+x_2 = l_Fastvid_sampleMax(x_1);
+lean_dec(x_1);
+return x_2;
+}
+}
+LEAN_EXPORT lean_object* l_Fastvid_quantStep(lean_object* x_1, lean_object* x_2) {
+_start:
+{
+lean_object* x_3; lean_object* x_4; lean_object* x_5; lean_object* x_6; lean_object* x_7; lean_object* x_8; lean_object* x_9; lean_object* x_10; lean_object* x_11; lean_object* x_12; lean_object* x_13; 
+x_3 = lean_unsigned_to_nat(1u);
+x_4 = lean_unsigned_to_nat(100u);
+x_5 = lean_nat_sub(x_4, x_1);
+x_6 = lean_unsigned_to_nat(5u);
+x_7 = lean_nat_div(x_5, x_6);
+lean_dec(x_5);
+x_8 = lean_unsigned_to_nat(2u);
+x_9 = lean_unsigned_to_nat(8u);
+x_10 = lean_nat_sub(x_2, x_9);
+x_11 = lean_nat_pow(x_8, x_10);
+lean_dec(x_10);
+x_12 = lean_nat_mul(x_7, x_11);
+lean_dec(x_11);
+lean_dec(x_7);
+x_13 = lean_nat_add(x_3, x_12);
+lean_dec(x_12);
+return x_13;
+}
+}
+LEAN_EXPORT lean_object* l_Fastvid_quantStep___boxed(lean_object* x_1, lean_object* x_2) {
+_start:
+{
+lean_object* x_3; 
+x_3 = l_Fastvid_quantStep(x_1, x_2);
+lean_dec(x_2);
+lean_dec(x_1);
+return x_3;
 }
 }
 lean_object* initialize_Init(uint8_t builtin, lean_object*);
