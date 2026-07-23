@@ -11,4 +11,4 @@ before entering the format.
 | [0002](0002-png-predictors.md) | W3C PNG filter specification | Simple causal spatial prediction | Reviewed |
 | [0003](0003-ssim.md) | Wang et al., SSIM | Perceptual-quality measurement | Reviewed |
 | [0004](0004-codec-evaluation.md) | IETF RFC 8761 and Xiph test media | Reproducible codec evaluation | Reviewed |
-
+| [0005](0005-adaptive-rice-coding.md) | Rice/Plaunt, RFC 9043, RFC 9639 | Adaptive coding of predictor residuals | Reviewed |

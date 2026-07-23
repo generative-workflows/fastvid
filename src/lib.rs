@@ -11,5 +11,5 @@ mod metrics;
 mod model;
 
 pub use codec::{DecodedTile, StreamInfo, decode, decode_tile, encode, inspect};
-pub use metrics::{QualityMetrics, compare_plane};
+pub use metrics::{QualityMetrics, compare_plane, ssim_plane};
 pub use model::{CodecError, CodecOptions, Frame, FrameRate, PixelFormat, Plane};

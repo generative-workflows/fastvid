@@ -32,7 +32,8 @@ Each entry is 32 bytes:
 | Offset | Size | Meaning |
 |---:|---:|---|
 | 0 | 1 | plane index |
-| 1 | 3 | reserved, zero |
+| 1 | 1 | entropy mode: 0 = zero-run varints; 1…9 = Rice parameter 0…8 |
+| 2 | 2 | reserved, zero |
 | 4 | 4 | plane-local x |
 | 8 | 4 | plane-local y |
 | 12 | 4 | width |
@@ -69,7 +70,7 @@ The quantized signed residual is zigzag mapped:
 0 → 0, -1 → 1, 1 → 2, -2 → 3, 2 → 4, ...
 ```
 
-The residual sequence is represented by tokens:
+Entropy mode zero represents the residual sequence with tokens:
 
 ```
 token = 2*(run_length-1)              for a run of zero residuals
@@ -78,3 +79,16 @@ token = 2*zigzag(nonzero_residual)-1  for one nonzero residual
 
 Tokens are encoded as unsigned LEB128. A decoder rejects non-canonical,
 overflowing, truncated, overlong-run, or trailing payload bytes.
+
+Entropy modes one through nine encode every zigzag-mapped residual with Rice
+parameter `k = mode - 1`. A value `n` is split into quotient `n >> k` and the
+`k` low remainder bits. The quotient is that many zero bits followed by a one;
+the remainder follows least-significant bit first. Bits fill bytes from least
+to most significant. The last byte is zero-padded. A decoder rejects truncated
+codes, folded residuals above 510, nonzero padding, and trailing bytes.
+
+The encoder computes the exact byte length for zero-run mode and Rice
+parameters 0…8 independently per tile. It selects the shortest representation,
+preferring zero-run mode and then the lower Rice parameter on ties. The mode
+occupies a directory byte that was reserved in the original prototype, so mode
+selection adds no payload bytes.

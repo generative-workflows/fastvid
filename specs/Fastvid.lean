@@ -16,4 +16,18 @@ theorem unzigzag_zigzag (x : Int) : unzigzag (zigzag x) = x := by
   | negSucc n =>
       simp [zigzag, unzigzag, Nat.add_mod, Nat.add_div]
 
+/-- The power-of-two divisor selected by Rice parameter `k`. -/
+def riceDivisor (k : Nat) : Nat := 2 ^ k
+
+/-- Unary-coded high part of a Rice-coded nonnegative value. -/
+def riceQuotient (n k : Nat) : Nat := n / riceDivisor k
+
+/-- Fixed-width low part of a Rice-coded nonnegative value. -/
+def riceRemainder (n k : Nat) : Nat := n % riceDivisor k
+
+/-- Rice quotient and remainder reconstruct the original folded residual. -/
+theorem rice_recompose (n k : Nat) :
+    riceQuotient n k * riceDivisor k + riceRemainder n k = n := by
+  simp [riceQuotient, riceRemainder, riceDivisor, Nat.mul_comm, Nat.div_add_mod]
+
 end Fastvid

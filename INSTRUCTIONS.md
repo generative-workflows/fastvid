@@ -5,6 +5,10 @@ It balances three goals simultaneously:
     2. Encoding and Decoding Speed
     3. Compression Ratio
 
+This project is based around experimental research and formal verification.
+Every experiment MUST be logged (see experiments section below).
+Every research artifact MUST be logged (see research section below).
+
 ## Implementation
 
 This is a Rust project. Rust is chosen for its exceptional speed, zero-cost abstractions, and memory
@@ -83,6 +87,8 @@ regularly as part of the development loop.
 ## Benchmarking
 
 We suggest using `criterion` for microbenchmarks and an iperf-based profiler for profiling larger runs.
+
+Keep an updated benchmark table in the README.md
 
 ## Compression Ratio
 

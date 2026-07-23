@@ -7,6 +7,9 @@ const VERSION: u8 = 0;
 const HEADER_LEN: usize = 32;
 const DIRECTORY_ENTRY_LEN: usize = 32;
 const MAX_TILES: usize = 1 << 20;
+const ENTROPY_ZERO_RUN: u8 = 0;
+const ENTROPY_RICE_BASE: u8 = 1;
+const MAX_RICE_PARAMETER: u8 = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Tile {
@@ -20,8 +23,14 @@ struct Tile {
 #[derive(Clone, Copy, Debug)]
 struct DirectoryEntry {
     tile: Tile,
+    entropy_mode: u8,
     offset: usize,
     length: usize,
+}
+
+struct EncodedTile {
+    entropy_mode: u8,
+    payload: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -75,8 +84,8 @@ pub fn encode(frame: &Frame, options: CodecOptions) -> Result<Vec<u8>, CodecErro
     let payload_start = HEADER_LEN
         .checked_add(directory_bytes)
         .ok_or(CodecError::LimitExceeded("stream is too large"))?;
-    let payload_bytes = payloads.iter().try_fold(0usize, |sum, payload| {
-        sum.checked_add(payload.len())
+    let payload_bytes = payloads.iter().try_fold(0usize, |sum, encoded| {
+        sum.checked_add(encoded.payload.len())
             .ok_or(CodecError::LimitExceeded("stream is too large"))
     })?;
     let stream_len = payload_start
@@ -101,11 +110,12 @@ pub fn encode(frame: &Frame, options: CodecOptions) -> Result<Vec<u8>, CodecErro
     );
 
     let mut offset = payload_start;
-    for (&tile, payload) in tiles.iter().zip(&payloads) {
+    for (&tile, encoded) in tiles.iter().zip(&payloads) {
         output.push(
             u8::try_from(tile.plane).map_err(|_| CodecError::LimitExceeded("too many planes"))?,
         );
-        output.extend_from_slice(&[0; 3]);
+        output.push(encoded.entropy_mode);
+        output.extend_from_slice(&[0; 2]);
         put_u32(&mut output, tile.x);
         put_u32(&mut output, tile.y);
         put_u32(&mut output, tile.width);
@@ -116,13 +126,13 @@ pub fn encode(frame: &Frame, options: CodecOptions) -> Result<Vec<u8>, CodecErro
         );
         put_u32(
             &mut output,
-            u32::try_from(payload.len())
+            u32::try_from(encoded.payload.len())
                 .map_err(|_| CodecError::LimitExceeded("tile payload is too large"))?,
         );
-        offset += payload.len();
+        offset += encoded.payload.len();
     }
-    for payload in payloads {
-        output.extend_from_slice(&payload);
+    for encoded in payloads {
+        output.extend_from_slice(&encoded.payload);
     }
     debug_assert_eq!(output.len(), stream_len);
     Ok(output)
@@ -140,6 +150,7 @@ pub fn decode(bytes: &[u8], threads: usize) -> Result<Frame, CodecError> {
             entry.tile,
             &parsed.bytes[entry.offset..entry.offset + entry.length],
             step,
+            entry.entropy_mode,
         )
     });
     let mut decoded_tiles = Vec::with_capacity(decoded.len());
@@ -159,6 +170,7 @@ pub fn decode_tile(bytes: &[u8], tile_index: usize) -> Result<DecodedTile, Codec
         entry.tile,
         &parsed.bytes[entry.offset..entry.offset + entry.length],
         quantization_step(parsed.info.quality),
+        entry.entropy_mode,
     )?;
     Ok(DecodedTile {
         plane: entry.tile.plane,
@@ -276,8 +288,14 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, CodecError> {
     let mut next_payload_offset = directory_end;
     for (index, expected_tile) in expected.into_iter().enumerate() {
         let start = HEADER_LEN + index * DIRECTORY_ENTRY_LEN;
-        if bytes[start + 1..start + 4] != [0; 3] {
+        if bytes[start + 2..start + 4] != [0; 2] {
             return Err(CodecError::Malformed("nonzero reserved directory bytes"));
+        }
+        let entropy_mode = bytes[start + 1];
+        if entropy_mode != ENTROPY_ZERO_RUN
+            && !(ENTROPY_RICE_BASE..=ENTROPY_RICE_BASE + MAX_RICE_PARAMETER).contains(&entropy_mode)
+        {
+            return Err(CodecError::Malformed("unknown tile entropy mode"));
         }
         let tile = Tile {
             plane: usize::from(bytes[start]),
@@ -304,6 +322,7 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, CodecError> {
         }
         entries.push(DirectoryEntry {
             tile,
+            entropy_mode,
             offset,
             length,
         });
@@ -388,14 +407,16 @@ fn plane_dimensions(width: u32, height: u32, format: PixelFormat) -> Vec<(u32, u
     }
 }
 
-fn encode_tile(plane: &Plane, tile: Tile, step: i32) -> Vec<u8> {
+fn encode_tile(plane: &Plane, tile: Tile, step: i32) -> EncodedTile {
     let width = tile.width as usize;
     let height = tile.height as usize;
     let plane_width = plane.width as usize;
     let origin_x = tile.x as usize;
     let origin_y = tile.y as usize;
     let mut reconstructed = vec![0u8; width * height];
-    let mut payload = Vec::with_capacity(width * height);
+    let mut residuals = Vec::with_capacity(width * height);
+    let mut histogram = [0u32; 511];
+    let mut zero_run_payload = Vec::with_capacity(width * height);
     let mut zero_run = 0u32;
     for y in 0..height {
         for x in 0..width {
@@ -415,22 +436,65 @@ fn encode_tile(plane: &Plane, tile: Tile, step: i32) -> Vec<u8> {
             let sample = i32::from(plane.data[(origin_y + y) * plane_width + origin_x + x]);
             let quantized = quantize(sample - prediction, step);
             reconstructed[index] = (prediction + quantized * step).clamp(0, 255) as u8;
+            let folded = zigzag(quantized);
+            residuals.push(folded as u16);
+            histogram[folded as usize] += 1;
             if quantized == 0 {
                 zero_run += 1;
             } else {
-                flush_zero_run(&mut payload, &mut zero_run);
-                put_varint(&mut payload, zigzag(quantized) * 2 - 1);
+                flush_zero_run(&mut zero_run_payload, &mut zero_run);
+                put_varint(&mut zero_run_payload, folded * 2 - 1);
             }
         }
     }
-    flush_zero_run(&mut payload, &mut zero_run);
-    payload
+    flush_zero_run(&mut zero_run_payload, &mut zero_run);
+
+    let (rice_parameter, rice_bits) = best_rice_parameter(&histogram, residuals.len());
+    let rice_bytes = rice_bits.div_ceil(8);
+    if rice_bytes >= zero_run_payload.len() {
+        return EncodedTile {
+            entropy_mode: ENTROPY_ZERO_RUN,
+            payload: zero_run_payload,
+        };
+    }
+
+    let mut rice_payload = Vec::with_capacity(rice_bytes);
+    let mut writer = BitWriter::new(&mut rice_payload);
+    for folded in residuals {
+        writer.put_rice(u32::from(folded), rice_parameter);
+    }
+    writer.finish();
+    debug_assert_eq!(rice_payload.len(), rice_bytes);
+    EncodedTile {
+        entropy_mode: ENTROPY_RICE_BASE + rice_parameter,
+        payload: rice_payload,
+    }
 }
 
-fn decode_tile_payload(tile: Tile, payload: &[u8], step: i32) -> Result<Vec<u8>, CodecError> {
+fn decode_tile_payload(
+    tile: Tile,
+    payload: &[u8],
+    step: i32,
+    mode: u8,
+) -> Result<Vec<u8>, CodecError> {
     let sample_count = checked_area(tile.width, tile.height)?;
     let width =
         usize::try_from(tile.width).map_err(|_| CodecError::LimitExceeded("tile is too large"))?;
+    if mode == ENTROPY_ZERO_RUN {
+        return decode_zero_run_payload(payload, sample_count, width, step);
+    }
+    if !(ENTROPY_RICE_BASE..=ENTROPY_RICE_BASE + MAX_RICE_PARAMETER).contains(&mode) {
+        return Err(CodecError::Malformed("unknown tile entropy mode"));
+    }
+    decode_rice_payload(payload, sample_count, width, step, mode - ENTROPY_RICE_BASE)
+}
+
+fn decode_zero_run_payload(
+    payload: &[u8],
+    sample_count: usize,
+    width: usize,
+    step: i32,
+) -> Result<Vec<u8>, CodecError> {
     let mut output = vec![0u8; sample_count];
     let mut cursor = 0usize;
     let mut sample_index = 0usize;
@@ -464,6 +528,26 @@ fn decode_tile_payload(tile: Tile, payload: &[u8], step: i32) -> Result<Vec<u8>,
     if cursor != payload.len() {
         return Err(CodecError::Malformed("trailing tile payload bytes"));
     }
+    Ok(output)
+}
+
+fn decode_rice_payload(
+    payload: &[u8],
+    sample_count: usize,
+    width: usize,
+    step: i32,
+    parameter: u8,
+) -> Result<Vec<u8>, CodecError> {
+    let mut output = vec![0u8; sample_count];
+    let mut reader = BitReader::new(payload);
+    for sample_index in 0..sample_count {
+        let folded = reader.get_rice(parameter)?;
+        if folded > 510 {
+            return Err(CodecError::Malformed("Rice residual is out of range"));
+        }
+        reconstruct_sample(&mut output, sample_index, width, unzigzag(folded), step);
+    }
+    reader.finish()?;
     Ok(output)
 }
 
@@ -541,6 +625,168 @@ fn flush_zero_run(output: &mut Vec<u8>, run: &mut u32) {
     if *run != 0 {
         put_varint(output, (*run - 1) * 2);
         *run = 0;
+    }
+}
+
+fn best_rice_parameter(histogram: &[u32; 511], sample_count: usize) -> (u8, usize) {
+    let mut best_parameter = 0;
+    let mut best_bits = usize::MAX;
+    for parameter in 0..=MAX_RICE_PARAMETER {
+        let mut bits = sample_count * (usize::from(parameter) + 1);
+        for (value, &frequency) in histogram.iter().enumerate().skip(1) {
+            bits += (value >> parameter) * frequency as usize;
+        }
+        if bits < best_bits {
+            best_parameter = parameter;
+            best_bits = bits;
+        }
+    }
+    (best_parameter, best_bits)
+}
+
+struct BitWriter<'a> {
+    output: &'a mut Vec<u8>,
+    buffer: u64,
+    buffered_bits: u8,
+}
+
+impl<'a> BitWriter<'a> {
+    fn new(output: &'a mut Vec<u8>) -> Self {
+        Self {
+            output,
+            buffer: 0,
+            buffered_bits: 0,
+        }
+    }
+
+    fn put_rice(&mut self, value: u32, parameter: u8) {
+        self.put_zeros(value >> parameter);
+        self.put_bits(1, 1);
+        self.put_bits(value, parameter);
+    }
+
+    fn put_zeros(&mut self, mut count: u32) {
+        while count != 0 {
+            let added = count.min(u32::from(64 - self.buffered_bits));
+            self.buffered_bits += added as u8;
+            count -= added;
+            self.flush_bytes();
+        }
+    }
+
+    fn put_bits(&mut self, value: u32, count: u8) {
+        debug_assert!(count <= 8);
+        if count != 0 {
+            let mask = (1u64 << count) - 1;
+            self.buffer |= (u64::from(value) & mask) << self.buffered_bits;
+            self.buffered_bits += count;
+            self.flush_bytes();
+        }
+    }
+
+    fn flush_bytes(&mut self) {
+        while self.buffered_bits >= 8 {
+            self.output.push(self.buffer as u8);
+            self.buffer >>= 8;
+            self.buffered_bits -= 8;
+        }
+    }
+
+    fn finish(self) {
+        if self.buffered_bits != 0 {
+            self.output.push(self.buffer as u8);
+        }
+    }
+}
+
+struct BitReader<'a> {
+    input: &'a [u8],
+    cursor: usize,
+    buffer: u64,
+    buffered_bits: u8,
+    consumed_bits: usize,
+}
+
+impl<'a> BitReader<'a> {
+    fn new(input: &'a [u8]) -> Self {
+        Self {
+            input,
+            cursor: 0,
+            buffer: 0,
+            buffered_bits: 0,
+            consumed_bits: 0,
+        }
+    }
+
+    fn get_rice(&mut self, parameter: u8) -> Result<u32, CodecError> {
+        let mut quotient = 0u32;
+        loop {
+            self.fill_buffer();
+            if self.buffered_bits == 0 {
+                return Err(CodecError::Malformed("truncated Rice payload"));
+            }
+            let zeros = self
+                .buffer
+                .trailing_zeros()
+                .min(u32::from(self.buffered_bits));
+            quotient += zeros;
+            if quotient > 510 {
+                return Err(CodecError::Malformed("Rice quotient is out of range"));
+            }
+            self.consume(zeros as u8);
+            if self.buffered_bits != 0 {
+                self.consume(1);
+                break;
+            }
+        }
+        let remainder = self.get_bits(parameter)?;
+        quotient
+            .checked_shl(u32::from(parameter))
+            .and_then(|value| value.checked_add(remainder))
+            .ok_or(CodecError::Malformed("Rice residual overflow"))
+    }
+
+    fn get_bits(&mut self, count: u8) -> Result<u32, CodecError> {
+        self.fill_buffer();
+        if self.buffered_bits < count {
+            return Err(CodecError::Malformed("truncated Rice payload"));
+        }
+        let mask = if count == 0 { 0 } else { (1u64 << count) - 1 };
+        let value = (self.buffer & mask) as u32;
+        self.consume(count);
+        Ok(value)
+    }
+
+    fn fill_buffer(&mut self) {
+        while self.buffered_bits <= 56 && self.cursor < self.input.len() {
+            self.buffer |= u64::from(self.input[self.cursor]) << self.buffered_bits;
+            self.cursor += 1;
+            self.buffered_bits += 8;
+        }
+    }
+
+    fn consume(&mut self, count: u8) {
+        if count == 64 {
+            self.buffer = 0;
+        } else {
+            self.buffer >>= count;
+        }
+        self.buffered_bits -= count;
+        self.consumed_bits += usize::from(count);
+    }
+
+    fn finish(self) -> Result<(), CodecError> {
+        let used_bytes = self.consumed_bits.div_ceil(8);
+        if used_bytes != self.input.len() {
+            return Err(CodecError::Malformed("trailing Rice payload bytes"));
+        }
+        if !self.consumed_bits.is_multiple_of(8) {
+            let padding_mask = !((1u8 << (self.consumed_bits % 8)) - 1);
+            if self.input[used_bytes - 1] & padding_mask != 0 {
+                return Err(CodecError::Malformed("nonzero Rice padding bits"));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -757,6 +1003,75 @@ mod tests {
     fn zigzag_is_a_bijection_for_codec_residuals() {
         for value in -255..=255 {
             assert_eq!(unzigzag(zigzag(value)), value);
+        }
+    }
+
+    #[test]
+    fn adaptive_rice_mode_round_trips_dense_residuals() {
+        let mut state = 1u32;
+        let data: Vec<u8> = (0..64 * 64)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (state >> 24) as u8
+            })
+            .collect();
+        let frame = Frame::gray8(64, 64, FrameRate::new(24, 1), data).unwrap();
+        let options = CodecOptions {
+            quality: 100,
+            tile_width: 64,
+            tile_height: 64,
+            threads: 1,
+        };
+        let encoded = encode(&frame, options).unwrap();
+        assert!(
+            (ENTROPY_RICE_BASE..=ENTROPY_RICE_BASE + MAX_RICE_PARAMETER)
+                .contains(&encoded[HEADER_LEN + 1])
+        );
+        assert_eq!(decode(&encoded, 1).unwrap(), frame);
+    }
+
+    #[test]
+    fn rice_padding_and_unknown_modes_are_rejected() {
+        let mut payload = Vec::new();
+        let mut writer = BitWriter::new(&mut payload);
+        for value in [0, 1, 2, 510] {
+            writer.put_rice(value, 3);
+        }
+        writer.finish();
+        let mut reader = BitReader::new(&payload);
+        for expected in [0, 1, 2, 510] {
+            assert_eq!(reader.get_rice(3).unwrap(), expected);
+        }
+        reader.finish().unwrap();
+
+        *payload.last_mut().unwrap() |= 0x80;
+        let mut reader = BitReader::new(&payload);
+        for _ in 0..4 {
+            reader.get_rice(3).unwrap();
+        }
+        assert!(reader.finish().is_err());
+
+        let frame = patterned_frame(16, 16);
+        let mut encoded = encode(&frame, CodecOptions::default()).unwrap();
+        encoded[HEADER_LEN + 1] = ENTROPY_RICE_BASE + MAX_RICE_PARAMETER + 1;
+        assert!(decode(&encoded, 1).is_err());
+    }
+
+    #[test]
+    fn rice_codes_round_trip_every_codec_residual() {
+        for parameter in 0..=MAX_RICE_PARAMETER {
+            let mut payload = Vec::new();
+            let mut writer = BitWriter::new(&mut payload);
+            for value in 0..=510 {
+                writer.put_rice(value, parameter);
+            }
+            writer.finish();
+
+            let mut reader = BitReader::new(&payload);
+            for expected in 0..=510 {
+                assert_eq!(reader.get_rice(parameter).unwrap(), expected);
+            }
+            reader.finish().unwrap();
         }
     }
 }

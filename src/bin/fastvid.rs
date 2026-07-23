@@ -1,5 +1,5 @@
 use fastvid::{
-    CodecOptions, Frame, FrameRate, PixelFormat, compare_plane, decode, encode, inspect,
+    CodecOptions, Frame, FrameRate, PixelFormat, compare_plane, decode, encode, inspect, ssim_plane,
 };
 use std::env;
 use std::fs;
@@ -53,8 +53,6 @@ fn demo(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let decode_start = Instant::now();
     let decoded = decode(&encoded, threads)?;
     let decode_time = decode_start.elapsed();
-    let metrics = compare_plane(&frame.planes[0].data, &decoded.planes[0].data)
-        .ok_or("metric input mismatch")?;
     if let Some(parent) = std::path::Path::new(destination).parent() {
         fs::create_dir_all(parent)?;
     }
@@ -84,9 +82,26 @@ fn demo(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         decode_time.as_secs_f64() * 1000.0,
         megapixels / decode_time.as_secs_f64()
     );
-    println!("luma max error: {}", metrics.max_error);
-    println!("luma MSE:       {:.6}", metrics.mse);
-    println!("luma PSNR:      {:.3} dB", metrics.psnr_db);
+    for (name, (reference, actual)) in ["Y", "Cb", "Cr"]
+        .into_iter()
+        .zip(frame.planes.iter().zip(&decoded.planes))
+    {
+        let metrics =
+            compare_plane(&reference.data, &actual.data).ok_or("metric input mismatch")?;
+        println!(
+            "{name} quality:      max error {}, MSE {:.6}, PSNR {:.3} dB",
+            metrics.max_error, metrics.mse, metrics.psnr_db
+        );
+    }
+    let luma = &frame.planes[0];
+    let luma_ssim = ssim_plane(
+        &luma.data,
+        &decoded.planes[0].data,
+        luma.width as usize,
+        luma.height as usize,
+    )
+    .ok_or("SSIM input mismatch")?;
+    println!("Y block SSIM:   {luma_ssim:.8}");
     println!("output:         {destination}");
     Ok(())
 }
