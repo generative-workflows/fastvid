@@ -1,6 +1,6 @@
 # Fastvid evaluation methodology
 
-Version: 2 (2026-07-23)
+Version: 3 (2026-07-23)
 
 This document defines the standard target used to evaluate Fastvid changes.
 Experiments may add diagnostics or deliberately diverge, but an optimization
@@ -127,6 +127,29 @@ For the canonical planar 8-bit YUV 4:2:2 input, an even-width frame contains
 2 raw bytes per luma pixel, so 1 MP/s equals 2 decimal MB/s (approximately
 1.907 MiB/s). Raw MB/s must be computed from actual plane byte counts so the
 metric remains correct for odd widths and future pixel formats.
+
+## Feedback tiers
+
+Benchmark cost is proportional to confidence required:
+
+1. **Fast iteration:** `scripts/benchmark-feedback.sh` runs five trials of four
+   pinned spatial/temporal, one/four-thread cases. It targets a sub-minute
+   runtime and reports per-case medians plus encode/decode geomeans. Use it
+   while shaping an optimization; a result inside its measured 5% noise band
+   is not evidence of improvement.
+2. **Focused confirmation:** run every applicable corpus sample at the
+   affected qualities, thread counts, and coding track, normally with three
+   trials. Use this only after the fast tier shows a material effect.
+3. **Release confirmation:** run the complete five-quality, one/four-thread,
+   five-trial standard matrix plus access tests and conformance checks.
+
+The fast tier is a rejection tool, not a substitute for the standard corpus.
+Its cases and trial policy are versioned by
+[EXP-0010](experiments/EXP-0010-fast-feedback-loop.md). Baseline and candidate
+must use the same binary configuration, warm-up, corpus bytes, and host.
+Direct performance comparisons should use separately preserved binaries and
+`scripts/benchmark-ab-corpus.sh`. Its trial count must be even so each binary
+runs first and second equally often within every sample/settings cell.
 
 ## Single-frame access measurements
 

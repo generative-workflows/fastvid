@@ -191,6 +191,10 @@ fn benchmark_yuv422(arguments: &[String]) -> Result<(), Box<dyn std::error::Erro
         ..CodecOptions::default()
     };
     let mut encoded_bytes = 0usize;
+    let mut zero_run_tiles = 0usize;
+    let mut rice_tiles = 0usize;
+    let mut spatial_tiles = 0usize;
+    let mut temporal_tiles = 0usize;
     let mut encode_time = std::time::Duration::ZERO;
     let mut decode_time = std::time::Duration::ZERO;
     let mut squared_errors = [0.0; 3];
@@ -214,6 +218,11 @@ fn benchmark_yuv422(arguments: &[String]) -> Result<(), Box<dyn std::error::Erro
             encode(&frame, options)?
         };
         encode_time += start.elapsed();
+        let info = inspect(&encoded)?;
+        zero_run_tiles += info.zero_run_tiles;
+        rice_tiles += info.rice_tiles;
+        spatial_tiles += info.spatial_tiles;
+        temporal_tiles += info.temporal_tiles;
         encoded_bytes = encoded_bytes
             .checked_add(encoded.len())
             .ok_or("encoded sequence is too large")?;
@@ -264,10 +273,10 @@ fn benchmark_yuv422(arguments: &[String]) -> Result<(), Box<dyn std::error::Erro
         }
     };
     println!(
-        "input\tframes\tquality\tthreads\tgop\traw_bytes\tencoded_bytes\tratio\tencode_ms\tdecode_ms\tencode_mpps\tdecode_mpps\tencode_raw_mb_s\tdecode_raw_mb_s\tencoded_stream_mb_s\tencoded_stream_mbps\ty_psnr\tcb_psnr\tcr_psnr\ty_block_ssim\tmax_error"
+        "input\tframes\tquality\tthreads\tgop\traw_bytes\tencoded_bytes\tratio\tencode_ms\tdecode_ms\tencode_mpps\tdecode_mpps\tencode_raw_mb_s\tdecode_raw_mb_s\tencoded_stream_mb_s\tencoded_stream_mbps\ty_psnr\tcb_psnr\tcr_psnr\ty_block_ssim\tmax_error\tzero_run_tiles\trice_tiles\tspatial_tiles\ttemporal_tiles"
     );
     println!(
-        "{}\t{frame_count}\t{quality}\t{threads}\t{gop}\t{raw_bytes}\t{encoded_bytes}\t{:.6}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{encode_raw_mb_s:.3}\t{decode_raw_mb_s:.3}\t{encoded_stream_mb_s:.6}\t{encoded_stream_mbps:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.8}\t{max_error}",
+        "{}\t{frame_count}\t{quality}\t{threads}\t{gop}\t{raw_bytes}\t{encoded_bytes}\t{:.6}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{encode_raw_mb_s:.3}\t{decode_raw_mb_s:.3}\t{encoded_stream_mb_s:.6}\t{encoded_stream_mbps:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.8}\t{max_error}\t{zero_run_tiles}\t{rice_tiles}\t{spatial_tiles}\t{temporal_tiles}",
         input,
         raw_bytes as f64 / encoded_bytes as f64,
         encode_seconds * 1000.0,

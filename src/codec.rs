@@ -54,6 +54,10 @@ pub struct StreamInfo {
     pub tile_width: u16,
     pub tile_height: u16,
     pub tile_count: usize,
+    pub zero_run_tiles: usize,
+    pub rice_tiles: usize,
+    pub spatial_tiles: usize,
+    pub temporal_tiles: usize,
     pub encoded_bytes: usize,
 }
 
@@ -109,12 +113,13 @@ fn encode_internal(
         options.tile_height,
     )?;
     let step = options.quantization_step();
+    let quantizer = Quantizer::new(step);
     let payloads = parallel_map(tiles.len(), options.threads, |index| {
         encode_tile(
             &frame.planes[tiles[index].plane],
             reference.map(|frame| &frame.planes[tiles[index].plane]),
             tiles[index],
-            step,
+            &quantizer,
         )
     });
 
@@ -391,6 +396,10 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, CodecError> {
 
     let mut entries = Vec::with_capacity(tile_count);
     let mut next_payload_offset = directory_end;
+    let mut zero_run_tiles = 0usize;
+    let mut rice_tiles = 0usize;
+    let mut spatial_tiles = 0usize;
+    let mut temporal_tiles = 0usize;
     for (index, expected_tile) in expected.into_iter().enumerate() {
         let start = HEADER_LEN + index * DIRECTORY_ENTRY_LEN;
         if bytes[start + 3] != 0 {
@@ -405,6 +414,16 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, CodecError> {
         let prediction_mode = bytes[start + 2];
         if prediction_mode > PREDICT_TEMPORAL {
             return Err(CodecError::Malformed("unknown tile prediction mode"));
+        }
+        if entropy_mode == ENTROPY_ZERO_RUN {
+            zero_run_tiles += 1;
+        } else {
+            rice_tiles += 1;
+        }
+        if prediction_mode == PREDICT_SPATIAL {
+            spatial_tiles += 1;
+        } else {
+            temporal_tiles += 1;
         }
         let tile = Tile {
             plane: usize::from(bytes[start]),
@@ -451,6 +470,10 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, CodecError> {
             tile_width,
             tile_height,
             tile_count,
+            zero_run_tiles,
+            rice_tiles,
+            spatial_tiles,
+            temporal_tiles,
             encoded_bytes: bytes.len(),
         },
         entries,
@@ -517,17 +540,42 @@ fn plane_dimensions(width: u32, height: u32, format: PixelFormat) -> Vec<(u32, u
     }
 }
 
-fn encode_tile(plane: &Plane, reference: Option<&Plane>, tile: Tile, step: i32) -> EncodedTile {
-    if let Some(reference) = reference {
-        return encode_temporal_tile(plane, reference, tile, step);
+struct Quantizer {
+    residuals: [i16; 511],
+    step: i32,
+}
+
+impl Quantizer {
+    fn new(step: i32) -> Self {
+        Self {
+            residuals: std::array::from_fn(|index| quantize(index as i32 - 255, step) as i16),
+            step,
+        }
     }
-    encode_spatial_tile(plane, tile, step)
+
+    #[inline]
+    fn quantize(&self, residual: i32) -> i32 {
+        debug_assert!((-255..=255).contains(&residual));
+        i32::from(self.residuals[(residual + 255) as usize])
+    }
+}
+
+fn encode_tile(
+    plane: &Plane,
+    reference: Option<&Plane>,
+    tile: Tile,
+    quantizer: &Quantizer,
+) -> EncodedTile {
+    if let Some(reference) = reference {
+        return encode_temporal_tile(plane, reference, tile, quantizer);
+    }
+    encode_spatial_tile(plane, tile, quantizer)
 }
 
 struct ResidualAccumulator {
     folded: Vec<u16>,
     histogram: [u32; 511],
-    zero_run_payload: Vec<u8>,
+    zero_run_bytes: usize,
     zero_run: u32,
 }
 
@@ -536,7 +584,7 @@ impl ResidualAccumulator {
         Self {
             folded: Vec::with_capacity(sample_count),
             histogram: [0; 511],
-            zero_run_payload: Vec::with_capacity(sample_count),
+            zero_run_bytes: 0,
             zero_run: 0,
         }
     }
@@ -548,20 +596,32 @@ impl ResidualAccumulator {
         if quantized == 0 {
             self.zero_run += 1;
         } else {
-            flush_zero_run(&mut self.zero_run_payload, &mut self.zero_run);
-            put_varint(&mut self.zero_run_payload, folded * 2 - 1);
+            count_zero_run(&mut self.zero_run_bytes, &mut self.zero_run);
+            self.zero_run_bytes += varint_length(folded * 2 - 1);
         }
     }
 
     fn finish(mut self, prediction_mode: u8) -> EncodedTile {
-        flush_zero_run(&mut self.zero_run_payload, &mut self.zero_run);
+        count_zero_run(&mut self.zero_run_bytes, &mut self.zero_run);
         let (rice_parameter, rice_bits) = best_rice_parameter(&self.histogram, self.folded.len());
         let rice_bytes = rice_bits.div_ceil(8);
-        if rice_bytes >= self.zero_run_payload.len() {
+        if rice_bytes >= self.zero_run_bytes {
+            let mut zero_run_payload = Vec::with_capacity(self.zero_run_bytes);
+            let mut zero_run = 0;
+            for &folded in &self.folded {
+                if folded == 0 {
+                    zero_run += 1;
+                } else {
+                    flush_zero_run(&mut zero_run_payload, &mut zero_run);
+                    put_varint(&mut zero_run_payload, u32::from(folded) * 2 - 1);
+                }
+            }
+            flush_zero_run(&mut zero_run_payload, &mut zero_run);
+            debug_assert_eq!(zero_run_payload.len(), self.zero_run_bytes);
             return EncodedTile {
                 entropy_mode: ENTROPY_ZERO_RUN,
                 prediction_mode,
-                payload: self.zero_run_payload,
+                payload: zero_run_payload,
             };
         }
 
@@ -580,7 +640,12 @@ impl ResidualAccumulator {
     }
 }
 
-fn encode_temporal_tile(plane: &Plane, reference: &Plane, tile: Tile, step: i32) -> EncodedTile {
+fn encode_temporal_tile(
+    plane: &Plane,
+    reference: &Plane,
+    tile: Tile,
+    quantizer: &Quantizer,
+) -> EncodedTile {
     let width = tile.width as usize;
     let height = tile.height as usize;
     let plane_width = plane.width as usize;
@@ -593,13 +658,13 @@ fn encode_temporal_tile(plane: &Plane, reference: &Plane, tile: Tile, step: i32)
             .iter()
             .zip(&reference.data[start..start + width])
         {
-            residuals.push(quantize(i32::from(sample) - i32::from(prediction), step));
+            residuals.push(quantizer.quantize(i32::from(sample) - i32::from(prediction)));
         }
     }
     residuals.finish(PREDICT_TEMPORAL)
 }
 
-fn encode_spatial_tile(plane: &Plane, tile: Tile, step: i32) -> EncodedTile {
+fn encode_spatial_tile(plane: &Plane, tile: Tile, quantizer: &Quantizer) -> EncodedTile {
     let width = tile.width as usize;
     let height = tile.height as usize;
     let plane_width = plane.width as usize;
@@ -624,8 +689,8 @@ fn encode_spatial_tile(plane: &Plane, tile: Tile, step: i32) -> EncodedTile {
             let plane_index = (origin_y + y) * plane_width + origin_x + x;
             let prediction = i32::from(paeth(left, above, upper_left));
             let sample = i32::from(plane.data[plane_index]);
-            let quantized = quantize(sample - prediction, step);
-            reconstructed[index] = (prediction + quantized * step).clamp(0, 255) as u8;
+            let quantized = quantizer.quantize(sample - prediction);
+            reconstructed[index] = (prediction + quantized * quantizer.step).clamp(0, 255) as u8;
             residuals.push(quantized);
         }
     }
@@ -687,9 +752,14 @@ fn decode_zero_run_payload(
             if run_end > sample_count {
                 return Err(CodecError::Malformed("zero run exceeds tile"));
             }
-            while sample_index < run_end {
-                reconstruct_sample(&mut output, sample_index, width, 0, step, prediction)?;
-                sample_index += 1;
+            if prediction.mode == PREDICT_TEMPORAL {
+                copy_temporal_zero_run(&mut output, sample_index, run_end, width, prediction)?;
+                sample_index = run_end;
+            } else {
+                while sample_index < run_end {
+                    reconstruct_sample(&mut output, sample_index, width, 0, step, prediction)?;
+                    sample_index += 1;
+                }
             }
         } else {
             let zigzag_value = token.div_ceil(2);
@@ -712,6 +782,30 @@ fn decode_zero_run_payload(
         return Err(CodecError::Malformed("trailing tile payload bytes"));
     }
     Ok(output)
+}
+
+fn copy_temporal_zero_run(
+    output: &mut [u8],
+    mut start: usize,
+    end: usize,
+    tile_width: usize,
+    context: PredictionContext<'_>,
+) -> Result<(), CodecError> {
+    let reference = context.reference.ok_or(CodecError::InvalidInput(
+        "predicted frame requires a reference",
+    ))?;
+    let plane_width = reference.width as usize;
+    while start < end {
+        let x = start % tile_width;
+        let y = start / tile_width;
+        let span = (tile_width - x).min(end - start);
+        let reference_start =
+            (context.tile.y as usize + y) * plane_width + context.tile.x as usize + x;
+        output[start..start + span]
+            .copy_from_slice(&reference.data[reference_start..reference_start + span]);
+        start += span;
+    }
+    Ok(())
 }
 
 fn decode_rice_payload(
@@ -834,6 +928,27 @@ fn flush_zero_run(output: &mut Vec<u8>, run: &mut u32) {
     if *run != 0 {
         put_varint(output, (*run - 1) * 2);
         *run = 0;
+    }
+}
+
+fn count_zero_run(bytes: &mut usize, run: &mut u32) {
+    if *run != 0 {
+        *bytes += varint_length((*run - 1) * 2);
+        *run = 0;
+    }
+}
+
+fn varint_length(value: u32) -> usize {
+    if value < 1 << 7 {
+        1
+    } else if value < 1 << 14 {
+        2
+    } else if value < 1 << 21 {
+        3
+    } else if value < 1 << 28 {
+        4
+    } else {
+        5
     }
 }
 
@@ -1129,6 +1244,37 @@ mod tests {
             .map(|index| (160 - (index / chroma_width) % 37) as u8)
             .collect();
         Frame::yuv422p8(width, height, FrameRate::new(24_000, 1_001), luma, cb, cr).unwrap()
+    }
+
+    #[test]
+    fn stream_info_mode_counts_cover_every_tile() {
+        let frame = patterned_frame(513, 257);
+        let options = CodecOptions {
+            quality: 100,
+            threads: 2,
+            ..CodecOptions::default()
+        };
+        let intra = inspect(&encode(&frame, options).unwrap()).unwrap();
+        assert_eq!(intra.zero_run_tiles + intra.rice_tiles, intra.tile_count);
+        assert_eq!(intra.spatial_tiles + intra.temporal_tiles, intra.tile_count);
+        assert_eq!(intra.spatial_tiles, intra.tile_count);
+
+        let temporal = inspect(&encode_with_reference(&frame, &frame, options).unwrap()).unwrap();
+        assert_eq!(
+            temporal.zero_run_tiles + temporal.rice_tiles,
+            temporal.tile_count
+        );
+        assert_eq!(temporal.temporal_tiles, temporal.tile_count);
+    }
+
+    #[test]
+    fn quantizer_table_matches_scalar_for_every_codec_residual() {
+        for step in 1..=20 {
+            let table = Quantizer::new(step);
+            for residual in -255..=255 {
+                assert_eq!(table.quantize(residual), quantize(residual, step));
+            }
+        }
     }
 
     #[test]
