@@ -1,4 +1,7 @@
-use crate::model::{CodecError, CodecOptions, Frame, FrameRate, PixelFormat, Plane, checked_area};
+use crate::model::{
+    ByteFormatModel, CodecError, CodecOptions, Frame, FrameRate, PixelFormat, Plane,
+    TileEntropyModel, checked_area,
+};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -255,6 +258,42 @@ pub fn decode_tile(bytes: &[u8], tile_index: usize) -> Result<DecodedTile, Codec
 
 pub fn inspect(bytes: &[u8]) -> Result<StreamInfo, CodecError> {
     Ok(parse(bytes)?.info)
+}
+
+/// Models byte-oriented alternatives from the normative residual symbols
+/// without changing or re-encoding the stream.
+pub fn analyze_entropy(bytes: &[u8]) -> Result<Vec<TileEntropyModel>, CodecError> {
+    let parsed = parse(bytes)?;
+    parsed
+        .entries
+        .iter()
+        .map(|entry| {
+            let payload = &parsed.bytes[entry.offset..entry.offset + entry.length];
+            let sample_count = checked_area(entry.tile.width, entry.tile.height)?;
+            let model = model_folded_payload(
+                payload,
+                sample_count,
+                entry.entropy_mode,
+                u32::from(u8::MAX) * 2,
+            )?;
+            Ok(TileEntropyModel {
+                plane: entry.tile.plane,
+                width: entry.tile.width,
+                height: entry.tile.height,
+                temporal_prediction: entry.prediction_mode == PREDICT_TEMPORAL,
+                source_zero_run: entry.entropy_mode == ENTROPY_ZERO_RUN,
+                sample_count: model
+                    .sample_count()
+                    .ok_or(CodecError::LimitExceeded("too many residual symbols"))?,
+                zero_symbols: model
+                    .zero_symbols()
+                    .ok_or(CodecError::LimitExceeded("too many residual symbols"))?,
+                actual_payload_bytes: entry.length,
+                stream_vbyte_bytes: model.stream_vbyte_bytes(),
+                stream_vbyte_0124_bytes: model.stream_vbyte_0124_bytes(),
+            })
+        })
+        .collect()
 }
 
 fn validate_reference(frame: &Frame, reference: &Frame) -> Result<(), CodecError> {
@@ -701,6 +740,57 @@ fn encode_spatial_tile(plane: &Plane, tile: Tile, quantizer: &Quantizer) -> Enco
         }
     }
     residuals.finish(PREDICT_SPATIAL)
+}
+
+fn model_folded_payload(
+    payload: &[u8],
+    sample_count: usize,
+    entropy_mode: u8,
+    max_folded: u32,
+) -> Result<ByteFormatModel, CodecError> {
+    let mut model = ByteFormatModel::default();
+    if entropy_mode == ENTROPY_ZERO_RUN {
+        let mut cursor = 0usize;
+        let mut decoded = 0usize;
+        while decoded < sample_count {
+            let token = get_varint(payload, &mut cursor)?;
+            if token & 1 == 0 {
+                let run = usize::try_from(token / 2)
+                    .ok()
+                    .and_then(|run| run.checked_add(1))
+                    .ok_or(CodecError::Malformed("zero run is too long"))?;
+                decoded = decoded
+                    .checked_add(run)
+                    .filter(|&end| end <= sample_count)
+                    .ok_or(CodecError::Malformed("zero run exceeds tile"))?;
+                model.push_zeros(run);
+            } else {
+                let folded = token.div_ceil(2);
+                if folded == 0 || folded > max_folded {
+                    return Err(CodecError::Malformed("residual is out of range"));
+                }
+                model.push(folded);
+                decoded += 1;
+            }
+        }
+        if cursor != payload.len() {
+            return Err(CodecError::Malformed("trailing tile payload bytes"));
+        }
+        return Ok(model);
+    }
+    if !(ENTROPY_RICE_BASE..=ENTROPY_RICE_BASE + MAX_RICE_PARAMETER).contains(&entropy_mode) {
+        return Err(CodecError::Malformed("unknown tile entropy mode"));
+    }
+    let mut reader = BitReader::new(payload);
+    for _ in 0..sample_count {
+        let folded = reader.get_rice(entropy_mode - ENTROPY_RICE_BASE)?;
+        if folded > max_folded {
+            return Err(CodecError::Malformed("Rice residual is out of range"));
+        }
+        model.push(folded);
+    }
+    reader.finish()?;
+    Ok(model)
 }
 
 fn decode_tile_payload(
@@ -1260,17 +1350,35 @@ mod tests {
             threads: 2,
             ..CodecOptions::default()
         };
-        let intra = inspect(&encode(&frame, options).unwrap()).unwrap();
+        let intra_bytes = encode(&frame, options).unwrap();
+        let intra = inspect(&intra_bytes).unwrap();
         assert_eq!(intra.zero_run_tiles + intra.rice_tiles, intra.tile_count);
         assert_eq!(intra.spatial_tiles + intra.temporal_tiles, intra.tile_count);
         assert_eq!(intra.spatial_tiles, intra.tile_count);
+        let models = analyze_entropy(&intra_bytes).unwrap();
+        assert_eq!(models.len(), intra.tile_count);
+        assert_eq!(
+            models.iter().map(|model| model.sample_count).sum::<usize>(),
+            frame.raw_len()
+        );
+        assert_eq!(
+            models
+                .iter()
+                .map(|model| model.actual_payload_bytes)
+                .sum::<usize>(),
+            intra_bytes.len() - HEADER_LEN - intra.tile_count * DIRECTORY_ENTRY_LEN
+        );
 
-        let temporal = inspect(&encode_with_reference(&frame, &frame, options).unwrap()).unwrap();
+        let temporal_bytes = encode_with_reference(&frame, &frame, options).unwrap();
+        let temporal = inspect(&temporal_bytes).unwrap();
         assert_eq!(
             temporal.zero_run_tiles + temporal.rice_tiles,
             temporal.tile_count
         );
         assert_eq!(temporal.temporal_tiles, temporal.tile_count);
+        let models = analyze_entropy(&temporal_bytes).unwrap();
+        assert!(models.iter().all(|model| model.temporal_prediction));
+        assert!(models.iter().all(|model| model.source_zero_run));
     }
 
     #[test]

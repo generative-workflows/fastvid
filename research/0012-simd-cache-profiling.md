@@ -30,16 +30,11 @@ it simulates caches and branch prediction rather than measuring the exact host.
 Hardware counters and a sampling profiler should be preferred for final
 diagnosis, with Cachegrind used for deterministic relative experiments.
 
-The current environment has neither `perf` nor Valgrind installed. This round
-therefore uses:
-
-1. end-to-end median wall time on a small fixed corpus;
-2. source-level inspection of allocations, synchronization, and traversal;
-3. generated assembly/vectorization inspection for candidate loops;
-4. the full corpus only for confirmation.
-
-Hardware cache-miss claims must wait for a counter-capable environment. Wall
-time alone must not be described as proof of cache misses.
+Hardware-counter availability is host- and event-specific. A profiler setup
+must sanity-check each requested PMU event: permission to profile one's own
+process does not prove that a virtualized PMU implements every generic alias,
+and a zero count is not automatically evidence of zero misses. Wall time and
+sampling attribution alone must not be described as proof of cache misses.
 
 ## Current Fastvid hot-path candidates
 
@@ -66,3 +61,4 @@ bottleneck.
 - [EXP-0015](../experiments/EXP-0015-temporal-copy-corpus-confirmation.md)
 - [EXP-0021](../experiments/EXP-0021-entropy-allocation-final.md)
 - [EXP-0024](../experiments/EXP-0024-quantizer-table-confirmation.md)
+- [EXP-0034](../experiments/EXP-0034-perf-samply-cache-profile.md)

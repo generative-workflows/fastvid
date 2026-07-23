@@ -1,12 +1,14 @@
 # Fastvid evaluation methodology
 
-Version: 4 (2026-07-23)
+Version: 5 (2026-07-23)
 
 This document defines the standard target used to evaluate Fastvid changes.
 Experiments may add diagnostics or deliberately diverge, but an optimization
 is not a general improvement unless it is measured against this methodology.
-The design is grounded in [research 0004](research/0004-codec-evaluation.md)
-and [research 0006](research/0006-standard-evaluation-methodology.md).
+The design is grounded in [research 0004](research/0004-codec-evaluation.md),
+[research 0006](research/0006-standard-evaluation-methodology.md), and the
+modern metric review in
+[research 0018](research/0018-modern-perceptual-metrics.md).
 
 ## Goals and tracks
 
@@ -109,6 +111,38 @@ Luma MS-SSIM and VMAF are required future additions before subjective quality
 claims. Metrics must be reported per sample and as corpus arithmetic means;
 compression and throughput summaries use both arithmetic and geometric means
 to expose outliers.
+
+Metric implementations are part of the protocol. Reports must pin window,
+stride, scaling, border handling, pooling, model/weight version, color
+conversion, and display/viewing model wherever applicable. A result from a
+different implementation or parameter set is a different metric.
+
+The metric feedback tiers are:
+
+1. **Fast:** exact error and PSNR remain anchors. A top-left-anchored sample of
+   every second 8x8 block in each axis may be reported as `sample2 block
+   SSIM`; [EXP-0037](experiments/EXP-0037-sampled-block-ssim.md) measured
+   maximum absolute error 0.000416, Spearman rho 0.999900, no material
+   operating-point reversals, and 3.44x median metric speedup on the complete
+   corpus. It is a rejection/screening diagnostic only. Every-fifth-block
+   sampling failed its error gate and is not a standard metric.
+2. **Focused:** MS-SSIM/VMAF and a texture-aware diagnostic such as DISTS are
+   run on affected samples and rate points. Generated/fine-texture assets and
+   UI/text assets remain separate groups because their failure modes conflict.
+3. **Release/capability:** a temporal, color- and HDR-aware metric such as
+   ColorVideoVDP is run for supported native HDR/video rows with its display
+   model, transfer function, color space, frame rate, temporal padding,
+   dependency versions, and CPU/GPU device recorded.
+
+Decoded frames, color transforms, and scale pyramids should be shared among
+slow metrics when this does not alter their normative inputs. Learned or
+fused metrics are additional axes, not sole acceptance gates; no codec change
+may be accepted by improving one learned score while exact error, PSNR, SSIM,
+or a content group materially regresses.
+
+The fully evaluated luma 8x8 block SSIM (block stride one) remains the
+acceptance and release score. Any candidate that survives fast screening must
+be rescored exactly before its experiment can be accepted.
 
 ## Compression measurements
 

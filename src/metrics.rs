@@ -75,20 +75,34 @@ pub fn compare_plane16(
 /// Computes mean 8x8-window SSIM with the standard 8-bit stabilization
 /// constants. Edge windows are clipped to the plane dimensions.
 pub fn ssim_plane(reference: &[u8], decoded: &[u8], width: usize, height: usize) -> Option<f64> {
+    ssim_plane_sampled(reference, decoded, width, height, 1)
+}
+
+/// Computes the same 8x8 block score as [`ssim_plane`], sampling every
+/// `block_stride` block in both axes. A stride of one is exact.
+pub fn ssim_plane_sampled(
+    reference: &[u8],
+    decoded: &[u8],
+    width: usize,
+    height: usize,
+    block_stride: usize,
+) -> Option<f64> {
     if width == 0
         || height == 0
+        || block_stride == 0
         || width.checked_mul(height)? != reference.len()
         || reference.len() != decoded.len()
     {
         return None;
     }
     const WINDOW: usize = 8;
+    let step = WINDOW.checked_mul(block_stride)?;
     const C1: f64 = 6.5025; // (0.01 * 255)^2
     const C2: f64 = 58.5225; // (0.03 * 255)^2
     let mut score_sum = 0.0;
     let mut window_count = 0usize;
-    for top in (0..height).step_by(WINDOW) {
-        for left in (0..width).step_by(WINDOW) {
+    for top in (0..height).step_by(step) {
+        for left in (0..width).step_by(step) {
             let bottom = (top + WINDOW).min(height);
             let right = (left + WINDOW).min(width);
             let samples = (bottom - top) * (right - left);
@@ -133,9 +147,22 @@ pub fn ssim_plane16(
     height: usize,
     bit_depth: u8,
 ) -> Option<f64> {
+    ssim_plane16_sampled(reference, decoded, width, height, bit_depth, 1)
+}
+
+/// High-bit equivalent of [`ssim_plane_sampled`].
+pub fn ssim_plane16_sampled(
+    reference: &[u16],
+    decoded: &[u16],
+    width: usize,
+    height: usize,
+    bit_depth: u8,
+    block_stride: usize,
+) -> Option<f64> {
     let peak = f64::from(metric_peak(bit_depth)?);
     if width == 0
         || height == 0
+        || block_stride == 0
         || width.checked_mul(height)? != reference.len()
         || reference.len() != decoded.len()
         || reference
@@ -146,12 +173,13 @@ pub fn ssim_plane16(
         return None;
     }
     const WINDOW: usize = 8;
+    let step = WINDOW.checked_mul(block_stride)?;
     let c1 = (0.01 * peak).powi(2);
     let c2 = (0.03 * peak).powi(2);
     let mut score_sum = 0.0;
     let mut window_count = 0usize;
-    for top in (0..height).step_by(WINDOW) {
-        for left in (0..width).step_by(WINDOW) {
+    for top in (0..height).step_by(step) {
+        for left in (0..width).step_by(step) {
             let bottom = (top + WINDOW).min(height);
             let right = (left + WINDOW).min(width);
             let count = ((bottom - top) * (right - left)) as f64;
@@ -220,6 +248,21 @@ mod tests {
         let decoded = vec![120; 64];
         assert!(ssim_plane(&reference, &decoded, 8, 8).unwrap() < 1.0);
         assert!(ssim_plane(&reference, &decoded, 7, 8).is_none());
+        assert!(ssim_plane_sampled(&reference, &decoded, 8, 8, 0).is_none());
+    }
+
+    #[test]
+    fn sampled_ssim_stride_one_is_exact_and_edges_are_supported() {
+        let reference: Vec<u8> = (0..117).map(|value| (value * 29) as u8).collect();
+        let mut decoded = reference.clone();
+        decoded[116] = decoded[116].saturating_sub(7);
+        assert_eq!(
+            ssim_plane(&reference, &decoded, 13, 9),
+            ssim_plane_sampled(&reference, &decoded, 13, 9, 1)
+        );
+        assert!(
+            (ssim_plane_sampled(&reference, &reference, 13, 9, 5).unwrap() - 1.0).abs() < 1e-12
+        );
     }
 
     #[test]
@@ -236,5 +279,18 @@ mod tests {
         assert!((metrics.mse - 1.0).abs() < f64::EPSILON);
         assert!((metrics.psnr_db - 60.197_512_674_243_2).abs() < 1e-10);
         assert!(compare_plane16(&[1024], &[0], 10).is_none());
+        for bit_depth in [8, 10, 12, 16] {
+            let peak = if bit_depth == 16 {
+                u16::MAX
+            } else {
+                (1u16 << bit_depth) - 1
+            };
+            let plane = [0, peak / 2, peak];
+            assert_eq!(
+                ssim_plane16(&plane, &plane, 3, 1, bit_depth),
+                ssim_plane16_sampled(&plane, &plane, 3, 1, bit_depth, 1)
+            );
+        }
+        assert!(ssim_plane16_sampled(&exact, &exact, 3, 1, 10, 0).is_none());
     }
 }

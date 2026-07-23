@@ -420,6 +420,71 @@ impl CodecOptions {
     }
 }
 
+/// Read-only size model for one encoded tile's folded residual symbols.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TileEntropyModel {
+    pub plane: usize,
+    pub width: u32,
+    pub height: u32,
+    pub temporal_prediction: bool,
+    pub source_zero_run: bool,
+    pub sample_count: usize,
+    pub zero_symbols: usize,
+    pub actual_payload_bytes: usize,
+    pub stream_vbyte_bytes: u64,
+    pub stream_vbyte_0124_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ByteFormatModel {
+    symbols: u64,
+    zero_symbols: u64,
+    standard_data_bytes: u64,
+    zero_aware_data_bytes: u64,
+}
+
+impl ByteFormatModel {
+    pub(crate) fn push(&mut self, value: u32) {
+        self.symbols += 1;
+        self.zero_symbols += u64::from(value == 0);
+        self.standard_data_bytes += match value {
+            0..=0xff => 1,
+            0x100..=0xffff => 2,
+            0x1_0000..=0xff_ffff => 3,
+            _ => 4,
+        };
+        self.zero_aware_data_bytes += match value {
+            0 => 0,
+            1..=0xff => 1,
+            0x100..=0xffff => 2,
+            _ => 4,
+        };
+    }
+
+    pub(crate) fn push_zeros(&mut self, count: usize) {
+        let count = count as u64;
+        self.symbols += count;
+        self.zero_symbols += count;
+        self.standard_data_bytes += count;
+    }
+
+    pub(crate) fn sample_count(self) -> Option<usize> {
+        usize::try_from(self.symbols).ok()
+    }
+
+    pub(crate) fn zero_symbols(self) -> Option<usize> {
+        usize::try_from(self.zero_symbols).ok()
+    }
+
+    pub(crate) fn stream_vbyte_bytes(self) -> u64 {
+        self.symbols.div_ceil(4) + self.standard_data_bytes
+    }
+
+    pub(crate) fn stream_vbyte_0124_bytes(self) -> u64 {
+        self.symbols.div_ceil(4) + self.zero_aware_data_bytes
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CodecError {
     InvalidInput(&'static str),
@@ -497,5 +562,24 @@ mod tests {
                 assert_eq!(PixelFormat::try_from(format as u8).unwrap(), format);
             }
         }
+    }
+
+    #[test]
+    fn byte_format_model_charges_controls_and_width_boundaries() {
+        let mut model = ByteFormatModel::default();
+        for value in [0, 1, 0xff, 0x100, 0xffff, 0x1_0000, 0xff_ffff, 0x1_000000] {
+            model.push(value);
+        }
+        assert_eq!(model.sample_count(), Some(8));
+        assert_eq!(model.zero_symbols(), Some(1));
+        // Two control bytes plus 1+1+1+2+2+3+3+4 data bytes.
+        assert_eq!(model.stream_vbyte_bytes(), 19);
+        // Two controls plus 0+1+1+2+2+4+4+4 data bytes.
+        assert_eq!(model.stream_vbyte_0124_bytes(), 20);
+
+        let mut partial = ByteFormatModel::default();
+        partial.push_zeros(5);
+        assert_eq!(partial.stream_vbyte_bytes(), 7);
+        assert_eq!(partial.stream_vbyte_0124_bytes(), 2);
     }
 }
