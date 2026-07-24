@@ -34,3 +34,4 @@ before entering the format.
 | [0027](0027-streaming-rice-parameter-selection.md) | Recent Rice-parameter analysis, CharLS, FLAC | Sparse parameter estimation and one-pass residual entropy writing | Reviewed |
 | [0028](0028-tile-geometry-tradeoffs.md) | JPEG XL, APV RFC 9924, OpenAPV | Rectangular tile rate, throughput, cache, parallelism, and access tradeoffs | Reviewed |
 | [0029](0029-block-translational-inter-prediction.md) | AV1 overview/specification and rav1e | Integer block-motion potential with bounded GOP dependencies | Reviewed |
+| [0030](0030-entropy-decode-consumer-fusion.md) | ryg_rans, interleaved entropy coders, FSE | Direct entropy consumption and the multi-state SIMD format boundary | Reviewed |
