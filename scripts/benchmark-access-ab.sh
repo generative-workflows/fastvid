@@ -31,7 +31,10 @@ if (( trials < 2 || trials % 2 != 0 )); then
   exit 1
 fi
 
-first=1
+printf '%s\n' \
+  $'variant\ttrial\tinput\ttarget_frame\tkeyframe_frame\tdependency_frames\tdecoded_frames\tquality\tthreads\tgop\tencoded_bytes_read\taccess_ms\tuseful_mpps\twork_mpps\tuseful_raw_mb_s\taccess_amplification' \
+  > "$output"
+
 run_variant() {
   local variant="$1"
   local binary="$2"
@@ -46,13 +49,22 @@ run_variant() {
   result="$("$binary" benchmark-access-yuv422 \
     "$corpus_dir/$path" "$width" "$height" "$frame_rate" "$frames" \
     "$quality" 1 "$gop" "$targets" "${geometry[@]}")"
-  if [[ "$first" == 1 ]]; then
-    printf 'variant\ttrial\t%s\n' "$(printf '%s\n' "$result" | head -n 1)" > "$output"
-    first=0
-  fi
-  printf '%s\n' "$result" | tail -n +2 | while IFS= read -r row; do
-    printf '%s\t%d\t%s\n' "$variant" "$trial" "$row" >> "$output"
-  done
+  printf '%s\n' "$result" | awk -F $'\t' -v variant="$variant" -v trial="$trial" '
+    NR == 1 {
+      for (field = 1; field <= NF; field++) {
+        column[$field] = field
+      }
+      next
+    }
+    {
+      printf "%s\t%d", variant, trial
+      split("input target_frame keyframe_frame dependency_frames decoded_frames quality threads gop encoded_bytes_read access_ms useful_mpps work_mpps useful_raw_mb_s access_amplification", names, " ")
+      for (field = 1; field <= length(names); field++) {
+        printf "\t%s", $(column[names[field]])
+      }
+      printf "\n"
+    }
+  ' >> "$output"
 }
 
 while IFS=$'\t' read -r path frames frame_rate width height; do

@@ -23,7 +23,8 @@ non-overlapping copy.
   the zigzag image of the signaled sample-depth residual range.
 - Version-3 order-0 tables have strictly increasing bounded symbols, positive
   frequencies summing to a power of two, exact sample and byte consumption,
-  and canonical initial rANS state.
+  and canonical initial rANS state. Interleaved mode assigns sample `i` to
+  state `i mod 4` and requires all four states to finish canonically.
 - A zero run cannot exceed the remaining samples in its tile.
 - Rice padding is zero and every entropy payload is consumed exactly.
 - Lossy prediction uses reconstructed neighbors on both encoder and decoder.
@@ -41,6 +42,7 @@ non-overlapping copy.
 - Thread creation and mutex-based job/result coordination are prototype
   mechanisms, not a production worker pool.
 - No checksum, MS-SSIM, SIMD, or Aeneas bridge.
-- Version-3 order-0 entropy is scalar and deliberately occupies the
-  compression frontier; its decode and random-access cost is not suitable for
-  the balanced line without further optimization.
+- Version-3 order-0 entropy has scalar one-state and four-state interleaved
+  modes. The four-state safe-Rust kernel exposes instruction-level
+  parallelism without architecture intrinsics; explicit SIMD remains future
+  work.

@@ -6,8 +6,9 @@ access.
 
 The current version supports planar 8/10/12/16-bit YUV 4:2:2 and grayscale,
 independently coded tiles, spatial prediction, optional short-GOP temporal
-prediction, and per-tile adaptive zero-run, Rice, or 8-bit order-0 rANS
-entropy coding. High-bit raw interchange uses tightly packed little-endian
+prediction, and per-tile adaptive zero-run, Rice, or scalar/four-state 8-bit
+order-0 rANS entropy coding. High-bit raw interchange uses tightly packed
+little-endian
 `u16` samples. The bitstream is experimental and does not promise backward
 compatibility.
 
@@ -81,7 +82,8 @@ corpus.
 - [Format specifications](specs/format-v0.md) define the 8-bit v0 syntax;
   [version 1](specs/format-v1.md) adds native 10/12/16-bit samples, and
   [version 2](specs/format-v2.md) adds tile-local predictor modes. The current
-  8-bit [version 3](specs/format-v3.md) adds tile-local order-0 byte-rANS.
+  8-bit [version 3](specs/format-v3.md) adds tile-local scalar and four-state
+  interleaved order-0 byte-rANS.
 - [Research index](research/INDEX.md) records openly usable technical sources.
 - [`experiments/`](experiments) contains immutable accepted/rejected
   experimental design records and detailed performance history.

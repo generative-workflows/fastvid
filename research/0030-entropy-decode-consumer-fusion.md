@@ -57,3 +57,4 @@ Fastvid does not copy code from it.
 - [EXP-0055: modeled rANS selector](../experiments/EXP-0055-modeled-rans-selector.md)
 - [EXP-0066: maximum-compression kernel profile](../experiments/EXP-0066-maximum-compression-profile.md)
 - [EXP-0067: fused rANS reconstruction](../experiments/EXP-0067-fused-rans-reconstruction.md)
+- [EXP-0068: four-state interleaved rANS](../experiments/EXP-0068-four-state-rans.md)

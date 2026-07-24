@@ -128,6 +128,17 @@ theorem rans_slot_bound (state tableLog : Nat) :
   simp only [ransSlot, ransTableSize]
   exact Nat.mod_lt state (Nat.two_pow_pos tableLog)
 
+/-- Interleaved mode assigns each raster sample to a cyclic rANS state. -/
+def ransStateIndex (sampleIndex stateCount : Nat) : Nat :=
+  sampleIndex % stateCount
+
+/-- A cyclic rANS state index is valid whenever the format has a state. -/
+theorem rans_state_index_bound
+    (sampleIndex stateCount : Nat) (h : 0 < stateCount) :
+    ransStateIndex sampleIndex stateCount < stateCount := by
+  simp only [ransStateIndex]
+  exact Nat.mod_lt sampleIndex h
+
 /-- The inverse rANS state for a slot in a symbol's frequency interval. -/
 def ransDecodeState
     (state frequency cumulative tableLog : Nat) : Nat :=

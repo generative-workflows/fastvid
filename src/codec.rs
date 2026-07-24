@@ -17,9 +17,12 @@ const ENTROPY_ZERO_RUN: u8 = 0;
 const ENTROPY_RICE_BASE: u8 = 1;
 const MAX_RICE_PARAMETER: u8 = 8;
 const ENTROPY_ORDER0: u8 = ENTROPY_RICE_BASE + MAX_RICE_PARAMETER + 1;
+const ENTROPY_ORDER0_4: u8 = ENTROPY_ORDER0 + 1;
 const RANS_MIN_TABLE_LOG: u8 = 8;
 const RANS_MAX_TABLE_LOG: u8 = 12;
 const RANS_BYTE_L: u32 = 1 << 23;
+const RANS_INTERLEAVED_STATES: usize = 4;
+const RANS_INTERLEAVED_MAX_OVERHEAD_PER_MILLE: usize = 5;
 const PREDICT_SPATIAL: u8 = 0;
 const PREDICT_TEMPORAL: u8 = 1;
 const PREDICT_AVERAGE: u8 = 2;
@@ -614,7 +617,7 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, CodecError> {
         let entropy_mode = bytes[start + 1];
         if entropy_mode != ENTROPY_ZERO_RUN
             && !(ENTROPY_RICE_BASE..=ENTROPY_RICE_BASE + MAX_RICE_PARAMETER).contains(&entropy_mode)
-            && !(version == VERSION && entropy_mode == ENTROPY_ORDER0)
+            && !(version == VERSION && matches!(entropy_mode, ENTROPY_ORDER0 | ENTROPY_ORDER0_4))
         {
             return Err(CodecError::Malformed("unknown tile entropy mode"));
         }
@@ -925,10 +928,18 @@ impl ResidualAccumulator {
         } else {
             (ENTROPY_RICE_BASE + rice_parameter, rice_bytes)
         };
-        if let Some(plan) = build_rans_plan(&self.histogram, self.folded.len())
-            && plan.modeled_bytes < legacy.1
-        {
-            return (ENTROPY_ORDER0, plan.modeled_bytes);
+        if let Some(plan) = build_rans_plan(&self.histogram, self.folded.len()) {
+            let extra_state_bytes = (RANS_INTERLEAVED_STATES - 1) * 4;
+            let use_interleaved = extra_state_bytes * 1_000
+                <= plan.modeled_bytes * RANS_INTERLEAVED_MAX_OVERHEAD_PER_MILLE;
+            let (mode, bytes) = if use_interleaved {
+                (ENTROPY_ORDER0_4, plan.modeled_bytes + extra_state_bytes)
+            } else {
+                (ENTROPY_ORDER0, plan.modeled_bytes)
+            };
+            if bytes < legacy.1 {
+                return (mode, bytes);
+            }
         }
         legacy
     }
@@ -939,10 +950,23 @@ impl ResidualAccumulator {
         let rice_bytes = rice_bits.div_ceil(8);
         let legacy_bytes = rice_bytes.min(self.zero_run_bytes);
         if let Some(plan) = build_rans_plan(&self.histogram, self.folded.len()) {
-            let payload = encode_rans_payload(&self.folded, &plan);
+            let extra_state_bytes = (RANS_INTERLEAVED_STATES - 1) * 4;
+            let use_interleaved = extra_state_bytes * 1_000
+                <= plan.modeled_bytes * RANS_INTERLEAVED_MAX_OVERHEAD_PER_MILLE;
+            let (entropy_mode, payload) = if use_interleaved {
+                (
+                    ENTROPY_ORDER0_4,
+                    encode_rans_payload_interleaved(&self.folded, &plan),
+                )
+            } else {
+                (
+                    ENTROPY_ORDER0,
+                    encode_rans_payload_with_states::<1>(&self.folded, &plan),
+                )
+            };
             if payload.len() < legacy_bytes {
                 return EncodedTile {
-                    entropy_mode: ENTROPY_ORDER0,
+                    entropy_mode,
                     prediction_mode,
                     payload,
                 };
@@ -1100,20 +1124,38 @@ fn rans_advance_encoder(state: u32, symbol: RansSymbol, table_log: u8) -> u32 {
     ((state / frequency) << table_log) + state % frequency + u32::from(symbol.cumulative)
 }
 
+#[cfg(test)]
 fn encode_rans_payload(folded: &[u16], plan: &RansPlan) -> Vec<u8> {
-    let mut state = RANS_BYTE_L;
+    encode_rans_payload_with_states::<1>(folded, plan)
+}
+
+fn encode_rans_payload_interleaved(folded: &[u16], plan: &RansPlan) -> Vec<u8> {
+    encode_rans_payload_with_states::<RANS_INTERLEAVED_STATES>(folded, plan)
+}
+
+// research/0030: independent rANS states expose instruction-level parallelism
+// without changing the normalized table. The shared byte stream remains in
+// raster decode order because reverse-raster renormalization bytes are
+// reversed as one sequence after encoding.
+fn encode_rans_payload_with_states<const STATES: usize>(
+    folded: &[u16],
+    plan: &RansPlan,
+) -> Vec<u8> {
+    debug_assert!(STATES.is_power_of_two());
+    let mut states = [RANS_BYTE_L; STATES];
     let mut renormalized = Vec::new();
-    for &value in folded.iter().rev() {
+    for (index, &value) in folded.iter().enumerate().rev() {
+        let state = &mut states[index & (STATES - 1)];
         let symbol = plan.symbols[usize::from(plan.lookup[value as usize] - 1)];
         let threshold =
             (u64::from(RANS_BYTE_L >> plan.table_log) << 8) * u64::from(symbol.frequency);
-        while u64::from(state) >= threshold {
-            renormalized.push(state as u8);
-            state >>= 8;
+        while u64::from(*state) >= threshold {
+            renormalized.push(*state as u8);
+            *state >>= 8;
         }
-        state = rans_advance_encoder(state, symbol, plan.table_log);
+        *state = rans_advance_encoder(*state, symbol, plan.table_log);
     }
-    let mut payload = Vec::with_capacity(plan.modeled_bytes + 8);
+    let mut payload = Vec::with_capacity(plan.modeled_bytes + (STATES - 1) * 4 + 8);
     payload.push(plan.table_log);
     put_varint(&mut payload, plan.symbols.len() as u32);
     let mut previous = 0u16;
@@ -1124,7 +1166,9 @@ fn encode_rans_payload(folded: &[u16], plan: &RansPlan) -> Vec<u8> {
         }
         previous = symbol.value;
     }
-    put_u32(&mut payload, state);
+    for state in states {
+        put_u32(&mut payload, state);
+    }
     payload.extend(renormalized.into_iter().rev());
     payload
 }
@@ -1529,8 +1573,13 @@ fn model_folded_payload(
     max_folded: u32,
 ) -> Result<ByteFormatModel, CodecError> {
     let mut model = ByteFormatModel::default();
-    if entropy_mode == ENTROPY_ORDER0 {
-        for folded in decode_rans_symbols(payload, sample_count, max_folded)? {
+    if matches!(entropy_mode, ENTROPY_ORDER0 | ENTROPY_ORDER0_4) {
+        let folded = if entropy_mode == ENTROPY_ORDER0 {
+            decode_rans_symbols(payload, sample_count, max_folded)?
+        } else {
+            decode_rans_symbols_interleaved(payload, sample_count, max_folded)?
+        };
+        for folded in folded {
             model.push(folded);
         }
         return Ok(model);
@@ -1598,8 +1647,12 @@ fn decode_tile_payload(
     if mode == ENTROPY_ZERO_RUN {
         return decode_zero_run_payload(payload, sample_count, width, step, prediction);
     }
-    if mode == ENTROPY_ORDER0 {
-        let folded = decode_rans_symbols(payload, sample_count, u32::from(u8::MAX) * 2)?;
+    if matches!(mode, ENTROPY_ORDER0 | ENTROPY_ORDER0_4) {
+        let folded = if mode == ENTROPY_ORDER0 {
+            decode_rans_symbols(payload, sample_count, u32::from(u8::MAX) * 2)?
+        } else {
+            decode_rans_symbols_interleaved(payload, sample_count, u32::from(u8::MAX) * 2)?
+        };
         let mut output = vec![0u8; sample_count];
         for (sample_index, value) in folded.into_iter().enumerate() {
             reconstruct_sample(
@@ -1631,6 +1684,23 @@ fn decode_rans_symbols(
     sample_count: usize,
     max_folded: u32,
 ) -> Result<Vec<u32>, CodecError> {
+    decode_rans_symbols_with_states::<1>(payload, sample_count, max_folded)
+}
+
+fn decode_rans_symbols_interleaved(
+    payload: &[u8],
+    sample_count: usize,
+    max_folded: u32,
+) -> Result<Vec<u32>, CodecError> {
+    decode_rans_symbols_with_states::<RANS_INTERLEAVED_STATES>(payload, sample_count, max_folded)
+}
+
+fn decode_rans_symbols_with_states<const STATES: usize>(
+    payload: &[u8],
+    sample_count: usize,
+    max_folded: u32,
+) -> Result<Vec<u32>, CodecError> {
+    debug_assert!(STATES.is_power_of_two());
     let mut cursor = 0usize;
     let table_log = *payload
         .get(cursor)
@@ -1693,14 +1763,17 @@ fn decode_rans_symbols(
         ));
     }
     let state_end = cursor
-        .checked_add(4)
+        .checked_add(4 * STATES)
         .filter(|&end| end <= payload.len())
         .ok_or(CodecError::Malformed("truncated order-0 state"))?;
-    let mut state = get_u32(payload, cursor)?;
-    cursor = state_end;
-    if state < RANS_BYTE_L {
-        return Err(CodecError::Malformed("invalid order-0 final state"));
+    let mut states = [RANS_BYTE_L; STATES];
+    for (index, state) in states.iter_mut().enumerate() {
+        *state = get_u32(payload, cursor + index * 4)?;
+        if *state < RANS_BYTE_L {
+            return Err(CodecError::Malformed("invalid order-0 final state"));
+        }
     }
+    cursor = state_end;
     let mut decoding_table = Vec::with_capacity(table_size as usize);
     for symbol in &symbols {
         decoding_table.extend(std::iter::repeat_n(*symbol, usize::from(symbol.frequency)));
@@ -1712,28 +1785,90 @@ fn decode_rans_symbols(
     }
 
     let mut output = Vec::with_capacity(sample_count);
-    for _ in 0..sample_count {
-        let slot = state & (table_size - 1);
+    let mut sample_index = 0usize;
+    if STATES == RANS_INTERLEAVED_STATES {
+        while sample_index + RANS_INTERLEAVED_STATES <= sample_count {
+            let slots = [
+                states[0] & (table_size - 1),
+                states[1] & (table_size - 1),
+                states[2] & (table_size - 1),
+                states[3] & (table_size - 1),
+            ];
+            let decoded = [
+                decoding_table[slots[0] as usize],
+                decoding_table[slots[1] as usize],
+                decoding_table[slots[2] as usize],
+                decoding_table[slots[3] as usize],
+            ];
+            output.push(u32::from(decoded[0].value));
+            output.push(u32::from(decoded[1].value));
+            output.push(u32::from(decoded[2].value));
+            output.push(u32::from(decoded[3].value));
+            let next = [
+                rans_decoder_next(states[0], decoded[0], slots[0], table_log),
+                rans_decoder_next(states[1], decoded[1], slots[1], table_log),
+                rans_decoder_next(states[2], decoded[2], slots[2], table_log),
+                rans_decoder_next(states[3], decoded[3], slots[3], table_log),
+            ];
+            if next.iter().any(|&state| state > u64::from(u32::MAX)) {
+                return Err(CodecError::Malformed("order-0 state overflow"));
+            }
+            states[0] = next[0] as u32;
+            states[1] = next[1] as u32;
+            states[2] = next[2] as u32;
+            states[3] = next[3] as u32;
+            rans_renormalize(&mut states[0], payload, &mut cursor)?;
+            rans_renormalize(&mut states[1], payload, &mut cursor)?;
+            rans_renormalize(&mut states[2], payload, &mut cursor)?;
+            rans_renormalize(&mut states[3], payload, &mut cursor)?;
+            sample_index += RANS_INTERLEAVED_STATES;
+        }
+    }
+    while sample_index < sample_count {
+        let state = &mut states[sample_index & (STATES - 1)];
+        let slot = *state & (table_size - 1);
         let symbol = decoding_table[slot as usize];
         output.push(u32::from(symbol.value));
-        let next = u64::from(symbol.frequency) * u64::from(state >> table_log)
-            + u64::from(slot - u32::from(symbol.cumulative));
-        state = u32::try_from(next).map_err(|_| CodecError::Malformed("order-0 state overflow"))?;
-        while state < RANS_BYTE_L {
-            let byte = *payload
-                .get(cursor)
-                .ok_or(CodecError::Malformed("truncated order-0 payload"))?;
-            cursor += 1;
-            state = (state << 8) | u32::from(byte);
-        }
+        *state = rans_advance_decoder(*state, symbol, slot, table_log)?;
+        rans_renormalize(state, payload, &mut cursor)?;
+        sample_index += 1;
     }
     if cursor != payload.len() {
         return Err(CodecError::Malformed("trailing order-0 payload bytes"));
     }
-    if state != RANS_BYTE_L {
+    if states.iter().any(|&state| state != RANS_BYTE_L) {
         return Err(CodecError::Malformed("noncanonical order-0 initial state"));
     }
     Ok(output)
+}
+
+#[inline]
+fn rans_advance_decoder(
+    state: u32,
+    symbol: RansSymbol,
+    slot: u32,
+    table_log: u8,
+) -> Result<u32, CodecError> {
+    let next = rans_decoder_next(state, symbol, slot, table_log);
+    u32::try_from(next).map_err(|_| CodecError::Malformed("order-0 state overflow"))
+}
+
+#[inline]
+fn rans_decoder_next(state: u32, symbol: RansSymbol, slot: u32, table_log: u8) -> u64 {
+    u64::from(symbol.frequency) * u64::from(state >> table_log)
+        + u64::from(slot - u32::from(symbol.cumulative))
+}
+
+#[inline]
+fn rans_renormalize(state: &mut u32, payload: &[u8], cursor: &mut usize) -> Result<(), CodecError> {
+    while *state < RANS_BYTE_L {
+        let byte = *payload
+            .get(*cursor)
+            .ok_or(CodecError::Malformed("truncated order-0 payload"))?;
+        *cursor += 1;
+        *state = (*state << 8) | u32::from(byte);
+    }
+    Ok(())
 }
 
 fn decode_zero_run_payload(
@@ -2526,6 +2661,33 @@ mod tests {
     }
 
     #[test]
+    fn interleaved_order0_tile_matches_full_decode() {
+        let mut state = 0x9e37_79b9u32;
+        let samples = (0..256 * 128)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                ((state >> 30) * 85) as u8
+            })
+            .collect();
+        let frame = Frame::gray8(256, 128, FrameRate::new(24, 1), samples).unwrap();
+        let encoded = encode(
+            &frame,
+            CodecOptions {
+                quality: 100,
+                tile_width: 256,
+                tile_height: 128,
+                threads: 1,
+            },
+        )
+        .unwrap();
+        assert_eq!(encoded[HEADER_LEN + 1], ENTROPY_ORDER0_4);
+        let full = decode(&encoded, 1).unwrap();
+        let tile = decode_tile(&encoded, 0).unwrap();
+        assert_eq!(tile.data, full.planes[0].data);
+        assert_eq!(full, frame);
+    }
+
+    #[test]
     fn malformed_streams_are_rejected() {
         let frame = patterned_frame(16, 16);
         let encoded = encode(&frame, CodecOptions::default()).unwrap();
@@ -2616,7 +2778,7 @@ mod tests {
 
         let frame = patterned_frame(16, 16);
         let mut encoded = encode(&frame, CodecOptions::default()).unwrap();
-        encoded[HEADER_LEN + 1] = ENTROPY_ORDER0 + 1;
+        encoded[HEADER_LEN + 1] = ENTROPY_ORDER0_4 + 1;
         assert!(decode(&encoded, 1).is_err());
     }
 
@@ -2668,11 +2830,32 @@ mod tests {
                     .collect::<Vec<_>>()
             );
 
+            let interleaved = encode_rans_payload_interleaved(&folded, &plan);
+            assert!(interleaved.len().abs_diff(plan.modeled_bytes + 12) <= 4);
+            assert_eq!(
+                decode_rans_symbols_interleaved(&interleaved, folded.len(), 510).unwrap(),
+                folded
+                    .iter()
+                    .map(|&value| u32::from(value))
+                    .collect::<Vec<_>>()
+            );
+
             let mut trailing = payload.clone();
             trailing.push(0);
             assert!(decode_rans_symbols(&trailing, folded.len(), 510).is_err());
             for end in 0..payload.len().min(16) {
                 assert!(decode_rans_symbols(&payload[..end], folded.len(), 510).is_err());
+            }
+            let mut interleaved_trailing = interleaved.clone();
+            interleaved_trailing.push(0);
+            assert!(
+                decode_rans_symbols_interleaved(&interleaved_trailing, folded.len(), 510).is_err()
+            );
+            for end in 0..interleaved.len().min(28) {
+                assert!(
+                    decode_rans_symbols_interleaved(&interleaved[..end], folded.len(), 510)
+                        .is_err()
+                );
             }
         }
     }
