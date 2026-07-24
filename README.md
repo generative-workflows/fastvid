@@ -27,16 +27,14 @@ commands.
 
 ## Current benchmark
 
-Current worktree snapshot on a 4-vCPU AMD EPYC-Genoa VM with Rust 1.97.1 in
-release mode. This is the 18-sample corpus-v2 codec track at GOP 1 after one
-warm-up and one recorded development trial per cell.
+Practical-compression snapshot on a 4-vCPU AMD EPYC-Genoa VM with Rust 1.97.1
+in release mode. This is the 18-sample corpus-v2 codec track at GOP 1, one
+thread, after one warm-up and one recorded development trial per cell.
 
 | Quality | Threads | Geo. ratio | Encode | Raw encode | Decode | Raw decode | Mean Y PSNR | Mean SSIM |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 90 | 1 | 7.308x | 49.22 MP/s | 98.45 MB/s | 56.07 MP/s | 112.13 MB/s | 49.868 dB | 0.996557 |
-| 90 | 4 | 7.308x | 183.57 MP/s | 367.14 MB/s | 186.65 MP/s | 373.31 MB/s | 49.868 dB | 0.996557 |
-| 100 | 1 | 5.013x | 43.79 MP/s | 87.58 MB/s | 52.80 MP/s | 105.60 MB/s | exact | 1.000000 |
-| 100 | 4 | 5.013x | 168.06 MP/s | 336.11 MB/s | 181.26 MP/s | 362.51 MB/s | exact | 1.000000 |
+| 90 | 1 | 7.944x | 17.39 MP/s | 34.78 MB/s | 64.92 MP/s | 129.84 MB/s | 49.888 dB | 0.996594 |
+| 100 | 1 | 5.314x | 17.15 MP/s | 34.30 MB/s | 58.86 MP/s | 117.72 MB/s | exact | 1.000000 |
 
 Compression is the geometric mean of per-sample raw/encoded ratios. Throughput
 and quality columns are arithmetic means of per-sample results; MP/s counts
@@ -51,19 +49,19 @@ camera/noisy content.
 
 ### Native high-bit smoke snapshot
 
-Six balanced trials, one thread, GOP 1, using the checksummed native high-bit
-supplement:
+Four to six balanced trials, one thread, using the checksummed native
+high-bit supplement. Stills use GOP 1 and motion uses GOP 12.
 
 | Depth/sample | Quality | Ratio | Encode | Decode | Quality |
 |---|---:|---:|---:|---:|---:|
-| 10-bit HDR gradient | 90 | 4.434x | 37.27 MP/s | 44.60 MP/s | 52.00 dB Y PSNR |
-| 10-bit HDR gradient | 100 | 2.397x | 34.66 MP/s | 41.65 MP/s | exact |
-| 12-bit precision UI | 90 | 6.583x | 41.65 MP/s | 44.67 MP/s | 52.69 dB Y PSNR |
-| 12-bit precision UI | 100 | 2.402x | 35.18 MP/s | 41.52 MP/s | exact |
-| 10-bit precision motion | 90 | 4.432x | 38.58 MP/s | 52.08 MP/s | 52.00 dB Y PSNR |
-| 10-bit precision motion | 100 | 2.396x | 38.06 MP/s | 47.04 MP/s | exact |
-| 16-bit precision motion | 90 | 24.325x | 52.47 MP/s | 62.12 MP/s | 52.93 dB Y PSNR |
-| 16-bit precision motion | 100 | 2.339x | 37.54 MP/s | 51.22 MP/s | exact |
+| 10-bit HDR gradient | 90 | 5.309x | 16.69 MP/s | 49.03 MP/s | 52.00 dB Y PSNR |
+| 10-bit HDR gradient | 100 | 2.949x | 17.51 MP/s | 47.58 MP/s | exact |
+| 12-bit precision UI | 90 | 7.697x | 21.12 MP/s | 67.64 MP/s | 53.60 dB Y PSNR |
+| 12-bit precision UI | 100 | 4.604x | 17.51 MP/s | 54.21 MP/s | exact |
+| 10-bit precision motion | 90 | 5.763x | 17.24 MP/s | 55.18 MP/s | 52.00 dB Y PSNR |
+| 10-bit precision motion | 100 | 3.102x | 18.52 MP/s | 53.02 MP/s | exact |
+| 16-bit precision motion | 90 | 20.547x | 85.21 MP/s | 248.29 MP/s | 52.93 dB Y PSNR |
+| 16-bit precision motion | 100 | 2.061x | 53.84 MP/s | 71.21 MP/s | exact |
 
 High-bit planar 4:2:2 storage uses four raw bytes per luma pixel, so its raw
 decimal MB/s is four times the listed MP/s. The procedural supplement is a
@@ -77,7 +75,8 @@ corpus.
 - [Corpus documentation](corpus/README.md) describes reproducible media,
   checksums, capability tracks, and licenses.
 - [Format specifications](specs/format-v0.md) define the 8-bit v0 syntax;
-  [version 1](specs/format-v1.md) adds native 10/12/16-bit samples.
+  [version 1](specs/format-v1.md) adds native 10/12/16-bit samples, and
+  [version 2](specs/format-v2.md) adds tile-local predictor modes.
 - [Research index](research/INDEX.md) records openly usable technical sources.
 - [`experiments/`](experiments) contains immutable accepted/rejected
   experimental design records and detailed performance history.
