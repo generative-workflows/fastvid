@@ -440,6 +440,13 @@ pub struct TileEntropyModel {
     pub order0_payload_bytes: u64,
     pub order0_table_bytes: u64,
     pub order0_complete_bytes: u64,
+    pub context_order0_supported: bool,
+    pub context_order0_contexts: u8,
+    pub context_order0_threshold: u32,
+    pub context_order0_payload_bytes: u64,
+    pub context_order0_table_bytes: u64,
+    pub context_order0_control_bytes: u64,
+    pub context_order0_complete_bytes: u64,
 }
 
 /// Read-only size model for predictor-bounded residual symbols in one tile.
@@ -537,6 +544,7 @@ pub(crate) struct ByteFormatModel {
     standard_data_bytes: u64,
     zero_aware_data_bytes: u64,
     histogram: Vec<u64>,
+    values: Vec<u32>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -550,6 +558,17 @@ pub(crate) struct Order0SizeModel {
     pub(crate) complete_bytes: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ContextOrder0SizeModel {
+    pub(crate) supported: bool,
+    pub(crate) contexts: u8,
+    pub(crate) threshold: u32,
+    pub(crate) payload_bytes: u64,
+    pub(crate) table_bytes: u64,
+    pub(crate) control_bytes: u64,
+    pub(crate) complete_bytes: u64,
+}
+
 impl ByteFormatModel {
     pub(crate) fn push(&mut self, value: u32) {
         let symbol = value as usize;
@@ -557,6 +576,7 @@ impl ByteFormatModel {
             self.histogram.resize(symbol + 1, 0);
         }
         self.histogram[symbol] += 1;
+        self.values.push(value);
         self.symbols += 1;
         self.zero_symbols += u64::from(value == 0);
         self.standard_data_bytes += match value {
@@ -579,6 +599,7 @@ impl ByteFormatModel {
             self.histogram.push(0);
         }
         self.histogram[0] += count;
+        self.values.resize(self.values.len() + count as usize, 0);
         self.symbols += count;
         self.zero_symbols += count;
         self.standard_data_bytes += count;
@@ -651,6 +672,70 @@ impl ByteFormatModel {
             ideal_bytes,
             ..Order0SizeModel::default()
         })
+    }
+
+    pub(crate) fn context_order0_size(&self) -> ContextOrder0SizeModel {
+        if self.values.is_empty() {
+            return ContextOrder0SizeModel::default();
+        }
+        let mut best = self.context_order0_candidate(2, 0);
+        for threshold in [1, 3, 7, 15] {
+            let candidate = self.context_order0_candidate(3, threshold);
+            if candidate.supported
+                && (!best.supported
+                    || (
+                        candidate.complete_bytes,
+                        candidate.contexts,
+                        candidate.threshold,
+                    ) < (best.complete_bytes, best.contexts, best.threshold))
+            {
+                best = candidate;
+            }
+        }
+        best
+    }
+
+    fn context_order0_candidate(
+        &self,
+        context_count: u8,
+        threshold: u32,
+    ) -> ContextOrder0SizeModel {
+        let mut contexts: Vec<ByteFormatModel> = (0..context_count)
+            .map(|_| ByteFormatModel::default())
+            .collect();
+        let mut previous = 0u32;
+        for &value in &self.values {
+            let context = if previous == 0 {
+                0
+            } else if context_count == 2 || previous <= threshold {
+                1
+            } else {
+                2
+            };
+            contexts[context].push(value);
+            previous = value;
+        }
+        let mut payload_bytes = 0u64;
+        let mut table_bytes = 0u64;
+        let mut control_bytes = 1 + u64::from(context_count == 3);
+        for context in contexts {
+            let model = context.order0_size();
+            if context.symbols != 0 && !model.supported {
+                return ContextOrder0SizeModel::default();
+            }
+            payload_bytes += model.payload_bytes;
+            table_bytes += model.table_bytes;
+            control_bytes += model_varint_length(model.complete_bytes as u32);
+        }
+        ContextOrder0SizeModel {
+            supported: true,
+            contexts: context_count,
+            threshold,
+            payload_bytes,
+            table_bytes,
+            control_bytes,
+            complete_bytes: payload_bytes + table_bytes + control_bytes,
+        }
     }
 }
 
@@ -867,6 +952,34 @@ mod tests {
         assert!(!order0.supported);
         assert!(order0.ideal_bytes > 0);
         assert_eq!(order0.complete_bytes, 0);
+    }
+
+    #[test]
+    fn causal_context_model_charges_every_table_state_and_length() {
+        let mut singleton = ByteFormatModel::default();
+        singleton.push_zeros(32_768);
+        let context = singleton.context_order0_size();
+        assert!(context.supported);
+        assert_eq!(context.contexts, 2);
+        assert_eq!(context.threshold, 0);
+        assert_eq!(context.payload_bytes, 0);
+        assert_eq!(context.table_bytes, 7);
+        // Mode byte and a one-byte length for both context substreams.
+        assert_eq!(context.control_bytes, 3);
+        assert_eq!(context.complete_bytes, 10);
+
+        let mut mixed = ByteFormatModel::default();
+        for value in [0, 1, 0, 9, 2, 0, 31, 1, 0] {
+            mixed.push(value);
+        }
+        let first = mixed.context_order0_size();
+        assert!(first.supported);
+        assert!((2..=3).contains(&first.contexts));
+        assert_eq!(first, mixed.context_order0_size());
+        assert_eq!(
+            first.complete_bytes,
+            first.payload_bytes + first.table_bytes + first.control_bytes
+        );
     }
 
     #[test]

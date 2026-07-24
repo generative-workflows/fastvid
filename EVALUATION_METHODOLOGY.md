@@ -1,6 +1,6 @@
 # Fastvid evaluation methodology
 
-Version: 7 (2026-07-24)
+Version: 8 (2026-07-24)
 
 This document defines the standard target used to evaluate Fastvid changes.
 Experiments may add diagnostics or deliberately diverge, but an optimization
@@ -8,7 +8,9 @@ is not a general improvement unless it is measured against this methodology.
 The design is grounded in [research 0004](research/0004-codec-evaluation.md),
 [research 0006](research/0006-standard-evaluation-methodology.md), and the
 modern metric review in
-[research 0018](research/0018-modern-perceptual-metrics.md).
+[research 0018](research/0018-modern-perceptual-metrics.md), and the
+finite-block entropy accounting in
+[research 0024](research/0024-finite-block-ans-entropy-models.md).
 
 ## Goals and tracks
 
@@ -160,6 +162,13 @@ round-trip exactly. The initial all-intra target is:
 
 These are engineering targets, not grounds for hiding per-sample failures.
 
+Entropy-format proposals must model and then measure complete tile bytes:
+normalized-frequency tables or codebooks, control fields, terminal state,
+byte padding, and directory/container overhead are charged alongside ideal
+symbol cost. Results report the fraction of tiles that select the candidate
+after exact fallback; an aggregate entropy estimate without per-tile overhead
+is a screening bound, not a compression result.
+
 ## Speed and resource measurements
 
 Build with the checked-in release profile. Record CPU model, logical CPU
@@ -223,6 +232,9 @@ checksummed high-bit manifest, and the same balanced-order rule. High-bit and
 comparisons use `scripts/benchmark-access-high-bit-ab.sh`; it uses the same
 target indices, warm-cache codec-only boundary, balanced order, and
 per-bit-depth separation as the 8-bit access protocol.
+Preserved-binary 8-bit access comparisons use
+`scripts/benchmark-access-ab.sh`; candidates must use identical target
+indices, qualities, GOPs, thread counts, and alternating execution order.
 
 Before preserving a candidate, run `cargo build --release` explicitly:
 `cargo test --release` builds test executables but does not guarantee that the
