@@ -2,8 +2,8 @@
 # Balanced warm-cache single-frame access comparison for the 8-bit video corpus.
 set -euo pipefail
 
-if [[ "$#" -lt 3 || "$#" -gt 7 ]]; then
-  echo "usage: $0 BASELINE_BINARY CANDIDATE_BINARY OUTPUT [CORPUS] [QUALITIES] [GOPS] [TRIALS]" >&2
+if [[ "$#" -lt 3 || ("$#" -gt 7 && "$#" -ne 11) ]]; then
+  echo "usage: $0 BASELINE_BINARY CANDIDATE_BINARY OUTPUT [CORPUS] [QUALITIES] [GOPS] [TRIALS [BASELINE_TILE_WIDTH BASELINE_TILE_HEIGHT CANDIDATE_TILE_WIDTH CANDIDATE_TILE_HEIGHT]]" >&2
   exit 1
 fi
 
@@ -16,6 +16,12 @@ corpus_dir="${4:-$repo_dir/artifacts/corpus-v2}"
 qualities="${5:-90 100}"
 gops="${6:-1 12}"
 trials="${7:-6}"
+baseline_geometry=()
+candidate_geometry=()
+if [[ "$#" -eq 11 ]]; then
+  baseline_geometry=("${8}" "${9}")
+  candidate_geometry=("${10}" "${11}")
+fi
 manifest="$repo_dir/corpus/manifest.json"
 targets="0,1,6,11,12,13,18,23"
 mkdir -p "$(dirname -- "$output")"
@@ -30,10 +36,16 @@ run_variant() {
   local variant="$1"
   local binary="$2"
   local trial="$3"
+  local geometry=()
   local result
+  if [[ "$variant" == "baseline" ]]; then
+    geometry=("${baseline_geometry[@]}")
+  else
+    geometry=("${candidate_geometry[@]}")
+  fi
   result="$("$binary" benchmark-access-yuv422 \
     "$corpus_dir/$path" "$width" "$height" "$frame_rate" "$frames" \
-    "$quality" 1 "$gop" "$targets")"
+    "$quality" 1 "$gop" "$targets" "${geometry[@]}")"
   if [[ "$first" == 1 ]]; then
     printf 'variant\ttrial\t%s\n' "$(printf '%s\n' "$result" | head -n 1)" > "$output"
     first=0

@@ -32,3 +32,5 @@ before entering the format.
 | [0025](0025-context-conditioned-residual-entropy.md) | Recent JPEG XL, conditional residual, and hierarchical probability work | Charged causal-context models for residual scale and cross-channel structure | Reviewed |
 | [0026](0026-paeth-data-dependency-kernel.md) | stb_image, JPEG XL, PNG | Byte-identical Paeth data dependencies and fixed-predictor speed paths | Reviewed |
 | [0027](0027-streaming-rice-parameter-selection.md) | Recent Rice-parameter analysis, CharLS, FLAC | Sparse parameter estimation and one-pass residual entropy writing | Reviewed |
+| [0028](0028-tile-geometry-tradeoffs.md) | JPEG XL, APV RFC 9924, OpenAPV | Rectangular tile rate, throughput, cache, parallelism, and access tradeoffs | Reviewed |
+| [0029](0029-block-translational-inter-prediction.md) | AV1 overview/specification and rav1e | Integer block-motion potential with bounded GOP dependencies | Reviewed |

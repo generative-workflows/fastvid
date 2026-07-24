@@ -189,10 +189,10 @@ fn encode_yuv422(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>>
 fn benchmark_yuv422(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     // Standard sequence measurements are defined in research/0006 and
     // EVALUATION_METHODOLOGY.md. Codec timing intentionally excludes metrics.
-    if !(7..=8).contains(&arguments.len()) {
+    if !matches!(arguments.len(), 7 | 8 | 10) {
         return Err(
-            "benchmark-yuv422 needs INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES QUALITY THREADS [GOP]"
-                .into()
+            "benchmark-yuv422 needs INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES QUALITY THREADS [GOP [TILE_WIDTH TILE_HEIGHT]]"
+                .into(),
         );
     }
     let input = &arguments[0];
@@ -227,11 +227,15 @@ fn benchmark_yuv422(arguments: &[String]) -> Result<(), Box<dyn std::error::Erro
         return Err("input length does not match the declared YUV422p8 sequence".into());
     }
     let frame_rate = FrameRate::new(fps_numerator, fps_denominator);
-    let options = CodecOptions {
+    let mut options = CodecOptions {
         quality,
         threads,
         ..CodecOptions::default()
     };
+    if arguments.len() == 10 {
+        options.tile_width = arguments[8].parse()?;
+        options.tile_height = arguments[9].parse()?;
+    }
     let mut encoded_bytes = 0usize;
     let mut zero_run_tiles = 0usize;
     let mut rice_tiles = 0usize;
@@ -315,11 +319,13 @@ fn benchmark_yuv422(arguments: &[String]) -> Result<(), Box<dyn std::error::Erro
         }
     };
     println!(
-        "input\tframes\tquality\tthreads\tgop\traw_bytes\tencoded_bytes\tratio\tencode_ms\tdecode_ms\tencode_mpps\tdecode_mpps\tencode_raw_mb_s\tdecode_raw_mb_s\tencoded_stream_mb_s\tencoded_stream_mbps\ty_psnr\tcb_psnr\tcr_psnr\ty_block_ssim\tmax_error\tzero_run_tiles\trice_tiles\tspatial_tiles\ttemporal_tiles"
+        "input\tframes\tquality\tthreads\tgop\ttile_width\ttile_height\traw_bytes\tencoded_bytes\tratio\tencode_ms\tdecode_ms\tencode_mpps\tdecode_mpps\tencode_raw_mb_s\tdecode_raw_mb_s\tencoded_stream_mb_s\tencoded_stream_mbps\ty_psnr\tcb_psnr\tcr_psnr\ty_block_ssim\tmax_error\tzero_run_tiles\trice_tiles\tspatial_tiles\ttemporal_tiles"
     );
     println!(
-        "{}\t{frame_count}\t{quality}\t{threads}\t{gop}\t{raw_bytes}\t{encoded_bytes}\t{:.6}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{encode_raw_mb_s:.3}\t{decode_raw_mb_s:.3}\t{encoded_stream_mb_s:.6}\t{encoded_stream_mbps:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.8}\t{max_error}\t{zero_run_tiles}\t{rice_tiles}\t{spatial_tiles}\t{temporal_tiles}",
+        "{}\t{frame_count}\t{quality}\t{threads}\t{gop}\t{}\t{}\t{raw_bytes}\t{encoded_bytes}\t{:.6}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{encode_raw_mb_s:.3}\t{decode_raw_mb_s:.3}\t{encoded_stream_mb_s:.6}\t{encoded_stream_mbps:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.8}\t{max_error}\t{zero_run_tiles}\t{rice_tiles}\t{spatial_tiles}\t{temporal_tiles}",
         input,
+        options.tile_width,
+        options.tile_height,
         raw_bytes as f64 / encoded_bytes as f64,
         encode_seconds * 1000.0,
         decode_seconds * 1000.0,
@@ -334,9 +340,9 @@ fn benchmark_yuv422(arguments: &[String]) -> Result<(), Box<dyn std::error::Erro
 }
 
 fn benchmark_yuv422p16le(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    if !(8..=9).contains(&arguments.len()) {
+    if !matches!(arguments.len(), 8 | 9 | 11) {
         return Err(
-            "benchmark-yuv422p16le needs INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES BIT_DEPTH QUALITY THREADS [GOP]"
+            "benchmark-yuv422p16le needs INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES BIT_DEPTH QUALITY THREADS [GOP [TILE_WIDTH TILE_HEIGHT]]"
                 .into(),
         );
     }
@@ -365,11 +371,15 @@ fn benchmark_yuv422p16le(arguments: &[String]) -> Result<(), Box<dyn std::error:
         return Err("input length does not match the declared YUV422p16le sequence".into());
     }
     let frame_rate = FrameRate::new(fps_numerator, fps_denominator);
-    let options = CodecOptions {
+    let mut options = CodecOptions {
         quality,
         threads,
         ..CodecOptions::default()
     };
+    if arguments.len() == 11 {
+        options.tile_width = arguments[9].parse()?;
+        options.tile_height = arguments[10].parse()?;
+    }
     let mut encoded_bytes = 0usize;
     let mut encode_time = std::time::Duration::ZERO;
     let mut decode_time = std::time::Duration::ZERO;
@@ -445,10 +455,12 @@ fn benchmark_yuv422p16le(arguments: &[String]) -> Result<(), Box<dyn std::error:
         }
     };
     println!(
-        "input\tframes\tbit_depth\tquality\tthreads\tgop\traw_bytes\tencoded_bytes\tratio\tencode_ms\tdecode_ms\tencode_mpps\tdecode_mpps\tencode_raw_mb_s\tdecode_raw_mb_s\tencoded_stream_mb_s\tencoded_stream_mbps\ty_psnr\tcb_psnr\tcr_psnr\ty_block_ssim\tmax_error"
+        "input\tframes\tbit_depth\tquality\tthreads\tgop\ttile_width\ttile_height\traw_bytes\tencoded_bytes\tratio\tencode_ms\tdecode_ms\tencode_mpps\tdecode_mpps\tencode_raw_mb_s\tdecode_raw_mb_s\tencoded_stream_mb_s\tencoded_stream_mbps\ty_psnr\tcb_psnr\tcr_psnr\ty_block_ssim\tmax_error"
     );
     println!(
-        "{input}\t{frame_count}\t{bit_depth}\t{quality}\t{threads}\t{gop}\t{}\t{encoded_bytes}\t{:.6}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.8}\t{max_error}",
+        "{input}\t{frame_count}\t{bit_depth}\t{quality}\t{threads}\t{gop}\t{}\t{}\t{}\t{encoded_bytes}\t{:.6}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.6}\t{:.8}\t{max_error}",
+        options.tile_width,
+        options.tile_height,
         raw.len(),
         raw.len() as f64 / encoded_bytes as f64,
         encode_seconds * 1000.0,
@@ -546,9 +558,9 @@ fn metrics_yuv422p16le(arguments: &[String]) -> Result<(), Box<dyn std::error::E
 fn benchmark_access_yuv422(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     // Codec-only warm-cache random access; source/container I/O and sequence
     // encoding are intentionally outside the timed region (research/0010).
-    if arguments.len() != 9 {
+    if !matches!(arguments.len(), 9 | 11) {
         return Err(
-            "benchmark-access-yuv422 needs INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES QUALITY THREADS GOP TARGETS"
+            "benchmark-access-yuv422 needs INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES QUALITY THREADS GOP TARGETS [TILE_WIDTH TILE_HEIGHT]"
                 .into(),
         );
     }
@@ -596,11 +608,15 @@ fn benchmark_access_yuv422(arguments: &[String]) -> Result<(), Box<dyn std::erro
     }
 
     let frame_rate = FrameRate::new(fps_numerator, fps_denominator);
-    let options = CodecOptions {
+    let mut options = CodecOptions {
         quality,
         threads,
         ..CodecOptions::default()
     };
+    if arguments.len() == 11 {
+        options.tile_width = arguments[9].parse()?;
+        options.tile_height = arguments[10].parse()?;
+    }
     let mut encoded_frames = Vec::with_capacity(frame_count);
     let mut previous = None;
     let mut expected_targets = vec![None; frame_count];
@@ -638,7 +654,7 @@ fn benchmark_access_yuv422(arguments: &[String]) -> Result<(), Box<dyn std::erro
 
     let target_megapixels = f64::from(width) * f64::from(height) / 1_000_000.0;
     println!(
-        "input\ttarget_frame\tkeyframe_frame\tdependency_frames\tdecoded_frames\tquality\tthreads\tgop\tencoded_bytes_read\taccess_ms\tuseful_mpps\twork_mpps\tuseful_raw_mb_s\taccess_amplification"
+        "input\ttarget_frame\tkeyframe_frame\tdependency_frames\tdecoded_frames\tquality\tthreads\tgop\ttile_width\ttile_height\tencoded_bytes_read\taccess_ms\tuseful_mpps\twork_mpps\tuseful_raw_mb_s\taccess_amplification"
     );
     for target in targets {
         let keyframe = target / gop * gop;
@@ -677,7 +693,9 @@ fn benchmark_access_yuv422(arguments: &[String]) -> Result<(), Box<dyn std::erro
         let work_mpps = target_megapixels * decoded_frames as f64 / access_seconds;
         let useful_raw_mb_s = frame_len as f64 / access_seconds / 1_000_000.0;
         println!(
-            "{input}\t{target}\t{keyframe}\t{dependency_frames}\t{decoded_frames}\t{quality}\t{threads}\t{gop}\t{encoded_bytes_read}\t{:.3}\t{useful_mpps:.3}\t{work_mpps:.3}\t{useful_raw_mb_s:.3}\t{:.3}",
+            "{input}\t{target}\t{keyframe}\t{dependency_frames}\t{decoded_frames}\t{quality}\t{threads}\t{gop}\t{}\t{}\t{encoded_bytes_read}\t{:.3}\t{useful_mpps:.3}\t{work_mpps:.3}\t{useful_raw_mb_s:.3}\t{:.3}",
+            options.tile_width,
+            options.tile_height,
             access_seconds * 1000.0,
             decoded_frames as f64,
         );
@@ -688,9 +706,9 @@ fn benchmark_access_yuv422(arguments: &[String]) -> Result<(), Box<dyn std::erro
 fn benchmark_access_yuv422p16le(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     // Codec-only warm-cache random access for native high-bit input. Source
     // I/O and sequence encoding remain outside the timed region.
-    if arguments.len() != 10 {
+    if !matches!(arguments.len(), 10 | 12) {
         return Err(
-            "benchmark-access-yuv422p16le needs INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES BIT_DEPTH QUALITY THREADS GOP TARGETS"
+            "benchmark-access-yuv422p16le needs INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES BIT_DEPTH QUALITY THREADS GOP TARGETS [TILE_WIDTH TILE_HEIGHT]"
                 .into(),
         );
     }
@@ -730,11 +748,15 @@ fn benchmark_access_yuv422p16le(arguments: &[String]) -> Result<(), Box<dyn std:
     }
 
     let frame_rate = FrameRate::new(fps_numerator, fps_denominator);
-    let options = CodecOptions {
+    let mut options = CodecOptions {
         quality,
         threads,
         ..CodecOptions::default()
     };
+    if arguments.len() == 12 {
+        options.tile_width = arguments[10].parse()?;
+        options.tile_height = arguments[11].parse()?;
+    }
     let mut encoded_frames = Vec::with_capacity(frame_count);
     let mut previous = None;
     let mut expected_targets = vec![None; frame_count];
@@ -772,7 +794,7 @@ fn benchmark_access_yuv422p16le(arguments: &[String]) -> Result<(), Box<dyn std:
 
     let target_megapixels = f64::from(width) * f64::from(height) / 1_000_000.0;
     println!(
-        "input\ttarget_frame\tkeyframe_frame\tdependency_frames\tdecoded_frames\tbit_depth\tquality\tthreads\tgop\tencoded_bytes_read\taccess_ms\tuseful_mpps\twork_mpps\tuseful_raw_mb_s\taccess_amplification"
+        "input\ttarget_frame\tkeyframe_frame\tdependency_frames\tdecoded_frames\tbit_depth\tquality\tthreads\tgop\ttile_width\ttile_height\tencoded_bytes_read\taccess_ms\tuseful_mpps\twork_mpps\tuseful_raw_mb_s\taccess_amplification"
     );
     for target in targets {
         let keyframe = target / gop * gop;
@@ -810,7 +832,9 @@ fn benchmark_access_yuv422p16le(arguments: &[String]) -> Result<(), Box<dyn std:
         let work_mpps = target_megapixels * decoded_frames as f64 / access_seconds;
         let useful_raw_mb_s = frame_len as f64 / access_seconds / 1_000_000.0;
         println!(
-            "{input}\t{target}\t{keyframe}\t{dependency_frames}\t{decoded_frames}\t{bit_depth}\t{quality}\t{threads}\t{gop}\t{encoded_bytes_read}\t{:.3}\t{useful_mpps:.3}\t{work_mpps:.3}\t{useful_raw_mb_s:.3}\t{:.3}",
+            "{input}\t{target}\t{keyframe}\t{dependency_frames}\t{decoded_frames}\t{bit_depth}\t{quality}\t{threads}\t{gop}\t{}\t{}\t{encoded_bytes_read}\t{:.3}\t{useful_mpps:.3}\t{work_mpps:.3}\t{useful_raw_mb_s:.3}\t{:.3}",
+            options.tile_width,
+            options.tile_height,
             access_seconds * 1000.0,
             decoded_frames as f64,
         );
@@ -990,11 +1014,11 @@ USAGE:
   fastvid demo [WIDTH HEIGHT QUALITY THREADS OUTPUT]
   fastvid encode-yuv422 INPUT OUTPUT WIDTH HEIGHT FPS_NUM/FPS_DEN QUALITY THREADS TILE_SIZE
   fastvid encode-yuv422p16le INPUT OUTPUT WIDTH HEIGHT FPS_NUM/FPS_DEN BIT_DEPTH QUALITY THREADS TILE_SIZE
-  fastvid benchmark-yuv422 INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES QUALITY THREADS [GOP]
-  fastvid benchmark-yuv422p16le INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES BIT_DEPTH QUALITY THREADS [GOP]
+  fastvid benchmark-yuv422 INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES QUALITY THREADS [GOP [TILE_WIDTH TILE_HEIGHT]]
+  fastvid benchmark-yuv422p16le INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES BIT_DEPTH QUALITY THREADS [GOP [TILE_WIDTH TILE_HEIGHT]]
   fastvid metrics-yuv422p16le REFERENCE DECODED WIDTH HEIGHT FRAMES BIT_DEPTH
-  fastvid benchmark-access-yuv422 INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES QUALITY THREADS GOP TARGETS
-  fastvid benchmark-access-yuv422p16le INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES BIT_DEPTH QUALITY THREADS GOP TARGETS
+  fastvid benchmark-access-yuv422 INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES QUALITY THREADS GOP TARGETS [TILE_WIDTH TILE_HEIGHT]
+  fastvid benchmark-access-yuv422p16le INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES BIT_DEPTH QUALITY THREADS GOP TARGETS [TILE_WIDTH TILE_HEIGHT]
   fastvid decode INPUT OUTPUT THREADS
   fastvid decode16 INPUT OUTPUT THREADS
   fastvid inspect INPUT

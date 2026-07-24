@@ -1,6 +1,6 @@
 # Fastvid evaluation methodology
 
-Version: 8 (2026-07-24)
+Version: 9 (2026-07-24)
 
 This document defines the standard target used to evaluate Fastvid changes.
 Experiments may add diagnostics or deliberately diverge, but an optimization
@@ -72,6 +72,39 @@ or frame range requires a new version.
 Procedural and AI samples expose controlled failure modes but cannot support
 natural-image quality claims by themselves. Restricted or non-commercial
 media may be used only in a separately reported diagnostic suite.
+
+## Development corpus, holdouts, and tuned constants
+
+Corpus v2 has been measured repeatedly while designing Fastvid. It is the
+standard **development and regression corpus**, not an unseen holdout.
+Sweeping a global constant such as tile geometry, block size, threshold,
+search radius, or default GOP against v2 turns that constant into a fitted
+hyperparameter. A winner on v2 alone is not evidence for changing the codec
+default.
+
+A fixed-default proposal must pre-register and hash-freeze an additional
+validation corpus before inspecting candidate results. That corpus must span
+the affected natural/synthetic, still/video, resolution, and bit-depth
+families, and the experiment must declare its aggregate and worst-category
+gate in advance. Once used to choose among candidates, it is consumed as a
+holdout and becomes part of the development evidence for later work.
+Leave-one-category-out analysis may diagnose sensitivity but does not replace
+a genuinely unseen validation corpus.
+
+A content-adaptive tool may use per-input measurements instead of a global
+fitted constant only when it:
+
+- signals every decoder-required choice;
+- charges search, control, table, and payload costs;
+- retains an exact fallback to the existing choice;
+- preserves declared quality and access bounds; and
+- is evaluated per category so selection cannot hide regressions.
+
+Content-independent changes with byte-identical behavior do not require a
+holdout merely because they improve speed. This policy follows the
+tile-geometry sensitivity observed in
+[research 0028](research/0028-tile-geometry-tradeoffs.md) and
+[EXP-0064](experiments/EXP-0064-tile-geometry-sweep.md).
 
 ## Canonical input and dimensions
 

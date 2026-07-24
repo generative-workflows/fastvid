@@ -2,8 +2,8 @@
 # Alternating baseline/candidate corpus comparison; see EXP-0019.
 set -euo pipefail
 
-if [[ "$#" -lt 3 || "$#" -gt 9 ]]; then
-  echo "usage: $0 BASELINE_BINARY CANDIDATE_BINARY OUTPUT [CORPUS] [QUALITIES] [THREADS] [GOP] [KIND] [TRIALS]" >&2
+if [[ "$#" -lt 3 || ("$#" -gt 9 && "$#" -ne 13) ]]; then
+  echo "usage: $0 BASELINE_BINARY CANDIDATE_BINARY OUTPUT [CORPUS] [QUALITIES] [THREADS] [GOP] [KIND] [TRIALS [BASELINE_TILE_WIDTH BASELINE_TILE_HEIGHT CANDIDATE_TILE_WIDTH CANDIDATE_TILE_HEIGHT]]" >&2
   exit 1
 fi
 
@@ -18,6 +18,12 @@ thread_counts="${6:-1 4}"
 gop="${7:-1}"
 kind="${8:-image}"
 trials="${9:-6}"
+baseline_geometry=()
+candidate_geometry=()
+if [[ "$#" -eq 13 ]]; then
+  baseline_geometry=("${10}" "${11}")
+  candidate_geometry=("${12}" "${13}")
+fi
 manifest="$repo_dir/corpus/manifest.json"
 mkdir -p "$(dirname -- "$output")"
 
@@ -31,10 +37,16 @@ run_variant() {
   local variant="$1"
   local binary="$2"
   local trial="$3"
+  local geometry=()
   local result
+  if [[ "$variant" == "baseline" ]]; then
+    geometry=("${baseline_geometry[@]}")
+  else
+    geometry=("${candidate_geometry[@]}")
+  fi
   result="$("$binary" benchmark-yuv422 \
     "$corpus_dir/$path" "$width" "$height" "$frame_rate" "$frames" \
-    "$quality" "$threads" "$gop")"
+    "$quality" "$threads" "$gop" "${geometry[@]}")"
   if [[ "$first" == 1 ]]; then
     printf 'variant\ttrial\t%s\n' "$(printf '%s\n' "$result" | head -n 1)" > "$output"
     first=0
@@ -48,10 +60,10 @@ for quality in $qualities; do
     while IFS=$'\t' read -r path frames frame_rate width height; do
       "$baseline_binary" benchmark-yuv422 \
         "$corpus_dir/$path" "$width" "$height" "$frame_rate" "$frames" \
-        "$quality" "$threads" "$gop" > /dev/null
+        "$quality" "$threads" "$gop" "${baseline_geometry[@]}" > /dev/null
       "$candidate_binary" benchmark-yuv422 \
         "$corpus_dir/$path" "$width" "$height" "$frame_rate" "$frames" \
-        "$quality" "$threads" "$gop" > /dev/null
+        "$quality" "$threads" "$gop" "${candidate_geometry[@]}" > /dev/null
       for trial in $(seq 1 "$trials"); do
         if (( trial % 2 == 1 )); then
           run_variant baseline "$baseline_binary" "$trial"
