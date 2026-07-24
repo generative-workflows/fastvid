@@ -4,7 +4,7 @@
 
 ```
 Frame + optional reconstructed reference → plane/tile partition
-      → spatial/temporal residual → quantizer
+      → tile-local spatial/temporal predictor selection → residual → quantizer
       → per-tile zero-run/Rice selection → canonical directory + header
 ```
 
@@ -32,8 +32,9 @@ non-overlapping copy.
 
 - One frame per file; temporal frame dependencies exist, but there is not yet
   a sequence container or keyframe index.
-- Version zero is 8-bit Gray/YUV 4:2:2. Version one implements 10/12/16-bit
-  Gray/YUV 4:2:2 as specified in `format-v1.md`.
+- Version zero is legacy 8-bit, version one is legacy 10/12/16-bit, and
+  version two adds tile-local predictor modes to both layouts as specified in
+  `format-v2.md`.
 - Thread creation and mutex-based job/result coordination are prototype
   mechanisms, not a production worker pool.
 - No checksum, MS-SSIM, rate-distortion corpus harness, SIMD, or Aeneas bridge.

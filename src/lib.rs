@@ -12,11 +12,13 @@ mod metrics;
 mod model;
 
 pub use codec::{
-    DecodedTile, StreamInfo, analyze_entropy, decode, decode_tile, decode_with_reference, encode,
+    DecodedTile, StreamInfo, analyze_entropy, analyze_predictor_frame, analyze_predictors,
+    analyze_residual_mapping, decode, decode_tile, decode_with_reference, encode,
     encode_with_reference, inspect,
 };
 pub use codec16::{
-    DecodedTile16, analyze_entropy16, decode_tile16, decode16, decode16_with_reference, encode16,
+    DecodedTile16, analyze_entropy16, analyze_predictor_frame16, analyze_predictors16,
+    analyze_residual_mapping16, decode_tile16, decode16, decode16_with_reference, encode16,
     encode16_with_reference, inspect16,
 };
 pub use metrics::{
@@ -25,5 +27,6 @@ pub use metrics::{
 };
 pub use model::{
     CodecError, CodecOptions, Frame, Frame16, FrameRate, PixelFormat, Plane, Plane16,
-    TileEntropyModel,
+    PredictorCandidateModel, PredictorModelMode, TileEntropyModel, TilePredictorModel,
+    TileResidualMappingModel,
 };

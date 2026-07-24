@@ -1,13 +1,15 @@
 use crate::codec::StreamInfo;
 use crate::model::{
     ByteFormatModel, CodecError, CodecOptions, Frame16, FrameRate, MAX_FRAME_BYTES, PixelFormat,
-    Plane16, TileEntropyModel, checked_area, sample_max,
+    Plane16, PredictorCandidateModel, PredictorModelMode, TileEntropyModel, TilePredictorModel,
+    TileResidualMappingModel, checked_area, fold_bounded_residual, sample_max,
 };
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 const MAGIC: &[u8; 4] = b"FVID";
-const VERSION: u8 = 1;
+const LEGACY_VERSION: u8 = 1;
+const VERSION: u8 = 2;
 const HEADER_LEN: usize = 32;
 const DIRECTORY_ENTRY_LEN: usize = 32;
 const MAX_TILES: usize = 1 << 20;
@@ -16,6 +18,10 @@ const ENTROPY_RICE_BASE: u8 = 1;
 const MAX_RICE_PARAMETER: u8 = 16;
 const PREDICT_SPATIAL: u8 = 0;
 const PREDICT_TEMPORAL: u8 = 1;
+const PREDICT_AVERAGE: u8 = 2;
+const PREDICT_CLAMP_GRADIENT: u8 = 3;
+const PREDICT_HALF_GRADIENT: u8 = 4;
+const MAX_PREDICTION_MODE: u8 = PREDICT_HALF_GRADIENT;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Tile {
@@ -65,7 +71,7 @@ pub struct DecodedTile16 {
 }
 
 pub fn encode16(frame: &Frame16, options: CodecOptions) -> Result<Vec<u8>, CodecError> {
-    encode_internal(frame, None, options)
+    encode_internal(frame, None, false, options)
 }
 
 pub fn encode16_with_reference(
@@ -82,13 +88,14 @@ pub fn encode16_with_reference(
         .zip(previous)
         .map(|(&current, &previous)| u64::from(current.abs_diff(previous)))
         .sum();
-    let selected = (absolute_difference <= current.len() as u64 * threshold).then_some(reference);
-    encode_internal(frame, selected, options)
+    let prefer_temporal = absolute_difference <= current.len() as u64 * threshold;
+    encode_internal(frame, Some(reference), prefer_temporal, options)
 }
 
 fn encode_internal(
     frame: &Frame16,
     reference: Option<&Frame16>,
+    prefer_temporal: bool,
     options: CodecOptions,
 ) -> Result<Vec<u8>, CodecError> {
     frame.validate()?;
@@ -104,11 +111,12 @@ fn encode_internal(
     let quantizer = Quantizer16::new(step, frame.bit_depth());
     let payloads = parallel_map(tiles.len(), options.threads, |index| {
         let tile = tiles[index];
-        encode_tile(
+        encode_best_tile(
             &frame.planes[tile.plane],
             reference.map(|frame| &frame.planes[tile.plane]),
             tile,
             &quantizer,
+            prefer_temporal,
         )
     });
     let directory_bytes = tiles
@@ -284,6 +292,169 @@ pub fn analyze_entropy16(bytes: &[u8]) -> Result<Vec<TileEntropyModel>, CodecErr
         .collect()
 }
 
+/// High-bit equivalent of [`crate::codec::analyze_residual_mapping`].
+pub fn analyze_residual_mapping16(
+    frame: &Frame16,
+    reference: Option<&Frame16>,
+    options: CodecOptions,
+) -> Result<Vec<TileResidualMappingModel>, CodecError> {
+    frame.validate()?;
+    options.validate()?;
+    if let Some(reference) = reference {
+        validate_reference(frame, reference)?;
+    }
+    let reference = reference.filter(|reference| {
+        let threshold = 5u64 << (frame.bit_depth() - 8);
+        let current = &frame.planes[0].data;
+        let previous = &reference.planes[0].data;
+        let absolute_difference: u64 = current
+            .iter()
+            .zip(previous)
+            .map(|(&current, &previous)| u64::from(current.abs_diff(previous)))
+            .sum();
+        absolute_difference <= current.len() as u64 * threshold
+    });
+    let tiles = expected_tiles(
+        frame.width,
+        frame.height,
+        frame.format,
+        options.tile_width,
+        options.tile_height,
+    )?;
+    let quantizer = Quantizer16::new(
+        quantization_step(options.quality, frame.bit_depth()),
+        frame.bit_depth(),
+    );
+    Ok(tiles
+        .into_iter()
+        .map(|tile| {
+            let plane = &frame.planes[tile.plane];
+            let reference_plane = reference.map(|frame| &frame.planes[tile.plane]);
+            model_residual_mapping_tile(plane, reference_plane, tile, &quantizer)
+        })
+        .collect())
+}
+
+/// High-bit equivalent of [`crate::codec::analyze_predictors`].
+pub fn analyze_predictors16(
+    frame: &Frame16,
+    reference: Option<&Frame16>,
+    options: CodecOptions,
+) -> Result<Vec<TilePredictorModel>, CodecError> {
+    frame.validate()?;
+    options.validate()?;
+    if let Some(reference) = reference {
+        validate_reference(frame, reference)?;
+    }
+    let current_reference = reference.filter(|reference| {
+        let threshold = 5u64 << (frame.bit_depth() - 8);
+        let current = &frame.planes[0].data;
+        let previous = &reference.planes[0].data;
+        let absolute_difference: u64 = current
+            .iter()
+            .zip(previous)
+            .map(|(&current, &previous)| u64::from(current.abs_diff(previous)))
+            .sum();
+        absolute_difference <= current.len() as u64 * threshold
+    });
+    let tiles = expected_tiles(
+        frame.width,
+        frame.height,
+        frame.format,
+        options.tile_width,
+        options.tile_height,
+    )?;
+    let quantizer = Quantizer16::new(
+        quantization_step(options.quality, frame.bit_depth()),
+        frame.bit_depth(),
+    );
+    Ok(tiles
+        .into_iter()
+        .map(|tile| {
+            model_predictor_tile(
+                &frame.planes[tile.plane],
+                reference.map(|frame| &frame.planes[tile.plane]),
+                current_reference.map(|frame| &frame.planes[tile.plane]),
+                tile,
+                &quantizer,
+            )
+            .0
+        })
+        .collect())
+}
+
+/// High-bit equivalent of [`crate::codec::analyze_predictor_frame`].
+pub fn analyze_predictor_frame16(
+    frame: &Frame16,
+    current_reference: Option<&Frame16>,
+    oracle_reference: Option<&Frame16>,
+    options: CodecOptions,
+) -> Result<(Vec<TilePredictorModel>, Frame16), CodecError> {
+    frame.validate()?;
+    options.validate()?;
+    if current_reference.is_some() != oracle_reference.is_some() {
+        return Err(CodecError::InvalidInput(
+            "current and oracle references must have matching dependency depth",
+        ));
+    }
+    if let Some(reference) = current_reference {
+        validate_reference(frame, reference)?;
+    }
+    if let Some(reference) = oracle_reference {
+        validate_reference(frame, reference)?;
+    }
+    let selected_current = current_reference.filter(|reference| {
+        let threshold = 5u64 << (frame.bit_depth() - 8);
+        let current = &frame.planes[0].data;
+        let previous = &reference.planes[0].data;
+        let absolute_difference: u64 = current
+            .iter()
+            .zip(previous)
+            .map(|(&current, &previous)| u64::from(current.abs_diff(previous)))
+            .sum();
+        absolute_difference <= current.len() as u64 * threshold
+    });
+    let tiles = expected_tiles(
+        frame.width,
+        frame.height,
+        frame.format,
+        options.tile_width,
+        options.tile_height,
+    )?;
+    let quantizer = Quantizer16::new(
+        quantization_step(options.quality, frame.bit_depth()),
+        frame.bit_depth(),
+    );
+    let modeled: Vec<(TilePredictorModel, Vec<u16>)> = tiles
+        .iter()
+        .map(|&tile| {
+            model_predictor_tile(
+                &frame.planes[tile.plane],
+                oracle_reference.map(|frame| &frame.planes[tile.plane]),
+                selected_current.map(|frame| &frame.planes[tile.plane]),
+                tile,
+                &quantizer,
+            )
+        })
+        .collect();
+    let mut reconstruction = frame.clone();
+    for plane in &mut reconstruction.planes {
+        plane.data.fill(0);
+    }
+    for ((_, data), tile) in modeled.iter().zip(&tiles) {
+        let plane = &mut reconstruction.planes[tile.plane];
+        let tile_width = tile.width as usize;
+        for (row, source) in data.chunks_exact(tile_width).enumerate() {
+            let start = (tile.y as usize + row) * plane.width as usize + tile.x as usize;
+            plane.data[start..start + tile_width].copy_from_slice(source);
+        }
+    }
+    Ok((
+        modeled.into_iter().map(|(model, _)| model).collect(),
+        reconstruction,
+    ))
+}
+
 fn validate_reference(frame: &Frame16, reference: &Frame16) -> Result<(), CodecError> {
     frame.validate()?;
     reference.validate()?;
@@ -357,9 +528,13 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, CodecError> {
     if bytes.len() < HEADER_LEN {
         return Err(CodecError::Malformed("truncated header"));
     }
-    if &bytes[0..4] != MAGIC || bytes[4] != VERSION {
+    if &bytes[0..4] != MAGIC {
+        return Err(CodecError::Malformed("bad magic"));
+    }
+    let version = bytes[4];
+    if version != LEGACY_VERSION && version != VERSION {
         return Err(CodecError::Malformed(
-            "not a version-one high-bit Fastvid stream",
+            "unsupported high-bit Fastvid version",
         ));
     }
     let grayscale = match bytes[5] {
@@ -431,7 +606,12 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, CodecError> {
             return Err(CodecError::Malformed("unknown tile entropy mode"));
         }
         let prediction_mode = bytes[start + 2];
-        if prediction_mode > PREDICT_TEMPORAL {
+        let maximum_prediction_mode = if version == LEGACY_VERSION {
+            PREDICT_TEMPORAL
+        } else {
+            MAX_PREDICTION_MODE
+        };
+        if prediction_mode > maximum_prediction_mode {
             return Err(CodecError::Malformed("unknown tile prediction mode"));
         }
         let tile = Tile {
@@ -458,7 +638,7 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, CodecError> {
         }
         zero_run_tiles += usize::from(entropy_mode == ENTROPY_ZERO_RUN);
         rice_tiles += usize::from(entropy_mode != ENTROPY_ZERO_RUN);
-        spatial_tiles += usize::from(prediction_mode == PREDICT_SPATIAL);
+        spatial_tiles += usize::from(prediction_mode != PREDICT_TEMPORAL);
         temporal_tiles += usize::from(prediction_mode == PREDICT_TEMPORAL);
         entries.push(DirectoryEntry {
             tile,
@@ -604,6 +784,116 @@ fn encode_tile(
     encode_spatial_tile(plane, tile, quantizer)
 }
 
+fn encode_best_tile(
+    plane: &Plane16,
+    reference: Option<&Plane16>,
+    tile: Tile,
+    quantizer: &Quantizer16,
+    prefer_temporal: bool,
+) -> EncodedTile {
+    if quantizer.max_sample == i32::from(u16::MAX)
+        && let Some(reference) = reference
+    {
+        return encode_temporal_tile(plane, reference, tile, quantizer);
+    }
+    const INTER_MODES: [SpatialPredictor; 2] =
+        [SpatialPredictor::Paeth, SpatialPredictor::ClampGradient];
+    const INTRA_MODES: [SpatialPredictor; 3] = [
+        SpatialPredictor::Paeth,
+        SpatialPredictor::Average,
+        SpatialPredictor::ClampGradient,
+    ];
+    let modes: &[SpatialPredictor] = if reference.is_some() {
+        &INTER_MODES
+    } else {
+        &INTRA_MODES
+    };
+    let width = tile.width as usize;
+    let height = tile.height as usize;
+    let plane_width = plane.width as usize;
+    let origin_x = tile.x as usize;
+    let origin_y = tile.y as usize;
+    let mut rows: [Vec<u16>; 3] = std::array::from_fn(|_| vec![0u16; width]);
+    let mut spatial_folded: [Vec<u32>; 3] =
+        std::array::from_fn(|_| Vec::with_capacity(width * height));
+    let mut spatial_squared_errors = [0u64; 3];
+    let mut temporal_folded = reference.map(|_| Vec::with_capacity(width * height));
+    let mut temporal_squared_error = 0u64;
+    for y in 0..height {
+        let row_start = (origin_y + y) * plane_width + origin_x;
+        let mut left = [0u16; 3];
+        let mut upper_left = [0u16; 3];
+        for (x, &sample) in plane.data[row_start..row_start + width].iter().enumerate() {
+            for mode_index in 0..modes.len() {
+                let above = rows[mode_index][x];
+                let prediction = i32::from(spatial_prediction(
+                    modes[mode_index],
+                    left[mode_index],
+                    above,
+                    upper_left[mode_index],
+                    quantizer.max_sample as u16,
+                ));
+                let quantized = quantizer.quantize(i32::from(sample) - prediction);
+                let reconstructed =
+                    (prediction + quantized * quantizer.step).clamp(0, quantizer.max_sample) as u16;
+                let error = i64::from(sample) - i64::from(reconstructed);
+                spatial_squared_errors[mode_index] += (error * error) as u64;
+                rows[mode_index][x] = reconstructed;
+                upper_left[mode_index] = above;
+                left[mode_index] = reconstructed;
+                spatial_folded[mode_index].push(zigzag(quantized));
+            }
+            if let (Some(reference), Some(folded)) = (reference, temporal_folded.as_mut()) {
+                let prediction = i32::from(reference.data[row_start + x]);
+                let quantized = quantizer.quantize(i32::from(sample) - prediction);
+                let reconstructed =
+                    (prediction + quantized * quantizer.step).clamp(0, quantizer.max_sample);
+                let error = i64::from(sample) - i64::from(reconstructed);
+                temporal_squared_error += (error * error) as u64;
+                folded.push(zigzag(quantized));
+            }
+        }
+    }
+    let mut candidates: Vec<(u8, Vec<u32>, u64, usize)> = modes
+        .iter()
+        .copied()
+        .zip(spatial_folded)
+        .zip(spatial_squared_errors)
+        .map(|((mode, folded), squared_error)| {
+            let bytes = modeled_entropy_cost(&folded).1;
+            (spatial_prediction_mode(mode), folded, squared_error, bytes)
+        })
+        .collect();
+    if let Some(folded) = temporal_folded {
+        let bytes = modeled_entropy_cost(&folded).1;
+        candidates.push((PREDICT_TEMPORAL, folded, temporal_squared_error, bytes));
+    }
+    let minimum_bytes = candidates
+        .iter()
+        .map(|candidate| candidate.3)
+        .min()
+        .expect("spatial candidates are nonempty");
+    let preferred_mode = if prefer_temporal && reference.is_some() {
+        PREDICT_TEMPORAL
+    } else {
+        PREDICT_SPATIAL
+    };
+    let selected = candidates
+        .iter()
+        .position(|candidate| candidate.0 == preferred_mode && candidate.3 == minimum_bytes)
+        .unwrap_or_else(|| {
+            candidates
+                .iter()
+                .enumerate()
+                .filter(|(_, candidate)| candidate.3 == minimum_bytes)
+                .min_by_key(|(_, candidate)| (candidate.2, candidate.0))
+                .map(|(index, _)| index)
+                .expect("a minimum candidate exists")
+        });
+    let (prediction_mode, folded, _, _) = candidates.swap_remove(selected);
+    finish_entropy(folded, prediction_mode)
+}
+
 fn encode_temporal_tile(
     plane: &Plane16,
     reference: &Plane16,
@@ -658,6 +948,370 @@ fn encode_spatial_tile(plane: &Plane16, tile: Tile, quantizer: &Quantizer16) -> 
         }
     }
     finish_entropy(folded, PREDICT_SPATIAL)
+}
+
+fn model_residual_mapping_tile(
+    plane: &Plane16,
+    reference: Option<&Plane16>,
+    tile: Tile,
+    quantizer: &Quantizer16,
+) -> TileResidualMappingModel {
+    let current = encode_tile(plane, reference, tile, quantizer);
+    let bounded = if let Some(reference) = reference {
+        model_bounded_temporal_tile(plane, reference, tile, quantizer)
+    } else {
+        model_bounded_spatial_tile(plane, tile, quantizer)
+    };
+    TileResidualMappingModel {
+        plane: tile.plane,
+        width: tile.width,
+        height: tile.height,
+        temporal_prediction: reference.is_some(),
+        source_zero_run: current.entropy_mode == ENTROPY_ZERO_RUN,
+        bounded_zero_run: bounded.0 == ENTROPY_ZERO_RUN,
+        sample_count: tile.width as usize * tile.height as usize,
+        actual_payload_bytes: current.payload.len(),
+        bounded_payload_bytes: bounded.1,
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SpatialPredictor {
+    Paeth,
+    Average,
+    ClampGradient,
+    HalfGradient,
+}
+
+struct ModeledPredictor {
+    summary: PredictorCandidateModel,
+    reconstruction: Vec<u16>,
+    #[cfg(test)]
+    encoded: EncodedTile,
+}
+
+fn model_predictor_tile(
+    plane: &Plane16,
+    available_reference: Option<&Plane16>,
+    current_reference: Option<&Plane16>,
+    tile: Tile,
+    quantizer: &Quantizer16,
+) -> (TilePredictorModel, Vec<u16>) {
+    let paeth = model_spatial_predictor(plane, tile, quantizer, SpatialPredictor::Paeth);
+    let average = model_spatial_predictor(plane, tile, quantizer, SpatialPredictor::Average);
+    let clamp_gradient =
+        model_spatial_predictor(plane, tile, quantizer, SpatialPredictor::ClampGradient);
+    let half_gradient =
+        model_spatial_predictor(plane, tile, quantizer, SpatialPredictor::HalfGradient);
+    let temporal = available_reference
+        .map(|reference| model_temporal_predictor(plane, reference, tile, quantizer));
+    let current_temporal = current_reference
+        .map(|reference| model_temporal_predictor(plane, reference, tile, quantizer));
+    let current_matches_candidate_reference = matches!((available_reference, current_reference), (Some(available), Some(current)) if available == current);
+    let (current_mode, current) = if let Some(candidate) = &current_temporal {
+        (PredictorModelMode::Temporal, candidate.summary)
+    } else {
+        (PredictorModelMode::Paeth, paeth.summary)
+    };
+    let candidates = [
+        (PredictorModelMode::Paeth, paeth.summary),
+        (PredictorModelMode::Average, average.summary),
+        (PredictorModelMode::ClampGradient, clamp_gradient.summary),
+        (PredictorModelMode::HalfGradient, half_gradient.summary),
+    ];
+    let minimum_bytes = candidates
+        .iter()
+        .map(|(_, candidate)| candidate.payload_bytes)
+        .chain(
+            temporal
+                .as_ref()
+                .map(|candidate| candidate.summary.payload_bytes),
+        )
+        .min()
+        .expect("spatial candidates are nonempty");
+    let current_is_oracle_candidate =
+        current_mode == PredictorModelMode::Paeth || current_matches_candidate_reference;
+    let (oracle_mode, oracle) =
+        if current_is_oracle_candidate && current.payload_bytes == minimum_bytes {
+            (current_mode, current)
+        } else {
+            candidates
+                .into_iter()
+                .chain(
+                    temporal
+                        .as_ref()
+                        .map(|candidate| (PredictorModelMode::Temporal, candidate.summary)),
+                )
+                .filter(|(_, candidate)| candidate.payload_bytes == minimum_bytes)
+                .min_by_key(|(_, candidate)| candidate.squared_error)
+                .expect("a minimum candidate exists")
+        };
+    let reconstruction = match oracle_mode {
+        PredictorModelMode::Paeth => paeth.reconstruction.clone(),
+        PredictorModelMode::Average => average.reconstruction.clone(),
+        PredictorModelMode::ClampGradient => clamp_gradient.reconstruction.clone(),
+        PredictorModelMode::HalfGradient => half_gradient.reconstruction.clone(),
+        PredictorModelMode::Temporal => temporal
+            .as_ref()
+            .expect("temporal oracle has a reference")
+            .reconstruction
+            .clone(),
+    };
+    (
+        TilePredictorModel {
+            plane: tile.plane,
+            width: tile.width,
+            height: tile.height,
+            sample_count: tile.width as usize * tile.height as usize,
+            current_mode,
+            oracle_mode,
+            current,
+            oracle,
+            paeth: paeth.summary,
+            average: average.summary,
+            clamp_gradient: clamp_gradient.summary,
+            half_gradient: half_gradient.summary,
+            temporal: temporal.map(|candidate| candidate.summary),
+        },
+        reconstruction,
+    )
+}
+
+fn model_temporal_predictor(
+    plane: &Plane16,
+    reference: &Plane16,
+    tile: Tile,
+    quantizer: &Quantizer16,
+) -> ModeledPredictor {
+    let width = tile.width as usize;
+    let height = tile.height as usize;
+    let plane_width = plane.width as usize;
+    let origin_x = tile.x as usize;
+    let origin_y = tile.y as usize;
+    let mut folded = Vec::with_capacity(width * height);
+    let mut reconstruction = Vec::with_capacity(width * height);
+    let mut squared_error = 0u64;
+    let mut max_error = 0u32;
+    for y in 0..height {
+        let start = (origin_y + y) * plane_width + origin_x;
+        for (&sample, &prediction) in plane.data[start..start + width]
+            .iter()
+            .zip(&reference.data[start..start + width])
+        {
+            let prediction = i32::from(prediction);
+            let quantized = quantizer.quantize(i32::from(sample) - prediction);
+            let reconstructed =
+                (prediction + quantized * quantizer.step).clamp(0, quantizer.max_sample);
+            let error = i64::from(sample) - i64::from(reconstructed);
+            squared_error += (error * error) as u64;
+            max_error = max_error.max(error.unsigned_abs() as u32);
+            reconstruction.push(reconstructed as u16);
+            folded.push(zigzag(quantized));
+        }
+    }
+    candidate_model(
+        finish_entropy(folded, PREDICT_TEMPORAL),
+        squared_error,
+        max_error,
+        reconstruction,
+    )
+}
+
+fn model_spatial_predictor(
+    plane: &Plane16,
+    tile: Tile,
+    quantizer: &Quantizer16,
+    mode: SpatialPredictor,
+) -> ModeledPredictor {
+    let width = tile.width as usize;
+    let height = tile.height as usize;
+    let plane_width = plane.width as usize;
+    let origin_x = tile.x as usize;
+    let origin_y = tile.y as usize;
+    let mut reconstructed_row = vec![0u16; width];
+    let mut folded = Vec::with_capacity(width * height);
+    let mut reconstruction = Vec::with_capacity(width * height);
+    let mut squared_error = 0u64;
+    let mut max_error = 0u32;
+    for y in 0..height {
+        let row_start = (origin_y + y) * plane_width + origin_x;
+        let mut left = 0;
+        let mut upper_left = 0;
+        for (&sample, reconstructed_slot) in plane.data[row_start..row_start + width]
+            .iter()
+            .zip(&mut reconstructed_row)
+        {
+            let above = *reconstructed_slot;
+            let prediction = i32::from(spatial_prediction(
+                mode,
+                left,
+                above,
+                upper_left,
+                quantizer.max_sample as u16,
+            ));
+            let quantized = quantizer.quantize(i32::from(sample) - prediction);
+            let reconstructed =
+                (prediction + quantized * quantizer.step).clamp(0, quantizer.max_sample) as u16;
+            let error = i64::from(sample) - i64::from(reconstructed);
+            squared_error += (error * error) as u64;
+            max_error = max_error.max(error.unsigned_abs() as u32);
+            reconstruction.push(reconstructed);
+            *reconstructed_slot = reconstructed;
+            upper_left = above;
+            left = reconstructed;
+            folded.push(zigzag(quantized));
+        }
+    }
+    candidate_model(
+        finish_entropy(folded, spatial_prediction_mode(mode)),
+        squared_error,
+        max_error,
+        reconstruction,
+    )
+}
+
+fn candidate_model(
+    encoded: EncodedTile,
+    squared_error: u64,
+    max_error: u32,
+    reconstruction: Vec<u16>,
+) -> ModeledPredictor {
+    ModeledPredictor {
+        summary: PredictorCandidateModel {
+            payload_bytes: encoded.payload.len(),
+            squared_error,
+            max_error,
+            zero_run: encoded.entropy_mode == ENTROPY_ZERO_RUN,
+        },
+        reconstruction,
+        #[cfg(test)]
+        encoded,
+    }
+}
+
+fn spatial_prediction_mode(mode: SpatialPredictor) -> u8 {
+    match mode {
+        SpatialPredictor::Paeth => PREDICT_SPATIAL,
+        SpatialPredictor::Average => PREDICT_AVERAGE,
+        SpatialPredictor::ClampGradient => PREDICT_CLAMP_GRADIENT,
+        SpatialPredictor::HalfGradient => PREDICT_HALF_GRADIENT,
+    }
+}
+
+#[cfg(test)]
+fn predictor_model_mode_code(mode: PredictorModelMode) -> u8 {
+    match mode {
+        PredictorModelMode::Paeth => PREDICT_SPATIAL,
+        PredictorModelMode::Average => PREDICT_AVERAGE,
+        PredictorModelMode::ClampGradient => PREDICT_CLAMP_GRADIENT,
+        PredictorModelMode::HalfGradient => PREDICT_HALF_GRADIENT,
+        PredictorModelMode::Temporal => PREDICT_TEMPORAL,
+    }
+}
+
+fn spatial_prediction(
+    mode: SpatialPredictor,
+    left: u16,
+    above: u16,
+    upper_left: u16,
+    max_sample: u16,
+) -> u16 {
+    match mode {
+        SpatialPredictor::Paeth => paeth(left, above, upper_left),
+        SpatialPredictor::Average => ((u32::from(left) + u32::from(above)) / 2) as u16,
+        SpatialPredictor::ClampGradient => (i32::from(left) + i32::from(above)
+            - i32::from(upper_left))
+        .clamp(0, i32::from(max_sample)) as u16,
+        SpatialPredictor::HalfGradient => {
+            let average = (i32::from(left) + i32::from(above)) / 2;
+            (average + (average - i32::from(upper_left)) / 2).clamp(0, i32::from(max_sample)) as u16
+        }
+    }
+}
+
+fn model_bounded_temporal_tile(
+    plane: &Plane16,
+    reference: &Plane16,
+    tile: Tile,
+    quantizer: &Quantizer16,
+) -> (u8, usize) {
+    let width = tile.width as usize;
+    let height = tile.height as usize;
+    let plane_width = plane.width as usize;
+    let origin_x = tile.x as usize;
+    let origin_y = tile.y as usize;
+    let mut folded = Vec::with_capacity(width * height);
+    for y in 0..height {
+        let start = (origin_y + y) * plane_width + origin_x;
+        for (&sample, &prediction) in plane.data[start..start + width]
+            .iter()
+            .zip(&reference.data[start..start + width])
+        {
+            let prediction = i32::from(prediction);
+            let quantized = quantizer.quantize(i32::from(sample) - prediction);
+            folded.push(fold_bounded_residual(
+                quantized,
+                quantizer.quantize(-prediction),
+                quantizer.quantize(quantizer.max_sample - prediction),
+            ));
+        }
+    }
+    modeled_entropy_cost(&folded)
+}
+
+fn model_bounded_spatial_tile(plane: &Plane16, tile: Tile, quantizer: &Quantizer16) -> (u8, usize) {
+    let width = tile.width as usize;
+    let height = tile.height as usize;
+    let plane_width = plane.width as usize;
+    let origin_x = tile.x as usize;
+    let origin_y = tile.y as usize;
+    let mut reconstructed_row = vec![0u16; width];
+    let mut folded = Vec::with_capacity(width * height);
+    for y in 0..height {
+        let row_start = (origin_y + y) * plane_width + origin_x;
+        let mut left = 0;
+        let mut upper_left = 0;
+        for (&sample, reconstructed_slot) in plane.data[row_start..row_start + width]
+            .iter()
+            .zip(&mut reconstructed_row)
+        {
+            let above = *reconstructed_slot;
+            let prediction = i32::from(paeth(left, above, upper_left));
+            let quantized = quantizer.quantize(i32::from(sample) - prediction);
+            let reconstructed =
+                (prediction + quantized * quantizer.step).clamp(0, quantizer.max_sample) as u16;
+            *reconstructed_slot = reconstructed;
+            upper_left = above;
+            left = reconstructed;
+            folded.push(fold_bounded_residual(
+                quantized,
+                quantizer.quantize(-prediction),
+                quantizer.quantize(quantizer.max_sample - prediction),
+            ));
+        }
+    }
+    modeled_entropy_cost(&folded)
+}
+
+fn modeled_entropy_cost(folded: &[u32]) -> (u8, usize) {
+    let mut zero_run_bytes = 0usize;
+    let mut zero_run = 0u32;
+    for &value in folded {
+        if value == 0 {
+            zero_run += 1;
+        } else {
+            count_zero_run(&mut zero_run_bytes, &mut zero_run);
+            zero_run_bytes += varint_length(value * 2 - 1);
+        }
+    }
+    count_zero_run(&mut zero_run_bytes, &mut zero_run);
+    let (parameter, rice_bits) = best_rice_parameter(folded);
+    let rice_bytes = usize::try_from(rice_bits.div_ceil(8)).expect("modeled tile size fits usize");
+    if rice_bytes >= zero_run_bytes {
+        (ENTROPY_ZERO_RUN, zero_run_bytes)
+    } else {
+        (ENTROPY_RICE_BASE + parameter, rice_bytes)
+    }
 }
 
 fn finish_entropy(folded: Vec<u32>, prediction_mode: u8) -> EncodedTile {
@@ -809,10 +1463,15 @@ fn decode_zero_run(
                 copy_temporal_zero_run(&mut output, index, end, width, context)?;
                 index = end;
             } else {
-                while index < end {
-                    reconstruct(&mut output, index, width, 0, step, context, max_sample)?;
-                    index += 1;
-                }
+                reconstruct_spatial_zero_run(
+                    &mut output,
+                    index,
+                    end,
+                    width,
+                    context.mode,
+                    max_sample,
+                )?;
+                index = end;
             }
         } else {
             let folded = token.div_ceil(2);
@@ -835,6 +1494,75 @@ fn decode_zero_run(
         return Err(CodecError::Malformed("trailing tile payload bytes"));
     }
     Ok(output)
+}
+
+fn reconstruct_spatial_zero_run(
+    output: &mut [u16],
+    start: usize,
+    end: usize,
+    width: usize,
+    prediction_mode: u8,
+    max_sample: u16,
+) -> Result<(), CodecError> {
+    match spatial_predictor_from_mode(prediction_mode)? {
+        SpatialPredictor::Paeth => {
+            reconstruct_spatial_zero_run_with(output, start, end, width, paeth)
+        }
+        SpatialPredictor::Average => {
+            reconstruct_spatial_zero_run_with(output, start, end, width, |left, above, _| {
+                ((u32::from(left) + u32::from(above)) / 2) as u16
+            })
+        }
+        SpatialPredictor::ClampGradient => reconstruct_spatial_zero_run_with(
+            output,
+            start,
+            end,
+            width,
+            |left, above, upper_left| {
+                (i32::from(left) + i32::from(above) - i32::from(upper_left))
+                    .clamp(0, i32::from(max_sample)) as u16
+            },
+        ),
+        SpatialPredictor::HalfGradient => reconstruct_spatial_zero_run_with(
+            output,
+            start,
+            end,
+            width,
+            |left, above, upper_left| {
+                let average = (i32::from(left) + i32::from(above)) / 2;
+                (average + (average - i32::from(upper_left)) / 2).clamp(0, i32::from(max_sample))
+                    as u16
+            },
+        ),
+    }
+    Ok(())
+}
+
+fn reconstruct_spatial_zero_run_with(
+    output: &mut [u16],
+    mut start: usize,
+    end: usize,
+    width: usize,
+    predict: impl Fn(u16, u16, u16) -> u16,
+) {
+    while start < end {
+        let x = start % width;
+        let y = start / width;
+        let span = (width - x).min(end - start);
+        for offset in 0..span {
+            let index = start + offset;
+            let column = x + offset;
+            let left = if column > 0 { output[index - 1] } else { 0 };
+            let above = if y > 0 { output[index - width] } else { 0 };
+            let upper_left = if column > 0 && y > 0 {
+                output[index - width - 1]
+            } else {
+                0
+            };
+            output[index] = predict(left, above, upper_left);
+        }
+        start += span;
+    }
 }
 
 fn copy_temporal_zero_run(
@@ -898,26 +1626,44 @@ fn reconstruct(
 ) -> Result<(), CodecError> {
     let x = index % width;
     let y = index / width;
-    let prediction = if context.mode == PREDICT_TEMPORAL {
-        let reference = context.reference.ok_or(CodecError::InvalidInput(
-            "predicted frame requires a reference",
-        ))?;
-        let source =
-            (context.tile.y as usize + y) * reference.width as usize + context.tile.x as usize + x;
-        reference.data[source]
+    let left = if x > 0 { output[index - 1] } else { 0 };
+    let above = if y > 0 { output[index - width] } else { 0 };
+    let upper_left = if x > 0 && y > 0 {
+        output[index - width - 1]
     } else {
-        let left = if x > 0 { output[index - 1] } else { 0 };
-        let above = if y > 0 { output[index - width] } else { 0 };
-        let upper_left = if x > 0 && y > 0 {
-            output[index - width - 1]
-        } else {
-            0
-        };
-        paeth(left, above, upper_left)
+        0
+    };
+    let prediction = match context.mode {
+        PREDICT_TEMPORAL => {
+            let reference = context.reference.ok_or(CodecError::InvalidInput(
+                "predicted frame requires a reference",
+            ))?;
+            let source = (context.tile.y as usize + y) * reference.width as usize
+                + context.tile.x as usize
+                + x;
+            reference.data[source]
+        }
+        mode => spatial_prediction(
+            spatial_predictor_from_mode(mode)?,
+            left,
+            above,
+            upper_left,
+            max_sample,
+        ),
     };
     output[index] =
         (i32::from(prediction) + quantized * step).clamp(0, i32::from(max_sample)) as u16;
     Ok(())
+}
+
+fn spatial_predictor_from_mode(mode: u8) -> Result<SpatialPredictor, CodecError> {
+    match mode {
+        PREDICT_SPATIAL => Ok(SpatialPredictor::Paeth),
+        PREDICT_AVERAGE => Ok(SpatialPredictor::Average),
+        PREDICT_CLAMP_GRADIENT => Ok(SpatialPredictor::ClampGradient),
+        PREDICT_HALF_GRADIENT => Ok(SpatialPredictor::HalfGradient),
+        _ => Err(CodecError::Malformed("unknown tile prediction mode")),
+    }
 }
 
 fn paeth(left: u16, above: u16, upper_left: u16) -> u16 {
@@ -1542,5 +2288,239 @@ mod tests {
                 best_rice_parameter_full_scan(&mixed)
             );
         }
+    }
+
+    #[test]
+    fn residual_mapping_model_matches_current_high_bit_tile_payloads() {
+        let reference = patterned_frame(12, true);
+        let mut frame = reference.clone();
+        for plane in &mut frame.planes {
+            for (index, sample) in plane.data.iter_mut().enumerate() {
+                if index % 31 == 0 {
+                    *sample = sample.saturating_add(1).min(4095);
+                }
+            }
+        }
+        let options = CodecOptions {
+            quality: 90,
+            tile_width: 16,
+            tile_height: 15,
+            threads: 2,
+        };
+        for reference in [None, Some(&reference)] {
+            let selected = reference.filter(|reference| {
+                let threshold = 5u64 << (frame.bit_depth() - 8);
+                frame.planes[0]
+                    .data
+                    .iter()
+                    .zip(&reference.planes[0].data)
+                    .map(|(&current, &previous)| u64::from(current.abs_diff(previous)))
+                    .sum::<u64>()
+                    <= frame.planes[0].data.len() as u64 * threshold
+            });
+            let tiles = expected_tiles(
+                frame.width,
+                frame.height,
+                frame.format,
+                options.tile_width,
+                options.tile_height,
+            )
+            .unwrap();
+            let quantizer = Quantizer16::new(
+                quantization_step(options.quality, frame.bit_depth()),
+                frame.bit_depth(),
+            );
+            let models = analyze_residual_mapping16(&frame, reference, options).unwrap();
+            for (model, tile) in models.iter().zip(&tiles) {
+                let expected = encode_tile(
+                    &frame.planes[tile.plane],
+                    selected.map(|frame| &frame.planes[tile.plane]),
+                    *tile,
+                    &quantizer,
+                );
+                assert_eq!(model.actual_payload_bytes, expected.payload.len());
+                assert_eq!(
+                    model.source_zero_run,
+                    expected.entropy_mode == ENTROPY_ZERO_RUN
+                );
+                assert_eq!(
+                    model.temporal_prediction,
+                    expected.prediction_mode == PREDICT_TEMPORAL
+                );
+                assert!(model.bounded_payload_bytes > 0);
+            }
+        }
+    }
+
+    #[test]
+    fn predictor_oracle_matches_current_high_bit_payloads_and_error_bound() {
+        let reference = patterned_frame(12, true);
+        let mut frame = reference.clone();
+        for plane in &mut frame.planes {
+            for (index, sample) in plane.data.iter_mut().enumerate() {
+                if index % 31 == 0 {
+                    *sample = sample.saturating_add(1).min(4095);
+                }
+            }
+        }
+        for quality in [90, 100] {
+            let options = CodecOptions {
+                quality,
+                tile_width: 16,
+                tile_height: 15,
+                threads: 2,
+            };
+            for reference in [None, Some(&reference)] {
+                let encoded = if let Some(reference) = reference {
+                    encode16_with_reference(&frame, reference, options).unwrap()
+                } else {
+                    encode16(&frame, options).unwrap()
+                };
+                let parsed = parse(&encoded).unwrap();
+                let models = analyze_predictors16(&frame, reference, options).unwrap();
+                let error_bound = (quantization_step(quality, 12) / 2) as u32;
+                for (model, entry) in models.iter().zip(&parsed.entries) {
+                    assert_eq!(model.oracle.payload_bytes, entry.length);
+                    assert_eq!(
+                        model.oracle.zero_run,
+                        entry.entropy_mode == ENTROPY_ZERO_RUN
+                    );
+                    assert_eq!(
+                        predictor_model_mode_code(model.oracle_mode),
+                        entry.prediction_mode
+                    );
+                    for candidate in [
+                        Some(model.paeth),
+                        Some(model.average),
+                        Some(model.clamp_gradient),
+                        Some(model.half_gradient),
+                        model.temporal,
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        assert!(candidate.max_error <= error_bound);
+                        if quality == 100 {
+                            assert_eq!(candidate.squared_error, 0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn compatible_high_bit_predictors_cover_extrema() {
+        for bit_depth in [10, 12, 16] {
+            let maximum = sample_max(bit_depth).unwrap();
+            for left in [0, 1, maximum / 2, maximum - 1, maximum] {
+                for above in [0, 1, maximum / 2, maximum - 1, maximum] {
+                    for upper_left in [0, maximum] {
+                        assert!(
+                            spatial_prediction(
+                                SpatialPredictor::Average,
+                                left,
+                                above,
+                                upper_left,
+                                maximum
+                            ) <= maximum
+                        );
+                        assert!(
+                            spatial_prediction(
+                                SpatialPredictor::ClampGradient,
+                                left,
+                                above,
+                                upper_left,
+                                maximum
+                            ) <= maximum
+                        );
+                        assert!(
+                            spatial_prediction(
+                                SpatialPredictor::HalfGradient,
+                                left,
+                                above,
+                                upper_left,
+                                maximum
+                            ) <= maximum
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn high_bit_predictor_oracle_propagates_exact_q100_reconstruction() {
+        let first = patterned_frame(12, true);
+        let mut second = first.clone();
+        for plane in &mut second.planes {
+            for (index, sample) in plane.data.iter_mut().enumerate() {
+                if index % 19 == 0 {
+                    *sample = sample.saturating_add(2).min(4095);
+                }
+            }
+        }
+        let options = CodecOptions {
+            quality: 100,
+            tile_width: 16,
+            tile_height: 15,
+            threads: 1,
+        };
+        let (_, first_oracle) = analyze_predictor_frame16(&first, None, None, options).unwrap();
+        assert_eq!(first_oracle, first);
+        let (_, second_oracle) =
+            analyze_predictor_frame16(&second, Some(&first), Some(&first_oracle), options).unwrap();
+        assert_eq!(second_oracle, second);
+    }
+
+    #[test]
+    fn every_high_bit_version_two_spatial_mode_decodes_individual_tiles() {
+        let frame = patterned_frame(12, true);
+        let tile = Tile {
+            plane: 0,
+            x: 0,
+            y: 0,
+            width: frame.planes[0].width,
+            height: frame.planes[0].height,
+        };
+        let quantizer = Quantizer16::new(1, 12);
+        for mode in [
+            SpatialPredictor::Paeth,
+            SpatialPredictor::Average,
+            SpatialPredictor::ClampGradient,
+            SpatialPredictor::HalfGradient,
+        ] {
+            let modeled = model_spatial_predictor(&frame.planes[0], tile, &quantizer, mode);
+            let decoded = decode_tile_payload(
+                tile,
+                &modeled.encoded.payload,
+                1,
+                modeled.encoded.entropy_mode,
+                modeled.encoded.prediction_mode,
+                None,
+                4095,
+            )
+            .unwrap();
+            assert_eq!(decoded, modeled.reconstruction);
+        }
+    }
+
+    #[test]
+    fn high_bit_legacy_version_accepts_only_legacy_modes() {
+        let frame = Frame16::gray(1, 1, 12, FrameRate::new(24, 1), vec![17]).unwrap();
+        let mut legacy = encode16(
+            &frame,
+            CodecOptions {
+                quality: 100,
+                ..CodecOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(legacy[HEADER_LEN + 2], PREDICT_SPATIAL);
+        legacy[4] = LEGACY_VERSION;
+        assert_eq!(decode16(&legacy, 1).unwrap(), frame);
+
+        legacy[HEADER_LEN + 2] = PREDICT_AVERAGE;
+        assert!(decode16(&legacy, 1).is_err());
     }
 }

@@ -74,4 +74,45 @@ theorem max_folded_12 : 2 * sampleMax 12 = 8190 := by
 theorem max_folded_16 : 2 * sampleMax 16 = 131070 := by
   decide
 
+/-- Version-two tile predictor domain. -/
+inductive PredictionMode
+  | paeth
+  | temporal
+  | average
+  | clampGradient
+  | halfGradient
+  deriving DecidableEq, Repr
+
+/-- Version-two prediction-mode byte mapping. -/
+def predictionModeCode : PredictionMode → Nat
+  | .paeth => 0
+  | .temporal => 1
+  | .average => 2
+  | .clampGradient => 3
+  | .halfGradient => 4
+
+theorem prediction_mode_code_bound (mode : PredictionMode) :
+    predictionModeCode mode ≤ 4 := by
+  cases mode <;> decide
+
+/-- Integer average used by the version-two average predictor. -/
+def average2 (left above : Nat) : Nat := (left + above) / 2
+
+theorem average2_bound (left above maximum : Nat)
+    (hl : left ≤ maximum) (ha : above ≤ maximum) :
+    average2 left above ≤ maximum := by
+  simp only [average2]
+  omega
+
+/-- Clamp a signed prediction to the unsigned sample interval. -/
+def clampSample (prediction : Int) (maximum : Nat) : Nat :=
+  if prediction < 0 then 0 else min prediction.toNat maximum
+
+theorem clamp_sample_bound (prediction : Int) (maximum : Nat) :
+    clampSample prediction maximum ≤ maximum := by
+  simp only [clampSample]
+  split
+  · omega
+  · exact Nat.min_le_right _ _
+
 end Fastvid

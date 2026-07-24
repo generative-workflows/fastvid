@@ -1,6 +1,6 @@
 # Fastvid evaluation methodology
 
-Version: 5 (2026-07-23)
+Version: 7 (2026-07-24)
 
 This document defines the standard target used to evaluate Fastvid changes.
 Experiments may add diagnostics or deliberately diverge, but an optimization
@@ -219,7 +219,10 @@ Direct performance comparisons should use separately preserved binaries and
 runs first and second equally often within every sample/settings cell.
 Native high-bit comparisons use `scripts/benchmark-ab-high-bit.sh`, the
 checksummed high-bit manifest, and the same balanced-order rule. High-bit and
-8-bit geomeans remain separate.
+8-bit geomeans remain separate. Native high-bit single-frame-access
+comparisons use `scripts/benchmark-access-high-bit-ab.sh`; it uses the same
+target indices, warm-cache codec-only boundary, balanced order, and
+per-bit-depth separation as the 8-bit access protocol.
 
 Before preserving a candidate, run `cargo build --release` explicitly:
 `cargo test --release` builds test executables but does not guarantee that the
@@ -228,6 +231,45 @@ preserved binaries and require distinct hashes whenever the candidate changes
 code reachable by the CLI. Also record an exact-stream control hash. A stale
 or identical candidate binary invalidates performance conclusions and must be
 corrected by a new experiment record rather than silently reused.
+
+## Exploration, exploitation, and the codec frontier
+
+Fastvid maintains a portfolio rather than optimizing only the most recently
+accepted implementation. The current 2--3 version registry is
+[`FRONTIER.md`](FRONTIER.md), with slots for:
+
+1. a balanced accepted line;
+2. a compression-oriented line that accepts a documented speed cost; and
+3. a throughput-oriented line that preserves rate and quality within its
+   declared tolerances.
+
+A slot may be vacant when no distinct candidate is non-dominated. Rejected or
+strictly dominated versions are not promoted merely to fill a slot. Frontier
+source is retained by an exact Git commit or source-archive hash; every entry
+also records a distinct release-binary hash, exact-stream controls, experiment
+evidence, and benchmark artifact hashes.
+
+In every rolling group of six optimization experiments, at least two must be
+**exploration** of a materially different technique family and at least two
+must be **exploitation** of a measured frontier bottleneck. The remaining two
+follow the strongest evidence. Predictor families, residual representations,
+entropy formats, color transforms, temporal structures, and tile structures
+count as distinct exploration families. Parameter tweaks and additional
+implementations of the same hot loop count as exploitation.
+
+Exploration starts with a cheap oracle, exact byte model, or microbenchmark.
+It advances to focused confirmation only after a predeclared gate passes.
+This keeps the search broad without spending full-corpus CPU time on weak
+ideas. Exploitation uses profiles and preserved-binary A/B tests against the
+specific frontier slot it intends to improve.
+
+At matched settings, a candidate is dominated only when another version is no
+worse in complete encoded bytes, quality, encode speed, decode speed, and
+single-frame access outside the standard measurement tolerance, and
+materially better in at least one. The default comparison tolerances are 1%
+for encoded bytes, 5% for timing, and exact q100 reconstruction. Deliberate
+quality/rate tradeoffs must declare their operating point and cannot be
+compared as if controls were equivalent.
 
 ## Single-frame access measurements
 

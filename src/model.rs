@@ -435,6 +435,94 @@ pub struct TileEntropyModel {
     pub stream_vbyte_0124_bytes: u64,
 }
 
+/// Read-only size model for predictor-bounded residual symbols in one tile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TileResidualMappingModel {
+    pub plane: usize,
+    pub width: u32,
+    pub height: u32,
+    pub temporal_prediction: bool,
+    pub source_zero_run: bool,
+    pub bounded_zero_run: bool,
+    pub sample_count: usize,
+    pub actual_payload_bytes: usize,
+    pub bounded_payload_bytes: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PredictorModelMode {
+    Paeth,
+    Average,
+    ClampGradient,
+    HalfGradient,
+    Temporal,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PredictorCandidateModel {
+    pub payload_bytes: usize,
+    pub squared_error: u64,
+    pub max_error: u32,
+    pub zero_run: bool,
+}
+
+/// Read-only exact-byte model for one tile's compatible predictor candidates.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TilePredictorModel {
+    pub plane: usize,
+    pub width: u32,
+    pub height: u32,
+    pub sample_count: usize,
+    pub current_mode: PredictorModelMode,
+    pub oracle_mode: PredictorModelMode,
+    pub current: PredictorCandidateModel,
+    pub oracle: PredictorCandidateModel,
+    pub paeth: PredictorCandidateModel,
+    pub average: PredictorCandidateModel,
+    pub clamp_gradient: PredictorCandidateModel,
+    pub half_gradient: PredictorCandidateModel,
+    pub temporal: Option<PredictorCandidateModel>,
+}
+
+// research/0023: once a causal prediction is known, only residuals in
+// [lower, upper] can occur. Alternate signs while both remain possible, then
+// encode the sole remaining side contiguously.
+pub(crate) fn fold_bounded_residual(value: i32, lower: i32, upper: i32) -> u32 {
+    debug_assert!(lower <= value && value <= upper);
+    debug_assert!(lower <= 0 && upper >= 0);
+    let paired_magnitude = (-lower).min(upper);
+    if value < -paired_magnitude || value > paired_magnitude {
+        (paired_magnitude + value.abs()) as u32
+    } else if value >= 0 {
+        value as u32 * 2
+    } else {
+        value.unsigned_abs() * 2 - 1
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn unfold_bounded_residual(folded: u32, lower: i32, upper: i32) -> Option<i32> {
+    if lower > 0 || upper < 0 || folded > (upper - lower) as u32 {
+        return None;
+    }
+    let paired_magnitude = (-lower).min(upper);
+    let paired_codes = paired_magnitude as u32 * 2;
+    let value = if folded <= paired_codes {
+        if folded & 1 == 0 {
+            (folded / 2) as i32
+        } else {
+            -((folded / 2) as i32) - 1
+        }
+    } else if -lower < upper {
+        folded as i32 - paired_magnitude
+    } else if upper < -lower {
+        -(folded as i32 - paired_magnitude)
+    } else {
+        return None;
+    };
+    (lower..=upper).contains(&value).then_some(value)
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ByteFormatModel {
     symbols: u64,
@@ -581,5 +669,52 @@ mod tests {
         partial.push_zeros(5);
         assert_eq!(partial.stream_vbyte_bytes(), 7);
         assert_eq!(partial.stream_vbyte_0124_bytes(), 2);
+    }
+
+    #[test]
+    fn bounded_residual_mapping_is_bijective_for_every_8bit_encoder_interval() {
+        fn quantize(value: i32, step: i32) -> i32 {
+            let magnitude = (value.abs() + step / 2) / step;
+            if value < 0 { -magnitude } else { magnitude }
+        }
+
+        for step in 1..=21 {
+            for prediction in 0..=255 {
+                let lower = quantize(-prediction, step);
+                let upper = quantize(255 - prediction, step);
+                let mut seen = vec![false; (upper - lower + 1) as usize];
+                for value in lower..=upper {
+                    let folded = fold_bounded_residual(value, lower, upper);
+                    assert!(folded <= (upper - lower) as u32);
+                    assert_eq!(unfold_bounded_residual(folded, lower, upper), Some(value));
+                    assert!(!std::mem::replace(&mut seen[folded as usize], true));
+                }
+                assert!(seen.into_iter().all(|value| value));
+                assert_eq!(fold_bounded_residual(0, lower, upper), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn bounded_residual_mapping_covers_high_bit_endpoints() {
+        fn quantize(value: i32, step: i32) -> i32 {
+            let magnitude = (value.abs() + step / 2) / step;
+            if value < 0 { -magnitude } else { magnitude }
+        }
+
+        for bit_depth in [10, 12, 16] {
+            let maximum = i32::from(sample_max(bit_depth).unwrap());
+            for step in [1, 1 + (2 << (bit_depth - 8))] {
+                for prediction in [0, 1, maximum / 2, maximum - 1, maximum] {
+                    let lower = quantize(-prediction, step);
+                    let upper = quantize(maximum - prediction, step);
+                    for value in lower..=upper {
+                        let folded = fold_bounded_residual(value, lower, upper);
+                        assert!(folded <= (upper - lower) as u32);
+                        assert_eq!(unfold_bounded_residual(folded, lower, upper), Some(value));
+                    }
+                }
+            }
+        }
     }
 }

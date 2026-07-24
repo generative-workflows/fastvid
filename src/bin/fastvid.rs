@@ -28,6 +28,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Some("benchmark-yuv422p16le") => benchmark_yuv422p16le(&arguments[2..]),
         Some("metrics-yuv422p16le") => metrics_yuv422p16le(&arguments[2..]),
         Some("benchmark-access-yuv422") => benchmark_access_yuv422(&arguments[2..]),
+        Some("benchmark-access-yuv422p16le") => benchmark_access_yuv422p16le(&arguments[2..]),
         Some("decode") => decode_file(&arguments[2..]),
         Some("decode16") => decode16_file(&arguments[2..]),
         Some("inspect") => inspect_file(&arguments[2..]),
@@ -684,6 +685,139 @@ fn benchmark_access_yuv422(arguments: &[String]) -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
+fn benchmark_access_yuv422p16le(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    // Codec-only warm-cache random access for native high-bit input. Source
+    // I/O and sequence encoding remain outside the timed region.
+    if arguments.len() != 10 {
+        return Err(
+            "benchmark-access-yuv422p16le needs INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES BIT_DEPTH QUALITY THREADS GOP TARGETS"
+                .into(),
+        );
+    }
+    let input = &arguments[0];
+    let width: u32 = arguments[1].parse()?;
+    let height: u32 = arguments[2].parse()?;
+    let (fps_numerator, fps_denominator) = parse_rate(&arguments[3])?;
+    let frame_count: usize = arguments[4].parse()?;
+    let bit_depth: u8 = arguments[5].parse()?;
+    let quality: u8 = arguments[6].parse()?;
+    let threads: usize = arguments[7].parse()?;
+    let gop: usize = arguments[8].parse()?;
+    let mut targets = Vec::new();
+    for value in arguments[9].split(',') {
+        let target: usize = value.parse()?;
+        if !targets.contains(&target) {
+            targets.push(target);
+        }
+    }
+    targets.sort_unstable();
+    if frame_count == 0 || gop == 0 {
+        return Err("frame count and GOP must be nonzero".into());
+    }
+    if targets.is_empty() || targets.iter().any(|&target| target >= frame_count) {
+        return Err("target frame is out of range".into());
+    }
+    let raw = fs::read(input)?;
+    let frame_len = yuv422_sample_count(width, height)?
+        .checked_mul(size_of::<u16>())
+        .ok_or("frame is too large")?;
+    if raw.len()
+        != frame_len
+            .checked_mul(frame_count)
+            .ok_or("input is too large")?
+    {
+        return Err("input length does not match the declared YUV422p16le sequence".into());
+    }
+
+    let frame_rate = FrameRate::new(fps_numerator, fps_denominator);
+    let options = CodecOptions {
+        quality,
+        threads,
+        ..CodecOptions::default()
+    };
+    let mut encoded_frames = Vec::with_capacity(frame_count);
+    let mut previous = None;
+    let mut expected_targets = vec![None; frame_count];
+    for (frame_index, bytes) in raw.chunks_exact(frame_len).enumerate() {
+        let frame = frame16_from_yuv422le(bytes, width, height, bit_depth, frame_rate)?;
+        let predicted = frame_index % gop != 0;
+        let encoded = if predicted {
+            encode16_with_reference(
+                &frame,
+                previous
+                    .as_ref()
+                    .expect("non-key frame has a preceding decoded frame"),
+                options,
+            )?
+        } else {
+            encode16(&frame, options)?
+        };
+        let decoded = if predicted {
+            decode16_with_reference(
+                &encoded,
+                previous
+                    .as_ref()
+                    .expect("non-key frame has a preceding decoded frame"),
+                threads,
+            )?
+        } else {
+            decode16(&encoded, threads)?
+        };
+        if targets.binary_search(&frame_index).is_ok() {
+            expected_targets[frame_index] = Some(decoded.clone());
+        }
+        encoded_frames.push(encoded);
+        previous = Some(decoded);
+    }
+
+    let target_megapixels = f64::from(width) * f64::from(height) / 1_000_000.0;
+    println!(
+        "input\ttarget_frame\tkeyframe_frame\tdependency_frames\tdecoded_frames\tbit_depth\tquality\tthreads\tgop\tencoded_bytes_read\taccess_ms\tuseful_mpps\twork_mpps\tuseful_raw_mb_s\taccess_amplification"
+    );
+    for target in targets {
+        let keyframe = target / gop * gop;
+        let encoded_bytes_read =
+            encoded_frames[keyframe..=target]
+                .iter()
+                .try_fold(0usize, |sum, encoded| {
+                    sum.checked_add(encoded.len())
+                        .ok_or("access byte count is too large")
+                })?;
+        let start = Instant::now();
+        let mut reference = None;
+        for (frame_index, encoded) in encoded_frames[keyframe..=target].iter().enumerate() {
+            let absolute_index = keyframe + frame_index;
+            let decoded = if absolute_index.is_multiple_of(gop) {
+                decode16(encoded, threads)?
+            } else {
+                decode16_with_reference(
+                    encoded,
+                    reference
+                        .as_ref()
+                        .expect("predicted target has a preceding decoded frame"),
+                    threads,
+                )?
+            };
+            reference = Some(decoded);
+        }
+        let access_seconds = start.elapsed().as_secs_f64();
+        if reference.as_ref() != expected_targets[target].as_ref() {
+            return Err("random-access reconstruction differs from sequential decode".into());
+        }
+        let dependency_frames = target - keyframe;
+        let decoded_frames = dependency_frames + 1;
+        let useful_mpps = target_megapixels / access_seconds;
+        let work_mpps = target_megapixels * decoded_frames as f64 / access_seconds;
+        let useful_raw_mb_s = frame_len as f64 / access_seconds / 1_000_000.0;
+        println!(
+            "{input}\t{target}\t{keyframe}\t{dependency_frames}\t{decoded_frames}\t{bit_depth}\t{quality}\t{threads}\t{gop}\t{encoded_bytes_read}\t{:.3}\t{useful_mpps:.3}\t{work_mpps:.3}\t{useful_raw_mb_s:.3}\t{:.3}",
+            access_seconds * 1000.0,
+            decoded_frames as f64,
+        );
+    }
+    Ok(())
+}
+
 fn frame_from_yuv422(
     raw: &[u8],
     width: u32,
@@ -860,6 +994,7 @@ USAGE:
   fastvid benchmark-yuv422p16le INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES BIT_DEPTH QUALITY THREADS [GOP]
   fastvid metrics-yuv422p16le REFERENCE DECODED WIDTH HEIGHT FRAMES BIT_DEPTH
   fastvid benchmark-access-yuv422 INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES QUALITY THREADS GOP TARGETS
+  fastvid benchmark-access-yuv422p16le INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES BIT_DEPTH QUALITY THREADS GOP TARGETS
   fastvid decode INPUT OUTPUT THREADS
   fastvid decode16 INPUT OUTPUT THREADS
   fastvid inspect INPUT
