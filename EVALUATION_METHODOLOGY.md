@@ -247,23 +247,24 @@ corrected by a new experiment record rather than silently reused.
 ## Exploration, exploitation, and the codec frontier
 
 Fastvid maintains a portfolio rather than optimizing only the most recently
-accepted implementation. The current registry keeps at most four distinct
-active versions across four named roles and is
+accepted implementation. The current registry keeps two or three distinct
+active versions and is
 [`FRONTIER.md`](FRONTIER.md), with slots for:
 
-1. a balanced accepted line;
+1. a throughput-oriented line with an explicit, measured rate/quality
+   tradeoff;
 2. a practical compression line that accepts a bounded, documented speed
    cost;
-3. a maximum-compression line for a more aggressive rate/speed tradeoff; and
-4. a throughput-oriented line with an explicit, measured rate/quality
-   tradeoff.
+3. a maximum-compression line for a more aggressive rate/speed tradeoff.
 
 A role may be vacant when no distinct candidate is non-dominated, and one
-version is not duplicated under multiple roles. Rejected or strictly
-dominated versions are not promoted merely to fill a role. Frontier source is
-retained by an exact Git commit or source-archive hash; every entry also
-records a distinct release-binary hash, exact-stream controls, experiment
-evidence, and benchmark artifact hashes.
+version is not duplicated under multiple roles. Historical knees may be
+retired when a stronger representative makes their confirmation cost
+disproportionate to the tradeoff they add. Rejected or strictly dominated
+versions are not promoted merely to fill a role. Frontier source is retained
+by an exact Git commit or source-archive hash; every entry also records a
+distinct release-binary hash, exact-stream controls, experiment evidence, and
+benchmark artifact hashes.
 
 `frontier.json` is the machine-readable companion to the human registry.
 Comparable visualization runs validate hashes, warm every version, rotate

@@ -3,21 +3,11 @@
   "protocol": {
     "name": "frontier-fast-feedback-v1",
     "corpus": "corpus-v2",
-    "trials": 8,
+    "trials": 6,
     "aggregation": "per-case median, then geometric mean",
     "scope": "four pinned 8-bit spatial/temporal cases; screening only"
   },
   "slots": [
-    {
-      "id": "balanced",
-      "label": "Balanced",
-      "role": "balanced",
-      "state": "preserved",
-      "source": "156054c",
-      "binary": "artifacts/frontier/fastvid-balanced-exp0045",
-      "binary_sha256": "06ef3278e9055f3c53c94cf964f4a7bf785453b696e0df262dec9161b45c6ab8",
-      "evidence": "experiments/EXP-0045-rolling-8bit-reconstruction.md"
-    },
     {
       "id": "practical-compression",
       "label": "Practical compression",

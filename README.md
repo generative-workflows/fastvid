@@ -74,8 +74,8 @@ corpus.
 - [Evaluation methodology](EVALUATION_METHODOLOGY.md) defines corpus, quality,
   throughput, bitrate, random-access, and fast/slow feedback protocols.
 - [Codec frontier](FRONTIER.md) and its
-  [automatic Pareto graph](benchmarks/frontier.svg) show the current balanced,
-  compression, and throughput tradeoffs.
+  [automatic Pareto graph](benchmarks/frontier.svg) show the current speed,
+  practical-compression, and maximum-compression tradeoffs.
 - [Corpus documentation](corpus/README.md) describes reproducible media,
   checksums, capability tracks, and licenses.
 - [Format specifications](specs/format-v0.md) define the 8-bit v0 syntax;
