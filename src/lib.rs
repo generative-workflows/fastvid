@@ -12,9 +12,9 @@ mod metrics;
 mod model;
 
 pub use codec::{
-    DecodedTile, StreamInfo, analyze_entropy, analyze_predictor_frame, analyze_predictors,
-    analyze_residual_mapping, decode, decode_tile, decode_with_reference, encode,
-    encode_with_reference, inspect,
+    DecodedTile, StreamInfo, analyze_chroma_from_luma, analyze_entropy, analyze_predictor_frame,
+    analyze_predictors, analyze_residual_mapping, decode, decode_tile, decode_with_reference,
+    encode, encode_with_reference, inspect,
 };
 pub use codec16::{
     DecodedTile16, analyze_entropy16, analyze_predictor_frame16, analyze_predictors16,
@@ -26,7 +26,7 @@ pub use metrics::{
     ssim_plane_sampled, ssim_plane16, ssim_plane16_sampled,
 };
 pub use model::{
-    CodecError, CodecOptions, Frame, Frame16, FrameRate, PixelFormat, Plane, Plane16,
-    PredictorCandidateModel, PredictorModelMode, TileEntropyModel, TilePredictorModel,
-    TileResidualMappingModel,
+    ChromaFromLumaTileModel, CodecError, CodecOptions, Frame, Frame16, FrameRate, PixelFormat,
+    Plane, Plane16, PredictorCandidateModel, PredictorModelMode, TileEntropyModel,
+    TilePredictorModel, TileResidualMappingModel,
 };

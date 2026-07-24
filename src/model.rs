@@ -498,6 +498,26 @@ pub struct TilePredictorModel {
     pub temporal: Option<PredictorCandidateModel>,
 }
 
+/// Read-only exact-byte model for one tile-local chroma-from-luma candidate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ChromaFromLumaTileModel {
+    pub current_stream_bytes: usize,
+    pub plane: usize,
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub sample_count: usize,
+    pub current_payload_bytes: usize,
+    pub cfl_entropy_bytes: usize,
+    pub cfl_control_bytes: usize,
+    pub cfl_complete_bytes: usize,
+    pub dc: u8,
+    pub alpha_eighths: i8,
+    pub squared_error: u64,
+    pub max_error: u32,
+}
+
 // research/0023: once a causal prediction is known, only residuals in
 // [lower, upper] can occur. Alternate signs while both remain possible, then
 // encode the sole remaining side contiguously.

@@ -1,7 +1,7 @@
 use crate::model::{
-    ByteFormatModel, CodecError, CodecOptions, Frame, FrameRate, PixelFormat, Plane,
-    PredictorCandidateModel, PredictorModelMode, TileEntropyModel, TilePredictorModel,
-    TileResidualMappingModel, checked_area, fold_bounded_residual,
+    ByteFormatModel, ChromaFromLumaTileModel, CodecError, CodecOptions, Frame, FrameRate,
+    PixelFormat, Plane, PredictorCandidateModel, PredictorModelMode, TileEntropyModel,
+    TilePredictorModel, TileResidualMappingModel, checked_area, fold_bounded_residual,
 };
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -359,6 +359,42 @@ pub fn analyze_residual_mapping(
             model_residual_mapping_tile(plane, reference_plane, tile, &quantizer)
         })
         .collect())
+}
+
+/// Models an explicitly signaled, tile-local chroma-from-luma predictor.
+///
+/// The current codec is first decoded so candidate prediction uses exactly
+/// the reconstructed luma available to a decoder. No stream is changed.
+pub fn analyze_chroma_from_luma(
+    frame: &Frame,
+    options: CodecOptions,
+) -> Result<Vec<ChromaFromLumaTileModel>, CodecError> {
+    frame.validate()?;
+    options.validate()?;
+    if frame.format != PixelFormat::Yuv422p8 {
+        return Err(CodecError::InvalidInput(
+            "chroma-from-luma modeling requires 8-bit YUV 4:2:2",
+        ));
+    }
+    let encoded = encode(frame, options)?;
+    let reconstructed = decode(&encoded, options.threads)?;
+    let parsed = parse(&encoded)?;
+    let quantizer = Quantizer::new(options.quantization_step());
+    parsed
+        .entries
+        .iter()
+        .filter(|entry| entry.tile.plane != 0)
+        .map(|entry| {
+            model_chroma_from_luma_tile(
+                &frame.planes[entry.tile.plane],
+                &reconstructed.planes[0],
+                entry.tile,
+                encoded.len(),
+                entry.length,
+                &quantizer,
+            )
+        })
+        .collect()
 }
 
 /// Models compatible spatial predictors and tile-local temporal prediction.
@@ -1249,6 +1285,105 @@ fn model_residual_mapping_tile(
         actual_payload_bytes: current.payload.len(),
         bounded_payload_bytes: bounded.1,
     }
+}
+
+fn model_chroma_from_luma_tile(
+    chroma: &Plane,
+    reconstructed_luma: &Plane,
+    tile: Tile,
+    current_stream_bytes: usize,
+    current_payload_bytes: usize,
+    quantizer: &Quantizer,
+) -> Result<ChromaFromLumaTileModel, CodecError> {
+    const CONTROL_BYTES: usize = 2;
+    let width = tile.width as usize;
+    let height = tile.height as usize;
+    let sample_count = width * height;
+    let chroma_width = chroma.width as usize;
+    let luma_width = reconstructed_luma.width as usize;
+    let origin_x = tile.x as usize;
+    let origin_y = tile.y as usize;
+    let mut source = Vec::with_capacity(sample_count);
+    let mut coincident_luma = Vec::with_capacity(sample_count);
+    let mut chroma_sum = 0u64;
+    let mut luma_sum = 0u64;
+    for y in 0..height {
+        let chroma_start = (origin_y + y) * chroma_width + origin_x;
+        let luma_row = (origin_y + y) * luma_width;
+        for x in 0..width {
+            let sample = chroma.data[chroma_start + x];
+            let luma_x = (origin_x + x) * 2;
+            let first = u16::from(reconstructed_luma.data[luma_row + luma_x]);
+            let second =
+                u16::from(reconstructed_luma.data[luma_row + (luma_x + 1).min(luma_width - 1)]);
+            let reduced = (first + second).div_ceil(2) as u8;
+            source.push(sample);
+            coincident_luma.push(reduced);
+            chroma_sum += u64::from(sample);
+            luma_sum += u64::from(reduced);
+        }
+    }
+    let dc = ((chroma_sum + sample_count as u64 / 2) / sample_count as u64) as u8;
+    let luma_mean = ((luma_sum + sample_count as u64 / 2) / sample_count as u64) as i32;
+    let mut best: Option<(usize, u64, u32, i8, usize)> = None;
+    for alpha_eighths in -16i8..=16 {
+        let mut residuals = ResidualAccumulator::new(sample_count);
+        let mut squared_error = 0u64;
+        let mut max_error = 0u32;
+        for (&sample, &luma) in source.iter().zip(&coincident_luma) {
+            let scaled = i32::from(alpha_eighths) * (i32::from(luma) - luma_mean);
+            let contribution = if scaled < 0 {
+                -((-scaled + 4) / 8)
+            } else {
+                (scaled + 4) / 8
+            };
+            let prediction = (i32::from(dc) + contribution).clamp(0, 255);
+            let quantized = quantizer.quantize(i32::from(sample) - prediction);
+            let reconstructed = (prediction + quantized * quantizer.step).clamp(0, 255) as u8;
+            let error = u32::from(sample.abs_diff(reconstructed));
+            squared_error += u64::from(error) * u64::from(error);
+            max_error = max_error.max(error);
+            residuals.push(quantized);
+        }
+        let encoded = residuals.finish(PREDICT_SPATIAL);
+        let complete_bytes = encoded.payload.len() + CONTROL_BYTES;
+        let candidate = (
+            complete_bytes,
+            squared_error,
+            max_error,
+            alpha_eighths,
+            encoded.payload.len(),
+        );
+        if best.as_ref().is_none_or(|current| {
+            (
+                candidate.0,
+                candidate.1,
+                candidate.3.unsigned_abs(),
+                candidate.3,
+            ) < (current.0, current.1, current.3.unsigned_abs(), current.3)
+        }) {
+            best = Some(candidate);
+        }
+    }
+    let (cfl_complete_bytes, squared_error, max_error, alpha_eighths, cfl_entropy_bytes) =
+        best.expect("alpha candidate set is nonempty");
+    Ok(ChromaFromLumaTileModel {
+        current_stream_bytes,
+        plane: tile.plane,
+        x: tile.x,
+        y: tile.y,
+        width: tile.width,
+        height: tile.height,
+        sample_count,
+        current_payload_bytes,
+        cfl_entropy_bytes,
+        cfl_control_bytes: CONTROL_BYTES,
+        cfl_complete_bytes,
+        dc,
+        alpha_eighths,
+        squared_error,
+        max_error,
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -2685,6 +2820,42 @@ mod tests {
         let tile = decode_tile(&encoded, 0).unwrap();
         assert_eq!(tile.data, full.planes[0].data);
         assert_eq!(full, frame);
+    }
+
+    #[test]
+    fn chroma_from_luma_model_charges_controls_and_finds_correlation() {
+        let mut state = 0x243f_6a88u32;
+        let mut luma = Vec::with_capacity(256 * 128);
+        let mut cb = Vec::with_capacity(128 * 128);
+        let mut cr = Vec::with_capacity(128 * 128);
+        for _ in 0..128 * 128 {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let first = (state >> 24) as u8;
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let second = (state >> 24) as u8;
+            let reduced = (u16::from(first) + u16::from(second)).div_ceil(2) as u8;
+            luma.extend([first, second]);
+            cb.push(reduced);
+            cr.push(255 - reduced);
+        }
+        let frame = Frame::yuv422p8(256, 128, FrameRate::new(24, 1), luma, cb, cr).unwrap();
+        let options = CodecOptions {
+            quality: 100,
+            threads: 1,
+            ..CodecOptions::default()
+        };
+        let first = analyze_chroma_from_luma(&frame, options).unwrap();
+        let second = analyze_chroma_from_luma(&frame, options).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 2);
+        assert!(first.iter().all(|model| {
+            model.cfl_control_bytes == 2
+                && model.cfl_complete_bytes == model.cfl_entropy_bytes + model.cfl_control_bytes
+                && model.cfl_complete_bytes < model.current_payload_bytes
+                && model.max_error == 0
+        }));
+        assert!(first.iter().any(|model| model.alpha_eighths > 0));
+        assert!(first.iter().any(|model| model.alpha_eighths < 0));
     }
 
     #[test]
