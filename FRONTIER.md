@@ -11,7 +11,7 @@ machine-readable companion is [`frontier.json`](frontier.json).
 | Slot | Source | Binary SHA-256 | Stream compatibility | Evidence | State |
 |---|---|---|---|---|---|
 | Practical compression | `4ad0318` | `1235c7e82cf34fdddf5c341a5c17d265687368092174d175db709f22b17131c9` | v2 encode; v0/v1/v2 decode | [EXP-0052](experiments/EXP-0052-16bit-temporal-decode-guard.md) | Preserved |
-| Maximum compression | `84a3be1` | `dda826459cfa9cb017b751749d2b780419b18cc1a2ff9ff309492ea8b4df61da` | 8-bit v3 / high-bit v2 encode; legacy decode | [EXP-0055](experiments/EXP-0055-modeled-rans-selector.md) | Preserved |
+| Maximum compression | `36b1d20` | `d4d7edaf68a67601f753652757d62bcc49ff237e9ef0954ad0174ddc45322a14` | 8-bit v3 / high-bit v2 encode; legacy decode | [EXP-0068](experiments/EXP-0068-four-state-rans.md) | Preserved |
 | Speed | `4ad0318` + `exp0060-speed.patch` | `f8e6bb69d7cf52b4531210e7423ec75a5626549ac1bacc964c1e123ca2bde8f7` | v2 encode; v0/v1/v2 decode | [EXP-0060](experiments/EXP-0060-fixed-gradient-speed-tier.md) | Preserved |
 
 The speed source is reproduced by applying
@@ -20,6 +20,12 @@ two active base sources are retained directly in Git. The speed tier uses fixed
 clamp-gradient intra prediction and frame-gated temporal prediction, trading
 some spatial compression for materially higher encode, decode, and
 single-frame-access throughput.
+
+The maximum-compression tier retains scalar order-0 rANS on small payloads
+and uses four interleaved states only when their 12-byte cost is at most 0.5%
+of the modeled scalar payload. This keeps tiny UI/cut streams byte-identical
+while exposing instruction-level parallelism on larger camera and graphics
+tiles.
 
 The former balanced snapshot (`156054c`, binary `06ef3278…6ab8`) remains a
 reproducible historical reference under EXP-0045. EXP-0061 retired it from
@@ -49,7 +55,7 @@ evidence.
         version-2 tile modes
           /             \
  practical guard     maximum compression
- 16-bit temporal     8-bit tile-local rANS
+ 16-bit temporal     budgeted four-state rANS
 ```
 
 ## Promotion and retirement
@@ -78,13 +84,15 @@ versions are active so confirmation cost remains bounded.
 
 - `artifacts/frontier/fastvid-compression-exp0052`
   (`1235c7e82cf34fdddf5c341a5c17d265687368092174d175db709f22b17131c9`);
-- `artifacts/frontier/fastvid-rans-exp0055`
-  (`dda826459cfa9cb017b751749d2b780419b18cc1a2ff9ff309492ea8b4df61da`);
+- `artifacts/frontier/fastvid-rans4-exp0068`
+  (`d4d7edaf68a67601f753652757d62bcc49ff237e9ef0954ad0174ddc45322a14`);
 - `artifacts/frontier/fastvid-speed-exp0060`
   (`f8e6bb69d7cf52b4531210e7423ec75a5626549ac1bacc964c1e123ca2bde8f7`),
   reproduced by `artifacts/frontier/exp0060-speed.patch`.
 
 Historical reference:
 
+- `artifacts/frontier/fastvid-rans-exp0055`
+  (`dda826459cfa9cb017b751749d2b780419b18cc1a2ff9ff309492ea8b4df61da`);
 - `artifacts/frontier/fastvid-balanced-exp0045`
   (`06ef3278e9055f3c53c94cf964f4a7bf785453b696e0df262dec9161b45c6ab8`).

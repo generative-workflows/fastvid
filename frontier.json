@@ -23,10 +23,10 @@
       "label": "Maximum compression",
       "role": "maximum-compression",
       "state": "preserved",
-      "source": "84a3be1",
-      "binary": "artifacts/frontier/fastvid-rans-exp0055",
-      "binary_sha256": "dda826459cfa9cb017b751749d2b780419b18cc1a2ff9ff309492ea8b4df61da",
-      "evidence": "experiments/EXP-0055-modeled-rans-selector.md"
+      "source": "36b1d20",
+      "binary": "artifacts/frontier/fastvid-rans4-exp0068",
+      "binary_sha256": "d4d7edaf68a67601f753652757d62bcc49ff237e9ef0954ad0174ddc45322a14",
+      "evidence": "experiments/EXP-0068-four-state-rans.md"
     },
     {
       "id": "speed",

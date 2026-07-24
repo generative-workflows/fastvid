@@ -35,8 +35,8 @@ one thread, after warm-up and two balanced recorded trials per cell.
 
 | Quality | Threads | Geo. ratio | Encode | Raw encode | Decode | Raw decode | Mean Y PSNR | Mean SSIM |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 90 | 1 | 9.203x | 16.18 MP/s | 32.36 MB/s | 46.94 MP/s | 93.88 MB/s | 49.908 dB | 0.996653 |
-| 100 | 1 | 5.990x | 15.24 MP/s | 30.48 MB/s | 42.88 MP/s | 85.76 MB/s | exact | 1.000000 |
+| 90 | 1 | 9.191x | 16.43 MP/s | 32.86 MB/s | 49.21 MP/s | 98.42 MB/s | 49.908 dB | 0.996653 |
+| 100 | 1 | 5.983x | 15.95 MP/s | 31.90 MB/s | 47.01 MP/s | 94.02 MB/s | exact | 1.000000 |
 
 Compression is the geometric mean of per-sample raw/encoded ratios. Throughput
 and quality columns are arithmetic means of per-sample results; MP/s counts

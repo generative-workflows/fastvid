@@ -1,6 +1,6 @@
 # Fastvid evaluation methodology
 
-Version: 9 (2026-07-24)
+Version: 10 (2026-07-24)
 
 This document defines the standard target used to evaluate Fastvid changes.
 Experiments may add diagnostics or deliberately diverge, but an optimization
@@ -268,6 +268,11 @@ per-bit-depth separation as the 8-bit access protocol.
 Preserved-binary 8-bit access comparisons use
 `scripts/benchmark-access-ab.sh`; candidates must use identical target
 indices, qualities, GOPs, thread counts, and alternating execution order.
+Cross-version harnesses must extract metrics by column name and validate
+their normalized row width. They must not apply one binary's positional
+header to another binary because diagnostic columns may be added without
+changing metric names; EXP-0068 demonstrated that such a mismatch can produce
+plausible rows but impossible aggregates.
 
 Before preserving a candidate, run `cargo build --release` explicitly:
 `cargo test --release` builds test executables but does not guarantee that the

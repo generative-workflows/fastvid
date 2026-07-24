@@ -62,7 +62,10 @@ cases=(
   $'cuts-temporal-1080p\t'"$cuts_prefix"$'\t1920\t1080\t24/1\t4\t90\t1\t12'
 )
 
-first=1
+printf '%s\n' \
+  $'slot\tlabel\ttrial\tcase\tinput\tframes\tquality\tthreads\tgop\traw_bytes\tencoded_bytes\tratio\tencode_ms\tdecode_ms\tencode_mpps\tdecode_mpps\tencode_raw_mb_s\tdecode_raw_mb_s\tencoded_stream_mb_s\tencoded_stream_mbps\ty_psnr\tcb_psnr\tcr_psnr\ty_block_ssim\tmax_error\tzero_run_tiles\trice_tiles\tspatial_tiles\ttemporal_tiles' \
+  > "$output"
+
 run_slot() {
   local slot="$1"
   local trial="$2"
@@ -70,14 +73,24 @@ run_slot() {
   result="$("${binaries[$slot]}" benchmark-yuv422 \
     "$input" "$width" "$height" "$frame_rate" "$frames" \
     "$quality" "$threads" "$gop")"
-  if [[ "$first" == 1 ]]; then
-    printf 'slot\tlabel\ttrial\tcase\t%s\n' \
-      "$(printf '%s\n' "$result" | head -n 1)" > "$output"
-    first=0
-  fi
-  printf '%s\t%s\t%d\t%s\t%s\n' \
-    "$slot" "${labels[$slot]}" "$trial" "$case_id" \
-    "$(printf '%s\n' "$result" | tail -n 1)" >> "$output"
+  printf '%s\n' "$result" | awk -F $'\t' \
+    -v slot="$slot" -v label="${labels[$slot]}" \
+    -v trial="$trial" -v case_id="$case_id" '
+      NR == 1 {
+        for (field = 1; field <= NF; field++) {
+          column[$field] = field
+        }
+        next
+      }
+      NR == 2 {
+        printf "%s\t%s\t%d\t%s", slot, label, trial, case_id
+        split("input frames quality threads gop raw_bytes encoded_bytes ratio encode_ms decode_ms encode_mpps decode_mpps encode_raw_mb_s decode_raw_mb_s encoded_stream_mb_s encoded_stream_mbps y_psnr cb_psnr cr_psnr y_block_ssim max_error zero_run_tiles rice_tiles spatial_tiles temporal_tiles", names, " ")
+        for (field = 1; field <= length(names); field++) {
+          printf "\t%s", $(column[names[field]])
+        }
+        printf "\n"
+      }
+    ' >> "$output"
 }
 
 for case_spec in "${cases[@]}"; do
