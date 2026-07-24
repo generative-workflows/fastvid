@@ -6,16 +6,16 @@ technology tree. Completed evidence remains in immutable experiment records.
 
 ## Frontier slots
 
-| Slot | Source commit | Binary SHA-256 | Stream compatibility | Evidence | State |
+| Slot | Source | Binary SHA-256 | Stream compatibility | Evidence | State |
 |---|---|---|---|---|---|
 | Balanced | `156054c` | `06ef3278e9055f3c53c94cf964f4a7bf785453b696e0df262dec9161b45c6ab8` | v0 8-bit / v1 high-bit | [EXP-0045](experiments/EXP-0045-rolling-8bit-reconstruction.md) | Preserved |
-| Compression | — | — | — | Predictor-bounded mapping and compatible predictor selection are being screened by [EXP-0046](experiments/EXP-0046-predictor-bounded-residual-model.md) | Vacant |
-| Throughput | — | — | — | No distinct non-dominated version currently survives the evidence gates | Vacant |
+| Practical compression | `4ad0318` | `1235c7e82cf34fdddf5c341a5c17d265687368092174d175db709f22b17131c9` | v2 encode; v0/v1/v2 decode | [EXP-0052](experiments/EXP-0052-16bit-temporal-decode-guard.md) | Preserved |
+| Maximum compression | `4ad0318` plus patch `e4ad1a12…a9b4` | `8a273da4ac54cf646c8d54c5f9581ed5d6ab8c8279a08a9beab81c10fc790a09` | v2 encode; v0/v1/v2 decode | [EXP-0051](experiments/EXP-0051-high-bit-staged-predictors.md) | Preserved |
 
-The balanced source is retained in Git. Its preserved binary hash and exact
-stream controls are recorded in EXP-0045; a binary may be regenerated from
-the source commit when needed. Vacant slots are explicit: a rejected or
-strictly dominated candidate is not kept merely to fill the table.
+The balanced and practical-compression sources are retained in Git. The
+maximum-compression source is the practical source with
+`artifacts/frontier/exp0051-max-compression.patch` applied. No distinct
+throughput-only candidate currently survives the evidence gates.
 
 ## Active technology tree
 
@@ -24,12 +24,12 @@ strictly dominated candidate is not kept merely to fill the table.
                                       |
                     rolling reconstruction / exact Rice
                        /                              \
-       compression exploration                 throughput exploration
-       bounded residual symbols                scheduler/SIMD/cache work
-                |                                      |
-       compatible predictor oracle             only after space pass
-                |
-       table-charged entropy model
+       compatible predictor oracle              throughput exploration
+                |                              scheduler/SIMD/cache work
+        version-2 tile modes
+          /             \
+ practical guard     maximum compression
+ 16-bit temporal     spatial zero-run inter
 ```
 
 ## Promotion and retirement
@@ -53,3 +53,14 @@ rate/quality tradeoff remains non-dominated when it occupies a declared slot.
 When a new version dominates a slot, this file replaces the row; the old
 experiment remains immutable and Git retains its source. At most three
 versions are active so confirmation cost remains bounded.
+
+## Preserved artifacts
+
+- `artifacts/frontier/fastvid-balanced-exp0045`
+  (`06ef3278e9055f3c53c94cf964f4a7bf785453b696e0df262dec9161b45c6ab8`);
+- `artifacts/frontier/fastvid-compression-exp0052`
+  (`1235c7e82cf34fdddf5c341a5c17d265687368092174d175db709f22b17131c9`);
+- `artifacts/frontier/fastvid-max-compression-exp0051`
+  (`8a273da4ac54cf646c8d54c5f9581ed5d6ab8c8279a08a9beab81c10fc790a09`);
+- `artifacts/frontier/exp0051-max-compression.patch`
+  (`e4ad1a121f005561644995fae40d7981a0d454e3ef0cc4dfdca3050d4346a9b4`).
