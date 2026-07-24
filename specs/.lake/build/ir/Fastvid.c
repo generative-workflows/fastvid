@@ -16,6 +16,7 @@ extern "C" {
 static lean_object* l_Fastvid_reprPredictionMode___closed__10____x40_Fastvid___hyg_379_;
 LEAN_EXPORT lean_object* l_Fastvid_PredictionMode_noConfusion___redArg___boxed(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_riceDivisor___boxed(lean_object*);
+LEAN_EXPORT lean_object* l_Fastvid_ransTableSize(lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_instDecidableEqPredictionMode___boxed(lean_object*, lean_object*);
 uint8_t lean_nat_dec_le(lean_object*, lean_object*);
 LEAN_EXPORT uint8_t l_Fastvid_instDecidableEqPredictionMode(uint8_t, uint8_t);
@@ -40,8 +41,10 @@ lean_object* lean_nat_div(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_average2(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l___private_Fastvid_0__Fastvid_zigzag_match__1_splitter___redArg(lean_object*, lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_unzigzag(lean_object*);
+LEAN_EXPORT lean_object* l_Fastvid_ransSlot(lean_object*, lean_object*);
 static lean_object* l_Fastvid_instReprPredictionMode___closed__0;
 LEAN_EXPORT lean_object* l_Fastvid_PredictionMode_ofNat___boxed(lean_object*);
+LEAN_EXPORT lean_object* l_Fastvid_ransTableSize___boxed(lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_riceRemainder(lean_object*, lean_object*);
 static lean_object* l_Fastvid_reprPredictionMode___closed__6____x40_Fastvid___hyg_379_;
 LEAN_EXPORT lean_object* l_Fastvid_riceQuotient___boxed(lean_object*, lean_object*);
@@ -49,8 +52,10 @@ LEAN_EXPORT lean_object* l___private_Fastvid_0__Fastvid_zigzag_match__1_splitter
 LEAN_EXPORT lean_object* l_Fastvid_average2___boxed(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_temporalResidual___boxed(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_sampleMax___boxed(lean_object*);
+LEAN_EXPORT lean_object* l_Fastvid_ransDecodeState(lean_object*, lean_object*, lean_object*, lean_object*);
 lean_object* lean_int_sub(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_PredictionMode_noConfusion___redArg___lam__0(lean_object*);
+LEAN_EXPORT lean_object* l_Fastvid_ransSlot___boxed(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_zigzag___boxed(lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_quantStep(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_PredictionMode_noConfusion___redArg___lam__0___boxed(lean_object*);
@@ -87,6 +92,7 @@ static lean_object* l_Fastvid_reprPredictionMode___closed__3____x40_Fastvid___hy
 LEAN_EXPORT lean_object* l_Fastvid_PredictionMode_toCtorIdx___boxed(lean_object*);
 static lean_object* l_Fastvid_reprPredictionMode___closed__9____x40_Fastvid___hyg_379_;
 LEAN_EXPORT lean_object* l_Fastvid_temporalResidual(lean_object*, lean_object*);
+LEAN_EXPORT lean_object* l_Fastvid_ransDecodeState___boxed(lean_object*, lean_object*, lean_object*, lean_object*);
 static lean_object* _init_l_Fastvid_zigzag___closed__0() {
 _start:
 {
@@ -985,6 +991,74 @@ x_3 = l_Fastvid_clampSample(x_1, x_2);
 lean_dec(x_2);
 lean_dec(x_1);
 return x_3;
+}
+}
+LEAN_EXPORT lean_object* l_Fastvid_ransTableSize(lean_object* x_1) {
+_start:
+{
+lean_object* x_2; lean_object* x_3; 
+x_2 = lean_unsigned_to_nat(2u);
+x_3 = lean_nat_pow(x_2, x_1);
+return x_3;
+}
+}
+LEAN_EXPORT lean_object* l_Fastvid_ransTableSize___boxed(lean_object* x_1) {
+_start:
+{
+lean_object* x_2; 
+x_2 = l_Fastvid_ransTableSize(x_1);
+lean_dec(x_1);
+return x_2;
+}
+}
+LEAN_EXPORT lean_object* l_Fastvid_ransSlot(lean_object* x_1, lean_object* x_2) {
+_start:
+{
+lean_object* x_3; lean_object* x_4; 
+x_3 = l_Fastvid_ransTableSize(x_2);
+x_4 = lean_nat_mod(x_1, x_3);
+lean_dec(x_3);
+return x_4;
+}
+}
+LEAN_EXPORT lean_object* l_Fastvid_ransSlot___boxed(lean_object* x_1, lean_object* x_2) {
+_start:
+{
+lean_object* x_3; 
+x_3 = l_Fastvid_ransSlot(x_1, x_2);
+lean_dec(x_2);
+lean_dec(x_1);
+return x_3;
+}
+}
+LEAN_EXPORT lean_object* l_Fastvid_ransDecodeState(lean_object* x_1, lean_object* x_2, lean_object* x_3, lean_object* x_4) {
+_start:
+{
+lean_object* x_5; lean_object* x_6; lean_object* x_7; lean_object* x_8; lean_object* x_9; lean_object* x_10; 
+x_5 = l_Fastvid_ransTableSize(x_4);
+x_6 = lean_nat_div(x_1, x_5);
+lean_dec(x_5);
+x_7 = lean_nat_mul(x_2, x_6);
+lean_dec(x_6);
+x_8 = l_Fastvid_ransSlot(x_1, x_4);
+x_9 = lean_nat_add(x_7, x_8);
+lean_dec(x_8);
+lean_dec(x_7);
+x_10 = lean_nat_sub(x_9, x_3);
+lean_dec(x_9);
+return x_10;
+}
+}
+LEAN_EXPORT lean_object* l_Fastvid_ransDecodeState___boxed(lean_object* x_1, lean_object* x_2, lean_object* x_3, lean_object* x_4) {
+_start:
+{
+lean_object* x_5; 
+x_5 = l_Fastvid_ransDecodeState(x_1, x_2, x_3, x_4);
+lean_dec(x_4);
+lean_dec(x_3);
+lean_dec(x_2);
+lean_dec(x_1);
+return x_5;
 }
 }
 lean_object* initialize_Init(uint8_t builtin, lean_object*);

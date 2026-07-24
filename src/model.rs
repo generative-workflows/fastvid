@@ -433,6 +433,13 @@ pub struct TileEntropyModel {
     pub actual_payload_bytes: usize,
     pub stream_vbyte_bytes: u64,
     pub stream_vbyte_0124_bytes: u64,
+    pub distinct_symbols: usize,
+    pub ideal_order0_bytes: u64,
+    pub order0_supported: bool,
+    pub order0_table_log: u8,
+    pub order0_payload_bytes: u64,
+    pub order0_table_bytes: u64,
+    pub order0_complete_bytes: u64,
 }
 
 /// Read-only size model for predictor-bounded residual symbols in one tile.
@@ -523,16 +530,33 @@ pub(crate) fn unfold_bounded_residual(folded: u32, lower: i32, upper: i32) -> Op
     (lower..=upper).contains(&value).then_some(value)
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ByteFormatModel {
     symbols: u64,
     zero_symbols: u64,
     standard_data_bytes: u64,
     zero_aware_data_bytes: u64,
+    histogram: Vec<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Order0SizeModel {
+    pub(crate) distinct_symbols: usize,
+    pub(crate) ideal_bytes: u64,
+    pub(crate) supported: bool,
+    pub(crate) table_log: u8,
+    pub(crate) payload_bytes: u64,
+    pub(crate) table_bytes: u64,
+    pub(crate) complete_bytes: u64,
 }
 
 impl ByteFormatModel {
     pub(crate) fn push(&mut self, value: u32) {
+        let symbol = value as usize;
+        if self.histogram.len() <= symbol {
+            self.histogram.resize(symbol + 1, 0);
+        }
+        self.histogram[symbol] += 1;
         self.symbols += 1;
         self.zero_symbols += u64::from(value == 0);
         self.standard_data_bytes += match value {
@@ -551,25 +575,138 @@ impl ByteFormatModel {
 
     pub(crate) fn push_zeros(&mut self, count: usize) {
         let count = count as u64;
+        if self.histogram.is_empty() {
+            self.histogram.push(0);
+        }
+        self.histogram[0] += count;
         self.symbols += count;
         self.zero_symbols += count;
         self.standard_data_bytes += count;
     }
 
-    pub(crate) fn sample_count(self) -> Option<usize> {
+    pub(crate) fn sample_count(&self) -> Option<usize> {
         usize::try_from(self.symbols).ok()
     }
 
-    pub(crate) fn zero_symbols(self) -> Option<usize> {
+    pub(crate) fn zero_symbols(&self) -> Option<usize> {
         usize::try_from(self.zero_symbols).ok()
     }
 
-    pub(crate) fn stream_vbyte_bytes(self) -> u64 {
+    pub(crate) fn stream_vbyte_bytes(&self) -> u64 {
         self.symbols.div_ceil(4) + self.standard_data_bytes
     }
 
-    pub(crate) fn stream_vbyte_0124_bytes(self) -> u64 {
+    pub(crate) fn stream_vbyte_0124_bytes(&self) -> u64 {
         self.symbols.div_ceil(4) + self.zero_aware_data_bytes
+    }
+
+    pub(crate) fn order0_size(&self) -> Order0SizeModel {
+        let observed: Vec<(u32, u64)> = self
+            .histogram
+            .iter()
+            .enumerate()
+            .filter(|(_, count)| **count != 0)
+            .map(|(symbol, &count)| (symbol as u32, count))
+            .collect();
+        if observed.is_empty() {
+            return Order0SizeModel::default();
+        }
+        let ideal_bits = observed.iter().fold(0.0, |bits, (_, count)| {
+            bits + *count as f64 * (self.symbols as f64 / *count as f64).log2()
+        });
+        let ideal_bytes = bits_to_bytes(ideal_bits);
+        let mut best = None;
+        for table_log in 8..=12 {
+            let table_size = 1u64 << table_log;
+            if observed.len() as u64 > table_size {
+                continue;
+            }
+            let frequencies = normalize_frequencies(&observed, table_size, self.symbols);
+            let payload_bits =
+                observed
+                    .iter()
+                    .zip(&frequencies)
+                    .fold(0.0, |bits, ((_, count), frequency)| {
+                        bits + *count as f64 * (table_size as f64 / *frequency as f64).log2()
+                    });
+            let payload_bytes = bits_to_bytes(payload_bits);
+            let table_bytes = sparse_table_bytes(&observed, &frequencies);
+            let complete_bytes = payload_bytes + table_bytes;
+            if best.is_none_or(|current: Order0SizeModel| {
+                (complete_bytes, table_log) < (current.complete_bytes, current.table_log)
+            }) {
+                best = Some(Order0SizeModel {
+                    distinct_symbols: observed.len(),
+                    ideal_bytes,
+                    supported: true,
+                    table_log,
+                    payload_bytes,
+                    table_bytes,
+                    complete_bytes,
+                });
+            }
+        }
+        best.unwrap_or(Order0SizeModel {
+            distinct_symbols: observed.len(),
+            ideal_bytes,
+            ..Order0SizeModel::default()
+        })
+    }
+}
+
+fn bits_to_bytes(bits: f64) -> u64 {
+    (bits / 8.0).ceil() as u64
+}
+
+fn normalize_frequencies(observed: &[(u32, u64)], table_size: u64, symbols: u64) -> Vec<u64> {
+    debug_assert!(observed.len() as u64 <= table_size);
+    debug_assert_eq!(
+        observed.iter().map(|(_, count)| count).sum::<u64>(),
+        symbols
+    );
+    let remaining = table_size - observed.len() as u64;
+    let mut frequencies = Vec::with_capacity(observed.len());
+    let mut remainders = Vec::with_capacity(observed.len());
+    let mut assigned = 0u64;
+    for &(symbol, count) in observed {
+        let scaled = u128::from(count) * u128::from(remaining);
+        let frequency = 1 + (scaled / u128::from(symbols)) as u64;
+        frequencies.push(frequency);
+        assigned += frequency;
+        remainders.push((scaled % u128::from(symbols), symbol));
+    }
+    remainders
+        .sort_unstable_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+    for &(_, symbol) in remainders.iter().take((table_size - assigned) as usize) {
+        let index = observed
+            .binary_search_by_key(&symbol, |(candidate, _)| *candidate)
+            .expect("remainder symbol came from observed symbols");
+        frequencies[index] += 1;
+    }
+    debug_assert_eq!(frequencies.iter().sum::<u64>(), table_size);
+    frequencies
+}
+
+fn sparse_table_bytes(observed: &[(u32, u64)], frequencies: &[u64]) -> u64 {
+    let mut bytes = 1 + model_varint_length(observed.len() as u32) + 4;
+    let mut previous = 0;
+    for (index, &(symbol, _)) in observed.iter().enumerate() {
+        bytes += model_varint_length(symbol - previous);
+        if index + 1 != observed.len() {
+            bytes += model_varint_length(frequencies[index] as u32);
+        }
+        previous = symbol;
+    }
+    bytes
+}
+
+fn model_varint_length(value: u32) -> u64 {
+    match value {
+        0..=0x7f => 1,
+        0x80..=0x3fff => 2,
+        0x4000..=0x1f_ffff => 3,
+        0x20_0000..=0x0fff_ffff => 4,
+        _ => 5,
     }
 }
 
@@ -669,6 +806,67 @@ mod tests {
         partial.push_zeros(5);
         assert_eq!(partial.stream_vbyte_bytes(), 7);
         assert_eq!(partial.stream_vbyte_0124_bytes(), 2);
+    }
+
+    #[test]
+    fn finite_block_order0_model_charges_payload_table_and_state() {
+        let empty = ByteFormatModel::default().order0_size();
+        assert_eq!(empty, Order0SizeModel::default());
+
+        let mut singleton = ByteFormatModel::default();
+        singleton.push_zeros(32_768);
+        let singleton = singleton.order0_size();
+        assert_eq!(singleton.distinct_symbols, 1);
+        assert_eq!(singleton.ideal_bytes, 0);
+        assert!(singleton.supported);
+        assert_eq!(singleton.table_log, 8);
+        assert_eq!(singleton.payload_bytes, 0);
+        // log, symbol count, symbol delta, and four-byte final state.
+        assert_eq!(singleton.table_bytes, 7);
+        assert_eq!(singleton.complete_bytes, 7);
+
+        let mut uniform = ByteFormatModel::default();
+        for symbol in 0..256 {
+            uniform.push(symbol);
+        }
+        let uniform = uniform.order0_size();
+        assert_eq!(uniform.distinct_symbols, 256);
+        assert_eq!(uniform.ideal_bytes, 256);
+        assert_eq!(uniform.table_log, 8);
+        assert_eq!(uniform.payload_bytes, 256);
+        assert_eq!(uniform.table_bytes, 518);
+        assert_eq!(uniform.complete_bytes, 774);
+    }
+
+    #[test]
+    fn finite_block_normalization_is_positive_exact_and_deterministic() {
+        let observed = [(0, 900), (1, 90), (127, 9), (16_384, 1)];
+        for table_log in 8..=12 {
+            let frequencies = normalize_frequencies(&observed, 1 << table_log, 1_000);
+            assert!(frequencies.iter().all(|&frequency| frequency > 0));
+            assert_eq!(frequencies.iter().sum::<u64>(), 1 << table_log);
+            assert_eq!(
+                frequencies,
+                normalize_frequencies(&observed, 1 << table_log, 1_000)
+            );
+        }
+        assert_eq!(model_varint_length(0x7f), 1);
+        assert_eq!(model_varint_length(0x80), 2);
+        assert_eq!(model_varint_length(0x3fff), 2);
+        assert_eq!(model_varint_length(0x4000), 3);
+    }
+
+    #[test]
+    fn finite_block_model_rejects_alphabets_larger_than_its_tables() {
+        let mut model = ByteFormatModel::default();
+        for symbol in 0..4097 {
+            model.push(symbol);
+        }
+        let order0 = model.order0_size();
+        assert_eq!(order0.distinct_symbols, 4097);
+        assert!(!order0.supported);
+        assert!(order0.ideal_bytes > 0);
+        assert_eq!(order0.complete_bytes, 0);
     }
 
     #[test]

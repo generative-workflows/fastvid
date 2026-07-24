@@ -8,13 +8,18 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 const MAGIC: &[u8; 4] = b"FVID";
 const LEGACY_VERSION: u8 = 0;
-const VERSION: u8 = 2;
+const PREDICTOR_VERSION: u8 = 2;
+const VERSION: u8 = 3;
 const HEADER_LEN: usize = 32;
 const DIRECTORY_ENTRY_LEN: usize = 32;
 const MAX_TILES: usize = 1 << 20;
 const ENTROPY_ZERO_RUN: u8 = 0;
 const ENTROPY_RICE_BASE: u8 = 1;
 const MAX_RICE_PARAMETER: u8 = 8;
+const ENTROPY_ORDER0: u8 = ENTROPY_RICE_BASE + MAX_RICE_PARAMETER + 1;
+const RANS_MIN_TABLE_LOG: u8 = 8;
+const RANS_MAX_TABLE_LOG: u8 = 12;
+const RANS_BYTE_L: u32 = 1 << 23;
 const PREDICT_SPATIAL: u8 = 0;
 const PREDICT_TEMPORAL: u8 = 1;
 const PREDICT_AVERAGE: u8 = 2;
@@ -283,6 +288,7 @@ pub fn analyze_entropy(bytes: &[u8]) -> Result<Vec<TileEntropyModel>, CodecError
                 entry.entropy_mode,
                 u32::from(u8::MAX) * 2,
             )?;
+            let order0 = model.order0_size();
             Ok(TileEntropyModel {
                 plane: entry.tile.plane,
                 width: entry.tile.width,
@@ -298,6 +304,13 @@ pub fn analyze_entropy(bytes: &[u8]) -> Result<Vec<TileEntropyModel>, CodecError
                 actual_payload_bytes: entry.length,
                 stream_vbyte_bytes: model.stream_vbyte_bytes(),
                 stream_vbyte_0124_bytes: model.stream_vbyte_0124_bytes(),
+                distinct_symbols: order0.distinct_symbols,
+                ideal_order0_bytes: order0.ideal_bytes,
+                order0_supported: order0.supported,
+                order0_table_log: order0.table_log,
+                order0_payload_bytes: order0.payload_bytes,
+                order0_table_bytes: order0.table_bytes,
+                order0_complete_bytes: order0.complete_bytes,
             })
         })
         .collect()
@@ -530,7 +543,7 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, CodecError> {
         return Err(CodecError::Malformed("bad magic"));
     }
     let version = bytes[4];
-    if version != LEGACY_VERSION && version != VERSION {
+    if ![LEGACY_VERSION, PREDICTOR_VERSION, VERSION].contains(&version) {
         return Err(CodecError::Malformed("unsupported version"));
     }
     let format = PixelFormat::try_from(bytes[5])?;
@@ -593,6 +606,7 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, CodecError> {
         let entropy_mode = bytes[start + 1];
         if entropy_mode != ENTROPY_ZERO_RUN
             && !(ENTROPY_RICE_BASE..=ENTROPY_RICE_BASE + MAX_RICE_PARAMETER).contains(&entropy_mode)
+            && !(version == VERSION && entropy_mode == ENTROPY_ORDER0)
         {
             return Err(CodecError::Malformed("unknown tile entropy mode"));
         }
@@ -898,17 +912,34 @@ impl ResidualAccumulator {
         count_zero_run(&mut zero_run_bytes, &mut zero_run);
         let (rice_parameter, rice_bits) = best_rice_parameter(&self.histogram, self.folded.len());
         let rice_bytes = rice_bits.div_ceil(8);
-        if rice_bytes >= zero_run_bytes {
+        let legacy = if rice_bytes >= zero_run_bytes {
             (ENTROPY_ZERO_RUN, zero_run_bytes)
         } else {
             (ENTROPY_RICE_BASE + rice_parameter, rice_bytes)
+        };
+        if let Some(plan) = build_rans_plan(&self.histogram, self.folded.len())
+            && plan.modeled_bytes < legacy.1
+        {
+            return (ENTROPY_ORDER0, plan.modeled_bytes);
         }
+        legacy
     }
 
     fn finish(mut self, prediction_mode: u8) -> EncodedTile {
         count_zero_run(&mut self.zero_run_bytes, &mut self.zero_run);
         let (rice_parameter, rice_bits) = best_rice_parameter(&self.histogram, self.folded.len());
         let rice_bytes = rice_bits.div_ceil(8);
+        let legacy_bytes = rice_bytes.min(self.zero_run_bytes);
+        if let Some(plan) = build_rans_plan(&self.histogram, self.folded.len()) {
+            let payload = encode_rans_payload(&self.folded, &plan);
+            if payload.len() < legacy_bytes {
+                return EncodedTile {
+                    entropy_mode: ENTROPY_ORDER0,
+                    prediction_mode,
+                    payload,
+                };
+            }
+        }
         if rice_bytes >= self.zero_run_bytes {
             let mut zero_run_payload = Vec::with_capacity(self.zero_run_bytes);
             let mut zero_run = 0;
@@ -942,6 +973,152 @@ impl ResidualAccumulator {
             payload: rice_payload,
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct RansSymbol {
+    value: u16,
+    frequency: u16,
+    cumulative: u16,
+}
+
+struct RansPlan {
+    table_log: u8,
+    symbols: Vec<RansSymbol>,
+    lookup: [u16; 511],
+    modeled_bytes: usize,
+}
+
+fn build_rans_plan(histogram: &[u32; 511], sample_count: usize) -> Option<RansPlan> {
+    let observed: Vec<(u16, u32)> = histogram
+        .iter()
+        .enumerate()
+        .filter(|(_, count)| **count != 0)
+        .map(|(symbol, &count)| (symbol as u16, count))
+        .collect();
+    let mut best = None;
+    for table_log in RANS_MIN_TABLE_LOG..=RANS_MAX_TABLE_LOG {
+        let Some(plan) = build_rans_plan_for_log(&observed, sample_count, table_log) else {
+            continue;
+        };
+        if best.as_ref().is_none_or(|current: &RansPlan| {
+            (plan.modeled_bytes, table_log) < (current.modeled_bytes, current.table_log)
+        }) {
+            best = Some(plan);
+        }
+    }
+    best
+}
+
+fn build_rans_plan_for_log(
+    observed: &[(u16, u32)],
+    sample_count: usize,
+    table_log: u8,
+) -> Option<RansPlan> {
+    let table_size = 1u32 << table_log;
+    if observed.len() as u32 > table_size {
+        return None;
+    }
+    let frequencies = normalize_rans_frequencies(observed, table_size, sample_count as u32);
+    let mut symbols = Vec::with_capacity(observed.len());
+    let mut lookup = [0u16; 511];
+    let mut cumulative = 0u16;
+    let mut table_bytes = 1 + varint_length(observed.len() as u32) + 4;
+    let mut previous = 0u16;
+    let mut payload_bits = 0.0;
+    for (index, (&(value, count), &frequency)) in observed.iter().zip(&frequencies).enumerate() {
+        let symbol_index = u16::try_from(index + 1).ok()?;
+        lookup[value as usize] = symbol_index;
+        symbols.push(RansSymbol {
+            value,
+            frequency,
+            cumulative,
+        });
+        table_bytes += varint_length(u32::from(value - previous));
+        if index + 1 != observed.len() {
+            table_bytes += varint_length(u32::from(frequency));
+        }
+        payload_bits += f64::from(count) * (f64::from(table_size) / f64::from(frequency)).log2();
+        cumulative = cumulative.checked_add(frequency)?;
+        previous = value;
+    }
+    if u32::from(cumulative) != table_size {
+        return None;
+    }
+    Some(RansPlan {
+        table_log,
+        symbols,
+        lookup,
+        modeled_bytes: table_bytes + (payload_bits / 8.0).ceil() as usize,
+    })
+}
+
+fn normalize_rans_frequencies(
+    observed: &[(u16, u32)],
+    table_size: u32,
+    sample_count: u32,
+) -> Vec<u16> {
+    let remaining = table_size - observed.len() as u32;
+    let mut frequencies = Vec::with_capacity(observed.len());
+    let mut remainders = Vec::with_capacity(observed.len());
+    let mut assigned = 0u32;
+    for &(value, count) in observed {
+        let scaled = u64::from(count) * u64::from(remaining);
+        let frequency = 1 + (scaled / u64::from(sample_count)) as u16;
+        frequencies.push(frequency);
+        assigned += u32::from(frequency);
+        remainders.push((scaled % u64::from(sample_count), value));
+    }
+    remainders
+        .sort_unstable_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+    for &(_, value) in remainders.iter().take((table_size - assigned) as usize) {
+        let index = observed
+            .binary_search_by_key(&value, |(candidate, _)| *candidate)
+            .expect("remainder symbol came from observed symbols");
+        frequencies[index] += 1;
+    }
+    debug_assert_eq!(
+        frequencies
+            .iter()
+            .map(|&value| u32::from(value))
+            .sum::<u32>(),
+        table_size
+    );
+    frequencies
+}
+
+fn rans_advance_encoder(state: u32, symbol: RansSymbol, table_log: u8) -> u32 {
+    let frequency = u32::from(symbol.frequency);
+    ((state / frequency) << table_log) + state % frequency + u32::from(symbol.cumulative)
+}
+
+fn encode_rans_payload(folded: &[u16], plan: &RansPlan) -> Vec<u8> {
+    let mut state = RANS_BYTE_L;
+    let mut renormalized = Vec::new();
+    for &value in folded.iter().rev() {
+        let symbol = plan.symbols[usize::from(plan.lookup[value as usize] - 1)];
+        let threshold =
+            (u64::from(RANS_BYTE_L >> plan.table_log) << 8) * u64::from(symbol.frequency);
+        while u64::from(state) >= threshold {
+            renormalized.push(state as u8);
+            state >>= 8;
+        }
+        state = rans_advance_encoder(state, symbol, plan.table_log);
+    }
+    let mut payload = Vec::with_capacity(plan.modeled_bytes + 8);
+    payload.push(plan.table_log);
+    put_varint(&mut payload, plan.symbols.len() as u32);
+    let mut previous = 0u16;
+    for (index, symbol) in plan.symbols.iter().enumerate() {
+        put_varint(&mut payload, u32::from(symbol.value - previous));
+        if index + 1 != plan.symbols.len() {
+            put_varint(&mut payload, u32::from(symbol.frequency));
+        }
+        previous = symbol.value;
+    }
+    put_u32(&mut payload, state);
+    payload.extend(renormalized.into_iter().rev());
+    payload
 }
 
 fn encode_temporal_tile(
@@ -1237,17 +1414,6 @@ fn spatial_prediction_mode(mode: SpatialPredictor) -> u8 {
     }
 }
 
-#[cfg(test)]
-fn predictor_model_mode_code(mode: PredictorModelMode) -> u8 {
-    match mode {
-        PredictorModelMode::Paeth => PREDICT_SPATIAL,
-        PredictorModelMode::Average => PREDICT_AVERAGE,
-        PredictorModelMode::ClampGradient => PREDICT_CLAMP_GRADIENT,
-        PredictorModelMode::HalfGradient => PREDICT_HALF_GRADIENT,
-        PredictorModelMode::Temporal => PREDICT_TEMPORAL,
-    }
-}
-
 fn spatial_prediction(mode: SpatialPredictor, left: u8, above: u8, upper_left: u8) -> u8 {
     match mode {
         SpatialPredictor::Paeth => paeth(left, above, upper_left),
@@ -1355,6 +1521,12 @@ fn model_folded_payload(
     max_folded: u32,
 ) -> Result<ByteFormatModel, CodecError> {
     let mut model = ByteFormatModel::default();
+    if entropy_mode == ENTROPY_ORDER0 {
+        for folded in decode_rans_symbols(payload, sample_count, max_folded)? {
+            model.push(folded);
+        }
+        return Ok(model);
+    }
     if entropy_mode == ENTROPY_ZERO_RUN {
         let mut cursor = 0usize;
         let mut decoded = 0usize;
@@ -1418,6 +1590,21 @@ fn decode_tile_payload(
     if mode == ENTROPY_ZERO_RUN {
         return decode_zero_run_payload(payload, sample_count, width, step, prediction);
     }
+    if mode == ENTROPY_ORDER0 {
+        let folded = decode_rans_symbols(payload, sample_count, u32::from(u8::MAX) * 2)?;
+        let mut output = vec![0u8; sample_count];
+        for (sample_index, value) in folded.into_iter().enumerate() {
+            reconstruct_sample(
+                &mut output,
+                sample_index,
+                width,
+                unzigzag(value),
+                step,
+                prediction,
+            )?;
+        }
+        return Ok(output);
+    }
     if !(ENTROPY_RICE_BASE..=ENTROPY_RICE_BASE + MAX_RICE_PARAMETER).contains(&mode) {
         return Err(CodecError::Malformed("unknown tile entropy mode"));
     }
@@ -1429,6 +1616,116 @@ fn decode_tile_payload(
         mode - ENTROPY_RICE_BASE,
         prediction,
     )
+}
+
+fn decode_rans_symbols(
+    payload: &[u8],
+    sample_count: usize,
+    max_folded: u32,
+) -> Result<Vec<u32>, CodecError> {
+    let mut cursor = 0usize;
+    let table_log = *payload
+        .get(cursor)
+        .ok_or(CodecError::Malformed("truncated order-0 table"))?;
+    cursor += 1;
+    if !(RANS_MIN_TABLE_LOG..=RANS_MAX_TABLE_LOG).contains(&table_log) {
+        return Err(CodecError::Malformed("order-0 table log is out of range"));
+    }
+    let table_size = 1u32 << table_log;
+    let symbol_count = usize::try_from(get_varint(payload, &mut cursor)?)
+        .map_err(|_| CodecError::LimitExceeded("order-0 alphabet is too large"))?;
+    if symbol_count == 0 || symbol_count > 511 || symbol_count > table_size as usize {
+        return Err(CodecError::Malformed(
+            "order-0 alphabet size is out of range",
+        ));
+    }
+    let mut symbols = Vec::with_capacity(symbol_count);
+    let mut previous = 0u32;
+    let mut cumulative = 0u32;
+    for index in 0..symbol_count {
+        let delta = get_varint(payload, &mut cursor)?;
+        if index != 0 && delta == 0 {
+            return Err(CodecError::Malformed(
+                "order-0 symbols are not strictly increasing",
+            ));
+        }
+        let value = previous
+            .checked_add(delta)
+            .filter(|&value| value <= max_folded)
+            .ok_or(CodecError::Malformed("order-0 symbol is out of range"))?;
+        let frequency = if index + 1 == symbol_count {
+            table_size
+                .checked_sub(cumulative)
+                .filter(|&frequency| frequency != 0)
+                .ok_or(CodecError::Malformed(
+                    "order-0 frequencies exceed the table",
+                ))?
+        } else {
+            let frequency = get_varint(payload, &mut cursor)?;
+            if frequency == 0
+                || cumulative
+                    .checked_add(frequency)
+                    .is_none_or(|sum| sum >= table_size)
+            {
+                return Err(CodecError::Malformed("order-0 frequency is out of range"));
+            }
+            frequency
+        };
+        symbols.push(RansSymbol {
+            value: value as u16,
+            frequency: frequency as u16,
+            cumulative: cumulative as u16,
+        });
+        cumulative += frequency;
+        previous = value;
+    }
+    if cumulative != table_size {
+        return Err(CodecError::Malformed(
+            "order-0 frequencies do not fill the table",
+        ));
+    }
+    let state_end = cursor
+        .checked_add(4)
+        .filter(|&end| end <= payload.len())
+        .ok_or(CodecError::Malformed("truncated order-0 state"))?;
+    let mut state = get_u32(payload, cursor)?;
+    cursor = state_end;
+    if state < RANS_BYTE_L {
+        return Err(CodecError::Malformed("invalid order-0 final state"));
+    }
+    let mut decoding_table = Vec::with_capacity(table_size as usize);
+    for symbol in &symbols {
+        decoding_table.extend(std::iter::repeat_n(*symbol, usize::from(symbol.frequency)));
+    }
+    if decoding_table.len() != table_size as usize {
+        return Err(CodecError::Malformed(
+            "order-0 frequencies do not fill the table",
+        ));
+    }
+
+    let mut output = Vec::with_capacity(sample_count);
+    for _ in 0..sample_count {
+        let slot = state & (table_size - 1);
+        let symbol = decoding_table[slot as usize];
+        output.push(u32::from(symbol.value));
+        let next = u64::from(symbol.frequency) * u64::from(state >> table_log)
+            + u64::from(slot - u32::from(symbol.cumulative));
+        state = u32::try_from(next).map_err(|_| CodecError::Malformed("order-0 state overflow"))?;
+        while state < RANS_BYTE_L {
+            let byte = *payload
+                .get(cursor)
+                .ok_or(CodecError::Malformed("truncated order-0 payload"))?;
+            cursor += 1;
+            state = (state << 8) | u32::from(byte);
+        }
+    }
+    if cursor != payload.len() {
+        return Err(CodecError::Malformed("trailing order-0 payload bytes"));
+    }
+    if state != RANS_BYTE_L {
+        return Err(CodecError::Malformed("noncanonical order-0 initial state"));
+    }
+    Ok(output)
 }
 
 fn decode_zero_run_payload(
@@ -2311,8 +2608,130 @@ mod tests {
 
         let frame = patterned_frame(16, 16);
         let mut encoded = encode(&frame, CodecOptions::default()).unwrap();
-        encoded[HEADER_LEN + 1] = ENTROPY_RICE_BASE + MAX_RICE_PARAMETER + 1;
+        encoded[HEADER_LEN + 1] = ENTROPY_ORDER0 + 1;
         assert!(decode(&encoded, 1).is_err());
+    }
+
+    #[test]
+    fn order0_payload_round_trips_sparse_and_extreme_alphabets() {
+        let cases = [
+            vec![0u16; 32_768],
+            (0..=510).collect(),
+            (0..32_768)
+                .map(|index| {
+                    if index % 97 == 0 {
+                        510
+                    } else if index % 7 == 0 {
+                        3
+                    } else {
+                        0
+                    }
+                })
+                .collect(),
+            (0..32_768)
+                .map(|index| ((index * 73 + index / 11) % 511) as u16)
+                .collect(),
+        ];
+        for folded in cases {
+            let mut histogram = [0u32; 511];
+            for &value in &folded {
+                histogram[value as usize] += 1;
+            }
+            let plan = build_rans_plan(&histogram, folded.len()).unwrap();
+            let payload = encode_rans_payload(&folded, &plan);
+            assert!(payload.len().abs_diff(plan.modeled_bytes) <= 4);
+            let observed: Vec<(u16, u32)> = histogram
+                .iter()
+                .enumerate()
+                .filter(|(_, count)| **count != 0)
+                .map(|(symbol, &count)| (symbol as u16, count))
+                .collect();
+            let exact_minimum = (RANS_MIN_TABLE_LOG..=RANS_MAX_TABLE_LOG)
+                .filter_map(|table_log| build_rans_plan_for_log(&observed, folded.len(), table_log))
+                .map(|candidate| encode_rans_payload(&folded, &candidate).len())
+                .min()
+                .unwrap();
+            assert!(payload.len() <= exact_minimum + 4);
+            assert_eq!(
+                decode_rans_symbols(&payload, folded.len(), 510).unwrap(),
+                folded
+                    .iter()
+                    .map(|&value| u32::from(value))
+                    .collect::<Vec<_>>()
+            );
+
+            let mut trailing = payload.clone();
+            trailing.push(0);
+            assert!(decode_rans_symbols(&trailing, folded.len(), 510).is_err());
+            for end in 0..payload.len().min(16) {
+                assert!(decode_rans_symbols(&payload[..end], folded.len(), 510).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn modeled_order0_log_tracks_exact_synthetic_minimum() {
+        let mut mismatches = 0usize;
+        let mut maximum_overhead = 0usize;
+        let cases = 256usize;
+        for case in 0..cases {
+            let sample_count = 257 + case * 97 % 4096;
+            let mut state = 0x9e37_79b9u32 ^ case as u32;
+            let mut folded = Vec::with_capacity(sample_count);
+            for index in 0..sample_count {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let value = match case % 4 {
+                    0 => state as usize % 511,
+                    1 => match state % 100 {
+                        0..=69 => 0,
+                        70..=89 => 1,
+                        90..=96 => 2,
+                        _ => 3 + state as usize % 32,
+                    },
+                    2 => state as usize % (2 + case % 127),
+                    _ => (index / (1 + case % 31) + state as usize % 3) % 511,
+                };
+                folded.push(value as u16);
+            }
+            let mut histogram = [0u32; 511];
+            for &value in &folded {
+                histogram[value as usize] += 1;
+            }
+            let modeled = build_rans_plan(&histogram, folded.len()).unwrap();
+            let modeled_bytes = encode_rans_payload(&folded, &modeled).len();
+            let observed: Vec<(u16, u32)> = histogram
+                .iter()
+                .enumerate()
+                .filter(|(_, count)| **count != 0)
+                .map(|(symbol, &count)| (symbol as u16, count))
+                .collect();
+            let (exact_bytes, exact_log) = (RANS_MIN_TABLE_LOG..=RANS_MAX_TABLE_LOG)
+                .filter_map(|table_log| {
+                    build_rans_plan_for_log(&observed, folded.len(), table_log)
+                        .map(|plan| (encode_rans_payload(&folded, &plan).len(), table_log))
+                })
+                .min()
+                .unwrap();
+            mismatches += usize::from(modeled.table_log != exact_log);
+            maximum_overhead = maximum_overhead.max(modeled_bytes - exact_bytes);
+        }
+        println!(
+            "synthetic cases={cases} log_mismatches={mismatches} maximum_overhead={maximum_overhead}"
+        );
+        assert!(maximum_overhead <= 4);
+    }
+
+    #[test]
+    fn order0_table_validation_rejects_noncanonical_inputs() {
+        for payload in [
+            vec![RANS_MIN_TABLE_LOG - 1],
+            vec![RANS_MAX_TABLE_LOG + 1],
+            vec![RANS_MIN_TABLE_LOG, 0],
+            vec![RANS_MIN_TABLE_LOG, 2, 0, 1, 0],
+            vec![RANS_MIN_TABLE_LOG, 1, 0, 0, 0, 0, 0],
+        ] {
+            assert!(decode_rans_symbols(&payload, 1, 510).is_err());
+        }
     }
 
     #[test]
@@ -2441,7 +2860,7 @@ mod tests {
     }
 
     #[test]
-    fn predictor_oracle_matches_current_payloads_and_error_bound() {
+    fn modeled_predictor_selector_stays_near_exact_oracle_and_within_error_bound() {
         let reference = patterned_frame(65, 33);
         let mut frame = reference.clone();
         for plane in &mut frame.planes {
@@ -2467,15 +2886,18 @@ mod tests {
                 let parsed = parse(&encoded).unwrap();
                 let models = analyze_predictors(&frame, reference, options).unwrap();
                 let error_bound = (options.quantization_step() / 2) as u32;
-                for (model, entry) in models.iter().zip(&parsed.entries) {
-                    assert_eq!(model.oracle.payload_bytes, entry.length);
-                    assert_eq!(
-                        model.oracle.zero_run,
-                        entry.entropy_mode == ENTROPY_ZERO_RUN
+                for (tile_index, (model, entry)) in models.iter().zip(&parsed.entries).enumerate() {
+                    assert!(
+                        entry.length >= model.oracle.payload_bytes,
+                        "tile {tile_index}, quality {quality}, reference {}",
+                        reference.is_some()
                     );
-                    assert_eq!(
-                        predictor_model_mode_code(model.oracle_mode),
-                        entry.prediction_mode
+                    assert!(
+                        entry.length <= model.oracle.payload_bytes + 8,
+                        "tile {tile_index}, quality {quality}, reference {}, exact {}, selected {}",
+                        reference.is_some(),
+                        model.oracle.payload_bytes,
+                        entry.length
                     );
                     for candidate in [
                         Some(model.paeth),
@@ -2598,5 +3020,17 @@ mod tests {
 
         legacy[HEADER_LEN + 2] = PREDICT_AVERAGE;
         assert!(decode(&legacy, 1).is_err());
+
+        let mut predictor_version = encode(
+            &frame,
+            CodecOptions {
+                quality: 100,
+                ..CodecOptions::default()
+            },
+        )
+        .unwrap();
+        predictor_version[4] = PREDICTOR_VERSION;
+        predictor_version[HEADER_LEN + 1] = ENTROPY_ORDER0;
+        assert!(decode(&predictor_version, 1).is_err());
     }
 }

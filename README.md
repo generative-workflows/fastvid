@@ -6,9 +6,10 @@ access.
 
 The current version supports planar 8/10/12/16-bit YUV 4:2:2 and grayscale,
 independently coded tiles, spatial prediction, optional short-GOP temporal
-prediction, and per-tile adaptive zero-run or Rice entropy coding. High-bit
-raw interchange uses tightly packed little-endian `u16` samples. The bitstream
-is experimental and does not promise backward compatibility.
+prediction, and per-tile adaptive zero-run, Rice, or 8-bit order-0 rANS
+entropy coding. High-bit raw interchange uses tightly packed little-endian
+`u16` samples. The bitstream is experimental and does not promise backward
+compatibility.
 
 ## Quick start
 
@@ -27,14 +28,14 @@ commands.
 
 ## Current benchmark
 
-Practical-compression snapshot on a 4-vCPU AMD EPYC-Genoa VM with Rust 1.97.1
-in release mode. This is the 18-sample corpus-v2 codec track at GOP 1, one
-thread, after one warm-up and one recorded development trial per cell.
+Current maximum-compression snapshot on a 4-vCPU AMD EPYC-Genoa VM with Rust
+1.97.1 in release mode. This is the 18-sample corpus-v2 codec track at GOP 1,
+one thread, after warm-up and two balanced recorded trials per cell.
 
 | Quality | Threads | Geo. ratio | Encode | Raw encode | Decode | Raw decode | Mean Y PSNR | Mean SSIM |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 90 | 1 | 7.944x | 17.39 MP/s | 34.78 MB/s | 64.92 MP/s | 129.84 MB/s | 49.888 dB | 0.996594 |
-| 100 | 1 | 5.314x | 17.15 MP/s | 34.30 MB/s | 58.86 MP/s | 117.72 MB/s | exact | 1.000000 |
+| 90 | 1 | 9.203x | 16.18 MP/s | 32.36 MB/s | 46.94 MP/s | 93.88 MB/s | 49.908 dB | 0.996653 |
+| 100 | 1 | 5.990x | 15.24 MP/s | 30.48 MB/s | 42.88 MP/s | 85.76 MB/s | exact | 1.000000 |
 
 Compression is the geometric mean of per-sample raw/encoded ratios. Throughput
 and quality columns are arithmetic means of per-sample results; MP/s counts
@@ -76,7 +77,8 @@ corpus.
   checksums, capability tracks, and licenses.
 - [Format specifications](specs/format-v0.md) define the 8-bit v0 syntax;
   [version 1](specs/format-v1.md) adds native 10/12/16-bit samples, and
-  [version 2](specs/format-v2.md) adds tile-local predictor modes.
+  [version 2](specs/format-v2.md) adds tile-local predictor modes. The current
+  8-bit [version 3](specs/format-v3.md) adds tile-local order-0 byte-rANS.
 - [Research index](research/INDEX.md) records openly usable technical sources.
 - [`experiments/`](experiments) contains immutable accepted/rejected
   experimental design records and detailed performance history.

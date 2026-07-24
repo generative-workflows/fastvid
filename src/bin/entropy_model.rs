@@ -177,7 +177,7 @@ fn model_high_bit(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>
 
 fn print_header() {
     println!(
-        "sample\tframe\tbit_depth\tquality\tgop\ttile\tplane\twidth\theight\tprediction\tsource_entropy\tsamples\tzeros\tactual_bytes\tstream_vbyte_bytes\tstream_vbyte_0124_bytes"
+        "sample\tframe\tbit_depth\tquality\tgop\ttile\tplane\twidth\theight\tprediction\tsource_entropy\tsamples\tzeros\tactual_bytes\tstream_vbyte_bytes\tstream_vbyte_0124_bytes\tdistinct_symbols\tideal_order0_bytes\torder0_supported\torder0_table_log\torder0_payload_bytes\torder0_table_bytes\torder0_complete_bytes"
     );
 }
 
@@ -191,7 +191,7 @@ fn print_models(
 ) {
     for (tile, model) in models.iter().enumerate() {
         println!(
-            "{sample}\t{frame}\t{bit_depth}\t{quality}\t{gop}\t{tile}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{sample}\t{frame}\t{bit_depth}\t{quality}\t{gop}\t{tile}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             model.plane,
             model.width,
             model.height,
@@ -210,6 +210,13 @@ fn print_models(
             model.actual_payload_bytes,
             model.stream_vbyte_bytes,
             model.stream_vbyte_0124_bytes,
+            model.distinct_symbols,
+            model.ideal_order0_bytes,
+            model.order0_supported,
+            model.order0_table_log,
+            model.order0_payload_bytes,
+            model.order0_table_bytes,
+            model.order0_complete_bytes,
         );
     }
 }

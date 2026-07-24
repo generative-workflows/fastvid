@@ -272,6 +272,7 @@ pub fn analyze_entropy16(bytes: &[u8]) -> Result<Vec<TileEntropyModel>, CodecErr
             let sample_count = checked_high_area(entry.tile.width, entry.tile.height)?;
             let model =
                 model_folded_payload(payload, sample_count, entry.entropy_mode, max_folded)?;
+            let order0 = model.order0_size();
             Ok(TileEntropyModel {
                 plane: entry.tile.plane,
                 width: entry.tile.width,
@@ -287,6 +288,13 @@ pub fn analyze_entropy16(bytes: &[u8]) -> Result<Vec<TileEntropyModel>, CodecErr
                 actual_payload_bytes: entry.length,
                 stream_vbyte_bytes: model.stream_vbyte_bytes(),
                 stream_vbyte_0124_bytes: model.stream_vbyte_0124_bytes(),
+                distinct_symbols: order0.distinct_symbols,
+                ideal_order0_bytes: order0.ideal_bytes,
+                order0_supported: order0.supported,
+                order0_table_log: order0.table_log,
+                order0_payload_bytes: order0.payload_bytes,
+                order0_table_bytes: order0.table_bytes,
+                order0_complete_bytes: order0.complete_bytes,
             })
         })
         .collect()

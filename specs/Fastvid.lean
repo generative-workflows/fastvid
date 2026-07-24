@@ -115,4 +115,31 @@ theorem clamp_sample_bound (prediction : Int) (maximum : Nat) :
   · omega
   · exact Nat.min_le_right _ _
 
+/-- Version-three rANS table size. -/
+def ransTableSize (tableLog : Nat) : Nat := 2 ^ tableLog
+
+/-- Slot selected from the low `tableLog` bits of an rANS state. -/
+def ransSlot (state tableLog : Nat) : Nat :=
+  state % ransTableSize tableLog
+
+/-- Every decoded slot lies inside its normalized frequency table. -/
+theorem rans_slot_bound (state tableLog : Nat) :
+    ransSlot state tableLog < ransTableSize tableLog := by
+  simp only [ransSlot, ransTableSize]
+  exact Nat.mod_lt state (Nat.two_pow_pos tableLog)
+
+/-- The inverse rANS state for a slot in a symbol's frequency interval. -/
+def ransDecodeState
+    (state frequency cumulative tableLog : Nat) : Nat :=
+  frequency * (state / ransTableSize tableLog)
+    + ransSlot state tableLog - cumulative
+
+/-- A normalized symbol interval always has a nonnegative slot offset. -/
+theorem rans_slot_offset_nonnegative
+    (state cumulative tableLog : Nat)
+    (h : cumulative ≤ ransSlot state tableLog) :
+    cumulative + (ransSlot state tableLog - cumulative) =
+      ransSlot state tableLog := by
+  omega
+
 end Fastvid
