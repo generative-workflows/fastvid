@@ -1,0 +1,47 @@
+diff --git a/src/codec.rs b/src/codec.rs
+index 5a3098b..75916cf 100644
+--- a/src/codec.rs
++++ b/src/codec.rs
+@@ -770,6 +770,21 @@ fn encode_best_tile(
+     quantizer: &Quantizer,
+     prefer_temporal: bool,
+ ) -> EncodedTile {
++    if let Some(reference) = reference.filter(|_| prefer_temporal) {
++        encode_temporal_tile(plane, reference, tile, quantizer)
++    } else {
++        encode_spatial_tile(plane, tile, quantizer)
++    }
++}
++
++#[allow(dead_code)]
++fn encode_best_tile_exhaustive(
++    plane: &Plane,
++    reference: Option<&Plane>,
++    tile: Tile,
++    quantizer: &Quantizer,
++    prefer_temporal: bool,
++) -> EncodedTile {
+     const MODES: [SpatialPredictor; 4] = [
+         SpatialPredictor::Paeth,
+         SpatialPredictor::Average,
+@@ -985,7 +1000,12 @@ fn encode_spatial_tile(plane: &Plane, tile: Tile, quantizer: &Quantizer) -> Enco
+             .zip(&mut reconstructed_row)
+         {
+             let above = *reconstructed_slot;
+-            let prediction = i32::from(paeth(left, above, upper_left));
++            let prediction = i32::from(spatial_prediction(
++                SpatialPredictor::ClampGradient,
++                left,
++                above,
++                upper_left,
++            ));
+             let quantized = quantizer.quantize(i32::from(sample) - prediction);
+             let reconstructed = (prediction + quantized * quantizer.step).clamp(0, 255) as u8;
+             *reconstructed_slot = reconstructed;
+@@ -994,5 +1014,5 @@ fn encode_spatial_tile(plane: &Plane, tile: Tile, quantizer: &Quantizer) -> Enco
+             residuals.push(quantized);
+         }
+     }
+-    residuals.finish(PREDICT_SPATIAL)
++    residuals.finish(PREDICT_CLAMP_GRADIENT)
+ }

@@ -30,3 +30,4 @@ before entering the format.
 | [0023](0023-forward-citation-space-savings.md) | Recent predictor papers, WebP lossless, ANS/FSE, and codec benchmarks | Forward-citation pass for bounded residuals, block predictors, and exact byte savings | Reviewed |
 | [0024](0024-finite-block-ans-entropy-models.md) | ANS/FSE, interleaved coders, and finite-block source coding | Complete-byte table-overhead model for tile residual entropy | Reviewed |
 | [0025](0025-context-conditioned-residual-entropy.md) | Recent JPEG XL, conditional residual, and hierarchical probability work | Charged causal-context models for residual scale and cross-channel structure | Reviewed |
+| [0026](0026-paeth-data-dependency-kernel.md) | stb_image, JPEG XL, PNG | Byte-identical Paeth data dependencies and fixed-predictor speed paths | Reviewed |

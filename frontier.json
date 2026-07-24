@@ -3,7 +3,7 @@
   "protocol": {
     "name": "frontier-fast-feedback-v1",
     "corpus": "corpus-v2",
-    "trials": 6,
+    "trials": 8,
     "aggregation": "per-case median, then geometric mean",
     "scope": "four pinned 8-bit spatial/temporal cases; screening only"
   },
@@ -42,11 +42,11 @@
       "id": "speed",
       "label": "Speed",
       "role": "throughput",
-      "state": "vacant",
-      "source": null,
-      "binary": null,
-      "binary_sha256": null,
-      "evidence": null
+      "state": "preserved",
+      "source": "4ad0318 + artifacts/frontier/exp0060-speed.patch",
+      "binary": "artifacts/frontier/fastvid-speed-exp0060",
+      "binary_sha256": "f8e6bb69d7cf52b4531210e7423ec75a5626549ac1bacc964c1e123ca2bde8f7",
+      "evidence": "experiments/EXP-0060-fixed-gradient-speed-tier.md"
     }
   ]
 }

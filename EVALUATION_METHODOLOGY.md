@@ -247,7 +247,7 @@ corrected by a new experiment record rather than silently reused.
 ## Exploration, exploitation, and the codec frontier
 
 Fastvid maintains a portfolio rather than optimizing only the most recently
-accepted implementation. The current registry keeps at most three distinct
+accepted implementation. The current registry keeps at most four distinct
 active versions across four named roles and is
 [`FRONTIER.md`](FRONTIER.md), with slots for:
 
@@ -255,8 +255,8 @@ active versions across four named roles and is
 2. a practical compression line that accepts a bounded, documented speed
    cost;
 3. a maximum-compression line for a more aggressive rate/speed tradeoff; and
-4. a throughput-oriented line that preserves rate and quality within its
-   declared tolerances.
+4. a throughput-oriented line with an explicit, measured rate/quality
+   tradeoff.
 
 A role may be vacant when no distinct candidate is non-dominated, and one
 version is not duplicated under multiple roles. Rejected or strictly

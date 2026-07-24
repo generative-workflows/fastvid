@@ -1,7 +1,7 @@
 # Fastvid codec frontier
 
 This is a current-state registry, not an experiment log or changelog. It keeps
-at most three distinct non-dominated codec versions across four named roles.
+at most four distinct non-dominated codec versions across four named roles.
 A role remains explicitly vacant when no additional version earns it.
 Completed evidence remains in immutable experiment records. The
 machine-readable companion is [`frontier.json`](frontier.json).
@@ -13,12 +13,14 @@ machine-readable companion is [`frontier.json`](frontier.json).
 | Balanced | `156054c` | `06ef3278e9055f3c53c94cf964f4a7bf785453b696e0df262dec9161b45c6ab8` | v0 8-bit / v1 high-bit | [EXP-0045](experiments/EXP-0045-rolling-8bit-reconstruction.md) | Preserved |
 | Practical compression | `4ad0318` | `1235c7e82cf34fdddf5c341a5c17d265687368092174d175db709f22b17131c9` | v2 encode; v0/v1/v2 decode | [EXP-0052](experiments/EXP-0052-16bit-temporal-decode-guard.md) | Preserved |
 | Maximum compression | `84a3be1` | `dda826459cfa9cb017b751749d2b780419b18cc1a2ff9ff309492ea8b4df61da` | 8-bit v3 / high-bit v2 encode; legacy decode | [EXP-0055](experiments/EXP-0055-modeled-rans-selector.md) | Preserved |
-| Speed | — | — | — | No distinct candidate | Vacant |
+| Speed | `4ad0318` + `exp0060-speed.patch` | `f8e6bb69d7cf52b4531210e7423ec75a5626549ac1bacc964c1e123ca2bde8f7` | v2 encode; v0/v1/v2 decode | [EXP-0060](experiments/EXP-0060-fixed-gradient-speed-tier.md) | Preserved |
 
-All three active sources are retained in Git. The balanced version currently
-has the highest measured encode throughput, but duplicating it in the speed
-role would not add a frontier point. The speed role is reserved for a
-distinct candidate that earns its place.
+The speed source is reproduced by applying
+`artifacts/frontier/exp0060-speed.patch` to Git commit `4ad0318`; the other
+three sources are retained directly in Git. The speed tier uses fixed
+clamp-gradient intra prediction and frame-gated temporal prediction, trading
+some spatial compression for materially higher encode, decode, and
+single-frame-access throughput.
 
 ## Automated view
 
@@ -38,8 +40,8 @@ evidence.
                                       |
                     rolling reconstruction / exact Rice
                        /                              \
-       compatible predictor oracle              throughput exploration
-                |                              scheduler/SIMD/cache work
+       compatible predictor oracle              fixed-gradient speed tier
+                |                              direct intra/temporal paths
         version-2 tile modes
           /             \
  practical guard     maximum compression
@@ -65,7 +67,7 @@ invariance at q100, 1% for encoded bytes, and 5% for timing. A deliberate
 rate/quality tradeoff remains non-dominated when it occupies a declared slot.
 
 When a new version dominates a slot, this file replaces the row; the old
-experiment remains immutable and Git retains its source. At most three
+experiment remains immutable and Git retains its source. At most four
 versions are active so confirmation cost remains bounded.
 
 ## Preserved artifacts
@@ -75,4 +77,7 @@ versions are active so confirmation cost remains bounded.
 - `artifacts/frontier/fastvid-compression-exp0052`
   (`1235c7e82cf34fdddf5c341a5c17d265687368092174d175db709f22b17131c9`);
 - `artifacts/frontier/fastvid-rans-exp0055`
-  (`dda826459cfa9cb017b751749d2b780419b18cc1a2ff9ff309492ea8b4df61da`).
+  (`dda826459cfa9cb017b751749d2b780419b18cc1a2ff9ff309492ea8b4df61da`);
+- `artifacts/frontier/fastvid-speed-exp0060`
+  (`f8e6bb69d7cf52b4531210e7423ec75a5626549ac1bacc964c1e123ca2bde8f7`),
+  reproduced by `artifacts/frontier/exp0060-speed.patch`.

@@ -223,7 +223,7 @@ def render_svg(manifest: dict, points: list[dict[str, float | str]]) -> str:
         + panel(674, 120, 455, 390, "decode_mpps", "Decode frontier")
         + '<text x="42" y="602" class="subtitle">Dashed lines connect non-dominated '
         "points within each two-axis view. Quality/settings are identical per case. "
-        "The explicit speed slot is omitted while vacant.</text>"
+        "Vacant roles are omitted.</text>"
         "</svg>"
     )
 
@@ -240,7 +240,9 @@ def write_summary(path: Path, rows: list[dict[str, str]]) -> None:
         "encoded_bytes",
     ]
     with path.open("w", newline="", encoding="utf-8") as target:
-        writer = csv.DictWriter(target, fieldnames=fields, delimiter="\t")
+        writer = csv.DictWriter(
+            target, fieldnames=fields, delimiter="\t", lineterminator="\n"
+        )
         writer.writeheader()
         writer.writerows(rows)
 

@@ -16,7 +16,8 @@ scripts/graph-frontier.py \
 ```
 
 The harness validates every preserved binary hash, warms every version, runs
-one CPU-bound process at a time, and rotates execution order so each active
-version occupies every position equally. The graph uses per-case medians and
-then geometric means. It is a fast screening view, not a replacement for the
-complete corpus, quality, memory, or access matrices.
+one CPU-bound process at a time, and rotates execution order so each of the
+four active versions occupies every position twice in eight trials. The graph
+uses per-case medians and then geometric means. It is a fast screening view,
+not a replacement for the complete corpus, quality, memory, or access
+matrices.
