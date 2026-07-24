@@ -247,19 +247,31 @@ corrected by a new experiment record rather than silently reused.
 ## Exploration, exploitation, and the codec frontier
 
 Fastvid maintains a portfolio rather than optimizing only the most recently
-accepted implementation. The current 2--3 version registry is
+accepted implementation. The current registry keeps at most three distinct
+active versions across four named roles and is
 [`FRONTIER.md`](FRONTIER.md), with slots for:
 
 1. a balanced accepted line;
-2. a compression-oriented line that accepts a documented speed cost; and
-3. a throughput-oriented line that preserves rate and quality within its
+2. a practical compression line that accepts a bounded, documented speed
+   cost;
+3. a maximum-compression line for a more aggressive rate/speed tradeoff; and
+4. a throughput-oriented line that preserves rate and quality within its
    declared tolerances.
 
-A slot may be vacant when no distinct candidate is non-dominated. Rejected or
-strictly dominated versions are not promoted merely to fill a slot. Frontier
-source is retained by an exact Git commit or source-archive hash; every entry
-also records a distinct release-binary hash, exact-stream controls, experiment
+A role may be vacant when no distinct candidate is non-dominated, and one
+version is not duplicated under multiple roles. Rejected or strictly
+dominated versions are not promoted merely to fill a role. Frontier source is
+retained by an exact Git commit or source-archive hash; every entry also
+records a distinct release-binary hash, exact-stream controls, experiment
 evidence, and benchmark artifact hashes.
+
+`frontier.json` is the machine-readable companion to the human registry.
+Comparable visualization runs validate hashes, warm every version, rotate
+execution order across all active versions, and execute only one CPU-bound
+process at a time. `scripts/graph-frontier.py` plots separate compression
+versus encode/decode views because no scalar score may hide a tradeoff between
+those axes. A plotted feedback frontier is screening evidence; promotion
+still requires the role's complete-corpus and access gates.
 
 In every rolling group of six optimization experiments, at least two must be
 **exploration** of a materially different technique family and at least two

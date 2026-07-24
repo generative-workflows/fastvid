@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "protocol": {
+    "name": "frontier-fast-feedback-v1",
+    "corpus": "corpus-v2",
+    "trials": 6,
+    "aggregation": "per-case median, then geometric mean",
+    "scope": "four pinned 8-bit spatial/temporal cases; screening only"
+  },
+  "slots": [
+    {
+      "id": "balanced",
+      "label": "Balanced",
+      "role": "balanced",
+      "state": "preserved",
+      "source": "156054c",
+      "binary": "artifacts/frontier/fastvid-balanced-exp0045",
+      "binary_sha256": "06ef3278e9055f3c53c94cf964f4a7bf785453b696e0df262dec9161b45c6ab8",
+      "evidence": "experiments/EXP-0045-rolling-8bit-reconstruction.md"
+    },
+    {
+      "id": "practical-compression",
+      "label": "Practical compression",
+      "role": "compression",
+      "state": "preserved",
+      "source": "4ad0318",
+      "binary": "artifacts/frontier/fastvid-compression-exp0052",
+      "binary_sha256": "1235c7e82cf34fdddf5c341a5c17d265687368092174d175db709f22b17131c9",
+      "evidence": "experiments/EXP-0052-16bit-temporal-decode-guard.md"
+    },
+    {
+      "id": "maximum-compression",
+      "label": "Maximum compression",
+      "role": "maximum-compression",
+      "state": "preserved",
+      "source": "84a3be1",
+      "binary": "artifacts/frontier/fastvid-rans-exp0055",
+      "binary_sha256": "dda826459cfa9cb017b751749d2b780419b18cc1a2ff9ff309492ea8b4df61da",
+      "evidence": "experiments/EXP-0055-modeled-rans-selector.md"
+    },
+    {
+      "id": "speed",
+      "label": "Speed",
+      "role": "throughput",
+      "state": "vacant",
+      "source": null,
+      "binary": null,
+      "binary_sha256": null,
+      "evidence": null
+    }
+  ]
+}

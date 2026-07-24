@@ -1,0 +1,5 @@
+slot	label	state	ratio	encode_mpps	decode_mpps	encoded_stream_mbps	encoded_bytes
+balanced	Balanced	preserved	14.503542	95.707578	101.255684	63.394493	4505645
+practical-compression	Practical compression	preserved	24.547776	28.787627	132.382173	37.455311	4137139
+maximum-compression	Maximum compression	preserved	33.613405	24.143095	94.824170	27.353510	2948779
+speed	Speed	vacant					

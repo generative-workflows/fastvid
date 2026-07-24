@@ -2,4 +2,4 @@
 /artifacts/
 *.fvid
 *.yuv
-
+__pycache__/

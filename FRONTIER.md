@@ -1,8 +1,10 @@
 # Fastvid codec frontier
 
 This is a current-state registry, not an experiment log or changelog. It keeps
-the two or three non-dominated codec versions that best represent the active
-technology tree. Completed evidence remains in immutable experiment records.
+at most three distinct non-dominated codec versions across four named roles.
+A role remains explicitly vacant when no additional version earns it.
+Completed evidence remains in immutable experiment records. The
+machine-readable companion is [`frontier.json`](frontier.json).
 
 ## Frontier slots
 
@@ -11,9 +13,23 @@ technology tree. Completed evidence remains in immutable experiment records.
 | Balanced | `156054c` | `06ef3278e9055f3c53c94cf964f4a7bf785453b696e0df262dec9161b45c6ab8` | v0 8-bit / v1 high-bit | [EXP-0045](experiments/EXP-0045-rolling-8bit-reconstruction.md) | Preserved |
 | Practical compression | `4ad0318` | `1235c7e82cf34fdddf5c341a5c17d265687368092174d175db709f22b17131c9` | v2 encode; v0/v1/v2 decode | [EXP-0052](experiments/EXP-0052-16bit-temporal-decode-guard.md) | Preserved |
 | Maximum compression | `84a3be1` | `dda826459cfa9cb017b751749d2b780419b18cc1a2ff9ff309492ea8b4df61da` | 8-bit v3 / high-bit v2 encode; legacy decode | [EXP-0055](experiments/EXP-0055-modeled-rans-selector.md) | Preserved |
+| Speed | — | — | — | No distinct candidate | Vacant |
 
-All three sources are retained in Git. No distinct throughput-only candidate
-currently survives the evidence gates.
+All three active sources are retained in Git. The balanced version currently
+has the highest measured encode throughput, but duplicating it in the speed
+role would not add a frontier point. The speed role is reserved for a
+distinct candidate that earns its place.
+
+## Automated view
+
+The current comparable fast-feedback view is
+[`benchmarks/frontier.svg`](benchmarks/frontier.svg), with exact aggregates in
+[`benchmarks/frontier-summary.tsv`](benchmarks/frontier-summary.tsv).
+`scripts/benchmark-frontier.sh` validates every binary hash and records a
+balanced multi-version run; `scripts/graph-frontier.py` validates that matrix,
+finds non-dominated points, and regenerates both files. This is a screening
+view, not a substitute for complete corpus, access, quality, or memory
+evidence.
 
 ## Active technology tree
 
