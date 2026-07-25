@@ -37,3 +37,4 @@ before entering the format.
 | [0030](0030-entropy-decode-consumer-fusion.md) | ryg_rans, interleaved entropy coders, FSE | Direct entropy consumption and the multi-state SIMD format boundary | Reviewed |
 | [0031](0031-modern-simd-rans-implementation.md) | htscodecs SIMD rANS, ryg_rans | Wider-state vector kernels, gather regressions, and Zen 4 limits | Reviewed |
 | [0032](0032-chroma-from-luma-prediction.md) | AV1 CfL paper, specification, and SVT-AV1 | Charged tile-local cross-plane chroma prediction | Reviewed |
+| [0033](0033-reversible-squeeze-transform.md) | JPEG XL 2025 overview and libjxl v0.11.2 | Reversible lifting, frequency separation, and SIMD dependency layout | Reviewed |
