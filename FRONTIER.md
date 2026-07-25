@@ -12,7 +12,7 @@ machine-readable companion is [`frontier.json`](frontier.json).
 |---|---|---|---|---|---|
 | Practical compression | `4ad0318` | `1235c7e82cf34fdddf5c341a5c17d265687368092174d175db709f22b17131c9` | v2 encode; v0/v1/v2 decode | [EXP-0052](experiments/EXP-0052-16bit-temporal-decode-guard.md) | Preserved |
 | Maximum compression | `36b1d20` | `d4d7edaf68a67601f753652757d62bcc49ff237e9ef0954ad0174ddc45322a14` | 8-bit v3 / high-bit v2 encode; legacy decode | [EXP-0068](experiments/EXP-0068-four-state-rans.md) | Preserved |
-| Speed | `29dcc43` | `adc638be500095ee9dff4e5c8030641178dd5c41517f1a7939d3e77f5a6ec8d7` | 8-bit v3 / high-bit v2+block encode; legacy decode | [EXP-0089](experiments/EXP-0089-portable-kernel-speed-promotion.md) | Preserved |
+| Speed | `91a755e` | `637ee0535510f38dd9dc99f02fc5acbd75f7d927f5b2a3517d2b8f4b167c1407` | 8-bit v3 / high-bit v2+block encode; legacy decode | [EXP-0096](experiments/EXP-0096-rice4-speed-promotion.md) | Preserved |
 
 All active sources are retained directly in Git. The speed tier uses fixed
 clamp-gradient intra prediction and frame-gated temporal prediction at every
@@ -20,9 +20,10 @@ bit depth. Its high-bit path samples one source row to stream Rice tiles
 directly, tries scalar 128-symbol fixed-width packing only against sampled
 fixed Rice, and retains exact buffered fallback for sparse zero-run tiles.
 Widths through eight use portable eight-symbol `u64` lanes; wider values and
-remainders retain scalar bit-buffer fallback. The speed tier trades some
-spatial compression for materially higher encode, decode, and
-single-frame-access throughput.
+remainders retain scalar bit-buffer fallback. Selected Rice-0/Rice-4 tiles
+emit four exact codes per writer update. The speed tier trades some spatial
+compression for materially higher encode, decode, and single-frame-access
+throughput.
 
 The maximum-compression tier retains scalar order-0 rANS on small payloads
 and uses four interleaved states only when their 12-byte cost is at most 0.5%
@@ -59,28 +60,28 @@ The one-thread q90-neighborhood rows are:
 
 | Codec | Control | Ratio | Encode MP/s | Decode MP/s | Y PSNR |
 |---|---:|---:|---:|---:|---:|
-| Fastvid speed | q90 | 4.809339x | 71.290 | 68.377 | 52.001930 |
-| Fastvid practical | q90 | 5.307903x | 16.839 | 60.454 | 52.002293 |
-| Fastvid maximum | q90 | 5.307903x | 16.800 | 59.876 | 52.002293 |
+| Fastvid speed | q90 | 4.809339x | 76.255 | 69.115 | 52.001930 |
+| Fastvid practical | q90 | 5.307903x | 16.888 | 60.267 | 52.002293 |
+| Fastvid maximum | q90 | 5.307903x | 16.946 | 60.703 | 52.002293 |
 | OpenAPV medium | QP 22 | 4.408004x | 17.633 | 63.468 | 51.534665 |
 | OpenAPV fastest | QP 23 | 4.464067x | 81.182 | 63.471 | 51.735588 |
 
 OpenAPV controls are the measured rows nearest practical Fastvid q90 Y-PSNR:
 the remaining gaps are -0.468 dB and -0.267 dB. The Fastvid speed point is a
 separate rate/speed tradeoff: versus `fastest`, it uses 7.18% less bitrate at
-0.266 dB higher Y-PSNR, encodes 12.18% more slowly (OpenAPV is 13.88%
-faster), and decodes 7.73% faster. At four threads Fastvid encodes 11.29%
-more slowly and decodes 21.78% faster.
+0.266 dB higher Y-PSNR, encodes 6.07% more slowly (OpenAPV is 6.46% faster),
+and decodes 8.89% faster. At four threads Fastvid encodes 9.99% more slowly
+and decodes 16.35% faster.
 
 At the high-fidelity boundary, Fastvid speed q100 is exact at 2.743688x,
-64.472 MP/s encode, and 257.969880 Mb/s. OpenAPV `fastest` QP0 is not exact
+66.036 MP/s encode, and 257.969880 Mb/s. OpenAPV `fastest` QP0 is not exact
 (`max_error=2`) at 1.965097x, 63.200 MP/s, and 360.180000 Mb/s. Fastvid is
-2.01% faster to encode and uses 28.38% less bitrate at this distinct,
+4.49% faster to encode and uses 28.38% less bitrate at this distinct,
 higher-fidelity boundary; it is not called a nominal q100 match. Complete
 one/four-thread rows are
 in [`benchmarks/openapv-frontier-summary.tsv`](benchmarks/openapv-frontier-summary.tsv);
 provenance and controls are in
-[EXP-0089](experiments/EXP-0089-portable-kernel-speed-promotion.md).
+[EXP-0096](experiments/EXP-0096-rice4-speed-promotion.md).
 
 ## Active technology tree
 
@@ -125,11 +126,13 @@ versions are active so confirmation cost remains bounded.
   (`1235c7e82cf34fdddf5c341a5c17d265687368092174d175db709f22b17131c9`);
 - `artifacts/frontier/fastvid-rans4-exp0068`
   (`d4d7edaf68a67601f753652757d62bcc49ff237e9ef0954ad0174ddc45322a14`);
-- `artifacts/frontier/fastvid-speed-exp0088-word-block`
-  (`adc638be500095ee9dff4e5c8030641178dd5c41517f1a7939d3e77f5a6ec8d7`).
+- `artifacts/frontier/fastvid-speed-exp0095-block-rice4`
+  (`637ee0535510f38dd9dc99f02fc5acbd75f7d927f5b2a3517d2b8f4b167c1407`).
 
 Historical reference:
 
+- `artifacts/frontier/fastvid-speed-exp0088-word-block`
+  (`adc638be500095ee9dff4e5c8030641178dd5c41517f1a7939d3e77f5a6ec8d7`);
 - `artifacts/frontier/fastvid-speed-exp0086-block-pack`
   (`9a9b156f7e941a7b701b18e21fbc03175086e47025188a0ddf3e872686ee1877`);
 - `artifacts/frontier/fastvid-speed-exp0078`
