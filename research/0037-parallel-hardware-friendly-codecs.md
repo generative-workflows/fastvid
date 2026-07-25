@@ -191,3 +191,4 @@ more principled format direction is to separate:
 - [EXP-0102](../experiments/EXP-0102-four-lane-rice-shard-model.md)
 - [EXP-0103](../experiments/EXP-0103-independent-predictor-bands.md)
 - [EXP-0104](../experiments/EXP-0104-predictor-band-height-ladder.md)
+- [EXP-0105](../experiments/EXP-0105-predictor-wavefront-model.md)
