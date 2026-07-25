@@ -56,6 +56,8 @@ bottleneck.
 
 ## Relevant experiments
 
+- [EXP-0090: post-pack speed profile](../experiments/EXP-0090-post-pack-speed-profile.md)
+
 - [EXP-0010](../experiments/EXP-0010-fast-feedback-loop.md)
 - [EXP-0011](../experiments/EXP-0011-parallel-map-contention.md)
 - [EXP-0015](../experiments/EXP-0015-temporal-copy-corpus-confirmation.md)

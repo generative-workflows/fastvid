@@ -38,7 +38,8 @@ must be validated by wall-time A/B and, where available, PMU counters.
 
 ## Relevant experiments
 
+- [EXP-0090: post-pack speed profile](../experiments/EXP-0090-post-pack-speed-profile.md)
+
 - [EXP-0027](../experiments/EXP-0027-high-bit-quantizer-table.md)
 - [EXP-0028](../experiments/EXP-0028-single-pass-high-bit-rice-cost.md)
 - [EXP-0029](../experiments/EXP-0029-rice-cost-early-termination.md)
-
