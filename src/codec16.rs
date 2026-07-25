@@ -1097,6 +1097,94 @@ fn encode_fixed_gradient_rice_tile(
     quantizer: &Quantizer16,
     rice_parameter: u8,
 ) -> EncodedTile {
+    match rice_parameter {
+        0 => encode_fixed_gradient_rice_tile_specialized::<0>(plane, tile, quantizer),
+        4 => encode_fixed_gradient_rice_tile_specialized::<4>(plane, tile, quantizer),
+        _ => encode_fixed_gradient_rice_tile_scalar(plane, tile, quantizer, rice_parameter),
+    }
+}
+
+fn encode_fixed_gradient_rice_tile_specialized<const RICE_PARAMETER: u8>(
+    plane: &Plane16,
+    tile: Tile,
+    quantizer: &Quantizer16,
+) -> EncodedTile {
+    let width = tile.width as usize;
+    let height = tile.height as usize;
+    let plane_width = plane.width as usize;
+    let origin_x = tile.x as usize;
+    let origin_y = tile.y as usize;
+    let mut reconstructed_row = vec![0u16; width];
+    let mut payload = Vec::with_capacity(width * height);
+    {
+        let mut writer = BitWriter::new(&mut payload);
+        for y in 0..height {
+            let row_start = (origin_y + y) * plane_width + origin_x;
+            let source_row = &plane.data[row_start..row_start + width];
+            let mut left = 0;
+            let mut upper_left = 0;
+            let mut x = 0;
+            while x + 4 <= width {
+                let mut values = [0u32; 4];
+                for offset in 0..4 {
+                    let sample = source_row[x + offset];
+                    let reconstructed_slot = &mut reconstructed_row[x + offset];
+                    let above = *reconstructed_slot;
+                    let prediction = i32::from(spatial_prediction(
+                        SpatialPredictor::ClampGradient,
+                        left,
+                        above,
+                        upper_left,
+                        quantizer.max_sample as u16,
+                    ));
+                    let quantized = quantizer.quantize(i32::from(sample) - prediction);
+                    let reconstructed = (prediction + quantized * quantizer.step)
+                        .clamp(0, quantizer.max_sample)
+                        as u16;
+                    *reconstructed_slot = reconstructed;
+                    upper_left = above;
+                    left = reconstructed;
+                    values[offset] = zigzag(quantized);
+                }
+                writer.put_rice4_specialized::<RICE_PARAMETER>(values);
+                x += 4;
+            }
+            while x < width {
+                let sample = source_row[x];
+                let reconstructed_slot = &mut reconstructed_row[x];
+                let above = *reconstructed_slot;
+                let prediction = i32::from(spatial_prediction(
+                    SpatialPredictor::ClampGradient,
+                    left,
+                    above,
+                    upper_left,
+                    quantizer.max_sample as u16,
+                ));
+                let quantized = quantizer.quantize(i32::from(sample) - prediction);
+                let reconstructed =
+                    (prediction + quantized * quantizer.step).clamp(0, quantizer.max_sample) as u16;
+                *reconstructed_slot = reconstructed;
+                upper_left = above;
+                left = reconstructed;
+                writer.put_rice(zigzag(quantized), RICE_PARAMETER);
+                x += 1;
+            }
+        }
+        writer.finish();
+    }
+    EncodedTile {
+        entropy_mode: ENTROPY_RICE_BASE + RICE_PARAMETER,
+        prediction_mode: PREDICT_CLAMP_GRADIENT,
+        payload,
+    }
+}
+
+fn encode_fixed_gradient_rice_tile_scalar(
+    plane: &Plane16,
+    tile: Tile,
+    quantizer: &Quantizer16,
+    rice_parameter: u8,
+) -> EncodedTile {
     let width = tile.width as usize;
     let height = tile.height as usize;
     let plane_width = plane.width as usize;
@@ -2250,6 +2338,36 @@ impl<'a> BitWriter<'a> {
         self.put_bits(value, parameter);
     }
 
+    fn put_rice4_specialized<const RICE_PARAMETER: u8>(&mut self, values: [u32; 4]) {
+        let mut packed = 0u64;
+        let mut packed_bits = 0u32;
+        for value in values {
+            let quotient = value >> RICE_PARAMETER;
+            let code_bits = quotient + 1 + u32::from(RICE_PARAMETER);
+            if code_bits > 64 - packed_bits {
+                for value in values {
+                    self.put_rice(value, RICE_PARAMETER);
+                }
+                return;
+            }
+            let remainder_mask = (1u64 << RICE_PARAMETER) - 1;
+            let code = (1u64 << quotient) | ((u64::from(value) & remainder_mask) << (quotient + 1));
+            packed |= code << packed_bits;
+            packed_bits += code_bits;
+        }
+        let available = u32::from(64 - self.buffered_bits);
+        self.buffer |= packed << self.buffered_bits;
+        if packed_bits <= available {
+            self.buffered_bits += packed_bits as u8;
+            self.flush_bytes();
+            return;
+        }
+        self.buffered_bits = 64;
+        self.flush_bytes();
+        self.buffer = packed >> available;
+        self.buffered_bits = (packed_bits - available) as u8;
+    }
+
     fn put_zeros(&mut self, mut count: u32) {
         while count != 0 {
             let added = count.min(u32::from(64 - self.buffered_bits));
@@ -2629,6 +2747,43 @@ mod tests {
                     assert_eq!(
                         rice_bytes(value, parameter, alignment, true),
                         rice_bytes(value, parameter, alignment, false)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn specialized_four_symbol_rice_writer_matches_scalar_groups() {
+        let groups = [
+            [0, 1, 2, 3],
+            [15, 16, 31, 32],
+            [255, 256, 65_535, 65_536],
+            [131_070, 0, 1, 2],
+        ];
+        for parameter in [0, 4] {
+            for alignment in 0..8 {
+                for values in groups {
+                    let mut scalar = Vec::new();
+                    let mut scalar_writer = BitWriter::new(&mut scalar);
+                    scalar_writer.put_bits(0, alignment);
+                    for value in values {
+                        scalar_writer.put_rice(value, parameter);
+                    }
+                    scalar_writer.finish();
+
+                    let mut batched = Vec::new();
+                    let mut batched_writer = BitWriter::new(&mut batched);
+                    batched_writer.put_bits(0, alignment);
+                    if parameter == 0 {
+                        batched_writer.put_rice4_specialized::<0>(values);
+                    } else {
+                        batched_writer.put_rice4_specialized::<4>(values);
+                    }
+                    batched_writer.finish();
+                    assert_eq!(
+                        batched, scalar,
+                        "parameter={parameter} alignment={alignment}"
                     );
                 }
             }
