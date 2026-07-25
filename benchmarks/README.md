@@ -26,11 +26,13 @@ The separate matched OpenAPV diagnostic is produced with:
 
 ```sh
 scripts/benchmark-openapv-frontier.sh \
-  artifacts/exp0073-openapv-frontier.tsv
+  artifacts/exp0086-openapv-frontier.tsv \
+  /tmp/openapv-cmake-build artifacts/corpus-v2 6 frontier.json
 scripts/graph-openapv-frontier.py \
-  artifacts/exp0073-openapv-frontier.tsv \
+  artifacts/exp0086-openapv-frontier.tsv \
   benchmarks/openapv-frontier.svg \
-  --summary benchmarks/openapv-frontier-summary.tsv
+  --summary benchmarks/openapv-frontier-summary.tsv \
+  --trials 6
 ```
 
 [`openapv-frontier.svg`](openapv-frontier.svg) and

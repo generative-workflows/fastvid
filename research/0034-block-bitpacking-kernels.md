@@ -88,3 +88,4 @@ patent review.
 - [EXP-0084: specialized Rice batching](../experiments/EXP-0084-specialized-rice-batching.md)
 - [EXP-0085: charged block bit-packing model](../experiments/EXP-0085-block-bitpacking-model.md)
 - [EXP-0086: sampled block-pack format](../experiments/EXP-0086-sampled-block-pack-format.md)
+- [EXP-0087: block-pack speed promotion](../experiments/EXP-0087-block-pack-speed-promotion.md)
