@@ -86,3 +86,5 @@ patent review.
 - [EXP-0080: inlined Rice writer](../experiments/EXP-0080-inlined-rice-writer.md)
 - [EXP-0083: four-symbol Rice batching](../experiments/EXP-0083-four-symbol-rice-batching.md)
 - [EXP-0084: specialized Rice batching](../experiments/EXP-0084-specialized-rice-batching.md)
+- [EXP-0085: charged block bit-packing model](../experiments/EXP-0085-block-bitpacking-model.md)
+- [EXP-0086: sampled block-pack format](../experiments/EXP-0086-sampled-block-pack-format.md)

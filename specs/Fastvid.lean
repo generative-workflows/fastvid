@@ -30,6 +30,15 @@ theorem rice_recompose (n k : Nat) :
     riceQuotient n k * riceDivisor k + riceRemainder n k = n := by
   simp [riceQuotient, riceRemainder, riceDivisor, Nat.mul_comm, Nat.div_add_mod]
 
+/-- The mask modulus for a fixed-width unsigned block symbol. -/
+def fixedWidthModulus (width : Nat) : Nat := 2 ^ width
+
+/-- A value that fits the signaled block width survives fixed-width packing. -/
+theorem fixed_width_roundtrip (value width : Nat)
+    (fits : value < fixedWidthModulus width) :
+    value % fixedWidthModulus width = value := by
+  exact Nat.mod_eq_of_lt fits
+
 /-- Signed residual from a co-located reconstructed reference sample. -/
 def temporalResidual (current previous : Int) : Int := current - previous
 

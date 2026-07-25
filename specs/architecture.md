@@ -5,7 +5,8 @@
 ```
 Frame + optional reconstructed reference → plane/tile partition
       → tile-local spatial/temporal predictor selection → residual → quantizer
-      → per-tile zero-run/Rice/order-0 selection → canonical directory + header
+      → per-tile zero-run/Rice/block-pack/order-0 selection
+      → canonical directory + header
 ```
 
 Decoding reverses the flow. Each tile owns its predictor state and payload;
@@ -26,7 +27,9 @@ non-overlapping copy.
   and canonical initial rANS state. Interleaved mode assigns sample `i` to
   state `i mod 4` and requires all four states to finish canonically.
 - A zero run cannot exceed the remaining samples in its tile.
-- Rice padding is zero and every entropy payload is consumed exactly.
+- Rice and fixed-block padding is zero and every entropy payload is consumed
+  exactly. High-bit fixed blocks contain at most 128 folded residuals and
+  signal one bounded bit width per byte-aligned block.
 - Lossy prediction uses reconstructed neighbors on both encoder and decoder.
 - Temporal prediction uses only the co-located sample in the preceding
   reconstructed frame; keyframes bound reference-chain length.

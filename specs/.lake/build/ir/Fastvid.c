@@ -13,41 +13,44 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-static lean_object* l_Fastvid_reprPredictionMode___closed__10____x40_Fastvid___hyg_379_;
 LEAN_EXPORT lean_object* l_Fastvid_PredictionMode_noConfusion___redArg___boxed(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_riceDivisor___boxed(lean_object*);
+static lean_object* l_Fastvid_reprPredictionMode___closed__6____x40_Fastvid___hyg_406_;
 LEAN_EXPORT lean_object* l_Fastvid_ransTableSize(lean_object*);
+static lean_object* l_Fastvid_reprPredictionMode___closed__4____x40_Fastvid___hyg_406_;
+static lean_object* l_Fastvid_reprPredictionMode___closed__3____x40_Fastvid___hyg_406_;
 LEAN_EXPORT lean_object* l_Fastvid_instDecidableEqPredictionMode___boxed(lean_object*, lean_object*);
+LEAN_EXPORT lean_object* l_Fastvid_reprPredictionMode____x40_Fastvid___hyg_406____boxed(lean_object*, lean_object*);
 uint8_t lean_nat_dec_le(lean_object*, lean_object*);
 LEAN_EXPORT uint8_t l_Fastvid_instDecidableEqPredictionMode(uint8_t, uint8_t);
 LEAN_EXPORT lean_object* l_Fastvid_riceQuotient(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_predictionModeCode(uint8_t);
 LEAN_EXPORT lean_object* l_Fastvid_clampSample(lean_object*, lean_object*);
-static lean_object* l_Fastvid_reprPredictionMode___closed__0____x40_Fastvid___hyg_379_;
+static lean_object* l_Fastvid_reprPredictionMode___closed__9____x40_Fastvid___hyg_406_;
 LEAN_EXPORT lean_object* l_Fastvid_riceRemainder___boxed(lean_object*, lean_object*);
-static lean_object* l_Fastvid_reprPredictionMode___closed__7____x40_Fastvid___hyg_379_;
 LEAN_EXPORT lean_object* l_Fastvid_predictionModeCode___boxed(lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_PredictionMode_toCtorIdx(uint8_t);
 LEAN_EXPORT lean_object* l_Fastvid_riceDivisor(lean_object*);
 lean_object* lean_nat_shiftr(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l___private_Fastvid_0__Fastvid_zigzag_match__1_splitter___boxed(lean_object*, lean_object*, lean_object*, lean_object*);
-static lean_object* l_Fastvid_reprPredictionMode___closed__1____x40_Fastvid___hyg_379_;
-static lean_object* l_Fastvid_reprPredictionMode___closed__11____x40_Fastvid___hyg_379_;
+static lean_object* l_Fastvid_reprPredictionMode___closed__1____x40_Fastvid___hyg_406_;
 LEAN_EXPORT lean_object* l___private_Fastvid_0__Fastvid_zigzag_match__1_splitter___redArg___closed__0;
 uint8_t lean_nat_dec_eq(lean_object*, lean_object*);
-static lean_object* l_Fastvid_reprPredictionMode___closed__4____x40_Fastvid___hyg_379_;
 LEAN_EXPORT lean_object* l_Fastvid_ransStateIndex(lean_object*, lean_object*);
 lean_object* lean_nat_to_int(lean_object*);
 lean_object* lean_nat_div(lean_object*, lean_object*);
+static lean_object* l_Fastvid_reprPredictionMode___closed__2____x40_Fastvid___hyg_406_;
 LEAN_EXPORT lean_object* l_Fastvid_average2(lean_object*, lean_object*);
+LEAN_EXPORT lean_object* l_Fastvid_fixedWidthModulus___boxed(lean_object*);
 LEAN_EXPORT lean_object* l___private_Fastvid_0__Fastvid_zigzag_match__1_splitter___redArg(lean_object*, lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_unzigzag(lean_object*);
+LEAN_EXPORT lean_object* l_Fastvid_fixedWidthModulus(lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_ransSlot(lean_object*, lean_object*);
 static lean_object* l_Fastvid_instReprPredictionMode___closed__0;
 LEAN_EXPORT lean_object* l_Fastvid_PredictionMode_ofNat___boxed(lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_ransTableSize___boxed(lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_riceRemainder(lean_object*, lean_object*);
-static lean_object* l_Fastvid_reprPredictionMode___closed__6____x40_Fastvid___hyg_379_;
+static lean_object* l_Fastvid_reprPredictionMode___closed__8____x40_Fastvid___hyg_406_;
 LEAN_EXPORT lean_object* l_Fastvid_riceQuotient___boxed(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l___private_Fastvid_0__Fastvid_zigzag_match__1_splitter___redArg___boxed(lean_object*, lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_average2___boxed(lean_object*, lean_object*);
@@ -58,8 +61,10 @@ lean_object* lean_int_sub(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_PredictionMode_noConfusion___redArg___lam__0(lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_ransSlot___boxed(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_zigzag___boxed(lean_object*);
+LEAN_EXPORT lean_object* l_Fastvid_reprPredictionMode____x40_Fastvid___hyg_406_(uint8_t, lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_quantStep(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_PredictionMode_noConfusion___redArg___lam__0___boxed(lean_object*);
+static lean_object* l_Fastvid_reprPredictionMode___closed__10____x40_Fastvid___hyg_406_;
 LEAN_EXPORT lean_object* l_Fastvid_instReprPredictionMode;
 lean_object* lean_nat_abs(lean_object*);
 lean_object* lean_nat_pow(lean_object*, lean_object*);
@@ -67,22 +72,20 @@ LEAN_EXPORT lean_object* l_Fastvid_sampleMax(lean_object*);
 uint8_t lean_nat_dec_eq(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_unzigzag___boxed(lean_object*);
 lean_object* lean_nat_mod(lean_object*, lean_object*);
-LEAN_EXPORT lean_object* l_Fastvid_reprPredictionMode____x40_Fastvid___hyg_379____boxed(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_PredictionMode_noConfusion(lean_object*, uint8_t, uint8_t, lean_object*);
+static lean_object* l_Fastvid_reprPredictionMode___closed__5____x40_Fastvid___hyg_406_;
 LEAN_EXPORT lean_object* l_Fastvid_PredictionMode_noConfusion___boxed(lean_object*, lean_object*, lean_object*, lean_object*);
 lean_object* l_Int_toNat(lean_object*);
 lean_object* l_Repr_addAppParen(lean_object*, lean_object*);
-LEAN_EXPORT lean_object* l_Fastvid_reprPredictionMode____x40_Fastvid___hyg_379_(uint8_t, lean_object*);
+static lean_object* l_Fastvid_reprPredictionMode___closed__0____x40_Fastvid___hyg_406_;
 uint8_t lean_int_dec_lt(lean_object*, lean_object*);
 lean_object* lean_nat_sub(lean_object*, lean_object*);
 lean_object* lean_nat_mul(lean_object*, lean_object*);
 lean_object* lean_int_neg_succ_of_nat(lean_object*);
+static lean_object* l_Fastvid_reprPredictionMode___closed__11____x40_Fastvid___hyg_406_;
 static lean_object* l_Fastvid_zigzag___closed__0;
-static lean_object* l_Fastvid_reprPredictionMode___closed__2____x40_Fastvid___hyg_379_;
 LEAN_EXPORT lean_object* l___private_Fastvid_0__Fastvid_zigzag_match__1_splitter(lean_object*, lean_object*, lean_object*, lean_object*);
-static lean_object* l_Fastvid_reprPredictionMode___closed__8____x40_Fastvid___hyg_379_;
 LEAN_EXPORT lean_object* l_Fastvid_ransStateIndex___boxed(lean_object*, lean_object*);
-static lean_object* l_Fastvid_reprPredictionMode___closed__5____x40_Fastvid___hyg_379_;
 LEAN_EXPORT uint8_t l_Fastvid_PredictionMode_ofNat(lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_quantStep___boxed(lean_object*, lean_object*);
 uint8_t lean_nat_dec_le(lean_object*, lean_object*);
@@ -90,9 +93,8 @@ LEAN_EXPORT lean_object* l_Fastvid_zigzag(lean_object*);
 lean_object* lean_nat_add(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_clampSample___boxed(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_PredictionMode_noConfusion___redArg(uint8_t, uint8_t);
-static lean_object* l_Fastvid_reprPredictionMode___closed__3____x40_Fastvid___hyg_379_;
+static lean_object* l_Fastvid_reprPredictionMode___closed__7____x40_Fastvid___hyg_406_;
 LEAN_EXPORT lean_object* l_Fastvid_PredictionMode_toCtorIdx___boxed(lean_object*);
-static lean_object* l_Fastvid_reprPredictionMode___closed__9____x40_Fastvid___hyg_379_;
 LEAN_EXPORT lean_object* l_Fastvid_temporalResidual(lean_object*, lean_object*);
 LEAN_EXPORT lean_object* l_Fastvid_ransDecodeState___boxed(lean_object*, lean_object*, lean_object*, lean_object*);
 static lean_object* _init_l_Fastvid_zigzag___closed__0() {
@@ -298,6 +300,24 @@ x_3 = l_Fastvid_riceRemainder(x_1, x_2);
 lean_dec(x_2);
 lean_dec(x_1);
 return x_3;
+}
+}
+LEAN_EXPORT lean_object* l_Fastvid_fixedWidthModulus(lean_object* x_1) {
+_start:
+{
+lean_object* x_2; lean_object* x_3; 
+x_2 = lean_unsigned_to_nat(2u);
+x_3 = lean_nat_pow(x_2, x_1);
+return x_3;
+}
+}
+LEAN_EXPORT lean_object* l_Fastvid_fixedWidthModulus___boxed(lean_object* x_1) {
+_start:
+{
+lean_object* x_2; 
+x_2 = l_Fastvid_fixedWidthModulus(x_1);
+lean_dec(x_1);
+return x_2;
 }
 }
 LEAN_EXPORT lean_object* l_Fastvid_temporalResidual(lean_object* x_1, lean_object* x_2) {
@@ -570,7 +590,7 @@ x_6 = lean_box(x_5);
 return x_6;
 }
 }
-static lean_object* _init_l_Fastvid_reprPredictionMode___closed__0____x40_Fastvid___hyg_379_() {
+static lean_object* _init_l_Fastvid_reprPredictionMode___closed__0____x40_Fastvid___hyg_406_() {
 _start:
 {
 lean_object* x_1; 
@@ -578,17 +598,17 @@ x_1 = lean_mk_string_unchecked("Fastvid.PredictionMode.paeth", 28, 28);
 return x_1;
 }
 }
-static lean_object* _init_l_Fastvid_reprPredictionMode___closed__1____x40_Fastvid___hyg_379_() {
+static lean_object* _init_l_Fastvid_reprPredictionMode___closed__1____x40_Fastvid___hyg_406_() {
 _start:
 {
 lean_object* x_1; lean_object* x_2; 
-x_1 = l_Fastvid_reprPredictionMode___closed__0____x40_Fastvid___hyg_379_;
+x_1 = l_Fastvid_reprPredictionMode___closed__0____x40_Fastvid___hyg_406_;
 x_2 = lean_alloc_ctor(3, 1, 0);
 lean_ctor_set(x_2, 0, x_1);
 return x_2;
 }
 }
-static lean_object* _init_l_Fastvid_reprPredictionMode___closed__2____x40_Fastvid___hyg_379_() {
+static lean_object* _init_l_Fastvid_reprPredictionMode___closed__2____x40_Fastvid___hyg_406_() {
 _start:
 {
 lean_object* x_1; 
@@ -596,17 +616,17 @@ x_1 = lean_mk_string_unchecked("Fastvid.PredictionMode.temporal", 31, 31);
 return x_1;
 }
 }
-static lean_object* _init_l_Fastvid_reprPredictionMode___closed__3____x40_Fastvid___hyg_379_() {
+static lean_object* _init_l_Fastvid_reprPredictionMode___closed__3____x40_Fastvid___hyg_406_() {
 _start:
 {
 lean_object* x_1; lean_object* x_2; 
-x_1 = l_Fastvid_reprPredictionMode___closed__2____x40_Fastvid___hyg_379_;
+x_1 = l_Fastvid_reprPredictionMode___closed__2____x40_Fastvid___hyg_406_;
 x_2 = lean_alloc_ctor(3, 1, 0);
 lean_ctor_set(x_2, 0, x_1);
 return x_2;
 }
 }
-static lean_object* _init_l_Fastvid_reprPredictionMode___closed__4____x40_Fastvid___hyg_379_() {
+static lean_object* _init_l_Fastvid_reprPredictionMode___closed__4____x40_Fastvid___hyg_406_() {
 _start:
 {
 lean_object* x_1; 
@@ -614,17 +634,17 @@ x_1 = lean_mk_string_unchecked("Fastvid.PredictionMode.average", 30, 30);
 return x_1;
 }
 }
-static lean_object* _init_l_Fastvid_reprPredictionMode___closed__5____x40_Fastvid___hyg_379_() {
+static lean_object* _init_l_Fastvid_reprPredictionMode___closed__5____x40_Fastvid___hyg_406_() {
 _start:
 {
 lean_object* x_1; lean_object* x_2; 
-x_1 = l_Fastvid_reprPredictionMode___closed__4____x40_Fastvid___hyg_379_;
+x_1 = l_Fastvid_reprPredictionMode___closed__4____x40_Fastvid___hyg_406_;
 x_2 = lean_alloc_ctor(3, 1, 0);
 lean_ctor_set(x_2, 0, x_1);
 return x_2;
 }
 }
-static lean_object* _init_l_Fastvid_reprPredictionMode___closed__6____x40_Fastvid___hyg_379_() {
+static lean_object* _init_l_Fastvid_reprPredictionMode___closed__6____x40_Fastvid___hyg_406_() {
 _start:
 {
 lean_object* x_1; 
@@ -632,17 +652,17 @@ x_1 = lean_mk_string_unchecked("Fastvid.PredictionMode.clampGradient", 36, 36);
 return x_1;
 }
 }
-static lean_object* _init_l_Fastvid_reprPredictionMode___closed__7____x40_Fastvid___hyg_379_() {
+static lean_object* _init_l_Fastvid_reprPredictionMode___closed__7____x40_Fastvid___hyg_406_() {
 _start:
 {
 lean_object* x_1; lean_object* x_2; 
-x_1 = l_Fastvid_reprPredictionMode___closed__6____x40_Fastvid___hyg_379_;
+x_1 = l_Fastvid_reprPredictionMode___closed__6____x40_Fastvid___hyg_406_;
 x_2 = lean_alloc_ctor(3, 1, 0);
 lean_ctor_set(x_2, 0, x_1);
 return x_2;
 }
 }
-static lean_object* _init_l_Fastvid_reprPredictionMode___closed__8____x40_Fastvid___hyg_379_() {
+static lean_object* _init_l_Fastvid_reprPredictionMode___closed__8____x40_Fastvid___hyg_406_() {
 _start:
 {
 lean_object* x_1; 
@@ -650,17 +670,17 @@ x_1 = lean_mk_string_unchecked("Fastvid.PredictionMode.halfGradient", 35, 35);
 return x_1;
 }
 }
-static lean_object* _init_l_Fastvid_reprPredictionMode___closed__9____x40_Fastvid___hyg_379_() {
+static lean_object* _init_l_Fastvid_reprPredictionMode___closed__9____x40_Fastvid___hyg_406_() {
 _start:
 {
 lean_object* x_1; lean_object* x_2; 
-x_1 = l_Fastvid_reprPredictionMode___closed__8____x40_Fastvid___hyg_379_;
+x_1 = l_Fastvid_reprPredictionMode___closed__8____x40_Fastvid___hyg_406_;
 x_2 = lean_alloc_ctor(3, 1, 0);
 lean_ctor_set(x_2, 0, x_1);
 return x_2;
 }
 }
-static lean_object* _init_l_Fastvid_reprPredictionMode___closed__10____x40_Fastvid___hyg_379_() {
+static lean_object* _init_l_Fastvid_reprPredictionMode___closed__10____x40_Fastvid___hyg_406_() {
 _start:
 {
 lean_object* x_1; lean_object* x_2; 
@@ -669,7 +689,7 @@ x_2 = lean_nat_to_int(x_1);
 return x_2;
 }
 }
-static lean_object* _init_l_Fastvid_reprPredictionMode___closed__11____x40_Fastvid___hyg_379_() {
+static lean_object* _init_l_Fastvid_reprPredictionMode___closed__11____x40_Fastvid___hyg_406_() {
 _start:
 {
 lean_object* x_1; lean_object* x_2; 
@@ -678,7 +698,7 @@ x_2 = lean_nat_to_int(x_1);
 return x_2;
 }
 }
-LEAN_EXPORT lean_object* l_Fastvid_reprPredictionMode____x40_Fastvid___hyg_379_(uint8_t x_1, lean_object* x_2) {
+LEAN_EXPORT lean_object* l_Fastvid_reprPredictionMode____x40_Fastvid___hyg_406_(uint8_t x_1, lean_object* x_2) {
 _start:
 {
 lean_object* x_3; lean_object* x_11; lean_object* x_19; lean_object* x_27; lean_object* x_35; 
@@ -691,14 +711,14 @@ x_44 = lean_nat_dec_le(x_43, x_2);
 if (x_44 == 0)
 {
 lean_object* x_45; 
-x_45 = l_Fastvid_reprPredictionMode___closed__10____x40_Fastvid___hyg_379_;
+x_45 = l_Fastvid_reprPredictionMode___closed__10____x40_Fastvid___hyg_406_;
 x_3 = x_45;
 goto block_10;
 }
 else
 {
 lean_object* x_46; 
-x_46 = l_Fastvid_reprPredictionMode___closed__11____x40_Fastvid___hyg_379_;
+x_46 = l_Fastvid_reprPredictionMode___closed__11____x40_Fastvid___hyg_406_;
 x_3 = x_46;
 goto block_10;
 }
@@ -711,14 +731,14 @@ x_48 = lean_nat_dec_le(x_47, x_2);
 if (x_48 == 0)
 {
 lean_object* x_49; 
-x_49 = l_Fastvid_reprPredictionMode___closed__10____x40_Fastvid___hyg_379_;
+x_49 = l_Fastvid_reprPredictionMode___closed__10____x40_Fastvid___hyg_406_;
 x_11 = x_49;
 goto block_18;
 }
 else
 {
 lean_object* x_50; 
-x_50 = l_Fastvid_reprPredictionMode___closed__11____x40_Fastvid___hyg_379_;
+x_50 = l_Fastvid_reprPredictionMode___closed__11____x40_Fastvid___hyg_406_;
 x_11 = x_50;
 goto block_18;
 }
@@ -731,14 +751,14 @@ x_52 = lean_nat_dec_le(x_51, x_2);
 if (x_52 == 0)
 {
 lean_object* x_53; 
-x_53 = l_Fastvid_reprPredictionMode___closed__10____x40_Fastvid___hyg_379_;
+x_53 = l_Fastvid_reprPredictionMode___closed__10____x40_Fastvid___hyg_406_;
 x_19 = x_53;
 goto block_26;
 }
 else
 {
 lean_object* x_54; 
-x_54 = l_Fastvid_reprPredictionMode___closed__11____x40_Fastvid___hyg_379_;
+x_54 = l_Fastvid_reprPredictionMode___closed__11____x40_Fastvid___hyg_406_;
 x_19 = x_54;
 goto block_26;
 }
@@ -751,14 +771,14 @@ x_56 = lean_nat_dec_le(x_55, x_2);
 if (x_56 == 0)
 {
 lean_object* x_57; 
-x_57 = l_Fastvid_reprPredictionMode___closed__10____x40_Fastvid___hyg_379_;
+x_57 = l_Fastvid_reprPredictionMode___closed__10____x40_Fastvid___hyg_406_;
 x_27 = x_57;
 goto block_34;
 }
 else
 {
 lean_object* x_58; 
-x_58 = l_Fastvid_reprPredictionMode___closed__11____x40_Fastvid___hyg_379_;
+x_58 = l_Fastvid_reprPredictionMode___closed__11____x40_Fastvid___hyg_406_;
 x_27 = x_58;
 goto block_34;
 }
@@ -771,14 +791,14 @@ x_60 = lean_nat_dec_le(x_59, x_2);
 if (x_60 == 0)
 {
 lean_object* x_61; 
-x_61 = l_Fastvid_reprPredictionMode___closed__10____x40_Fastvid___hyg_379_;
+x_61 = l_Fastvid_reprPredictionMode___closed__10____x40_Fastvid___hyg_406_;
 x_35 = x_61;
 goto block_42;
 }
 else
 {
 lean_object* x_62; 
-x_62 = l_Fastvid_reprPredictionMode___closed__11____x40_Fastvid___hyg_379_;
+x_62 = l_Fastvid_reprPredictionMode___closed__11____x40_Fastvid___hyg_406_;
 x_35 = x_62;
 goto block_42;
 }
@@ -787,7 +807,7 @@ goto block_42;
 block_10:
 {
 lean_object* x_4; lean_object* x_5; lean_object* x_6; lean_object* x_7; uint8_t x_8; lean_object* x_9; 
-x_4 = l_Fastvid_reprPredictionMode___closed__1____x40_Fastvid___hyg_379_;
+x_4 = l_Fastvid_reprPredictionMode___closed__1____x40_Fastvid___hyg_406_;
 x_5 = lean_alloc_ctor(4, 2, 0);
 lean_ctor_set(x_5, 0, x_3);
 lean_ctor_set(x_5, 1, x_4);
@@ -802,7 +822,7 @@ return x_9;
 block_18:
 {
 lean_object* x_12; lean_object* x_13; lean_object* x_14; lean_object* x_15; uint8_t x_16; lean_object* x_17; 
-x_12 = l_Fastvid_reprPredictionMode___closed__3____x40_Fastvid___hyg_379_;
+x_12 = l_Fastvid_reprPredictionMode___closed__3____x40_Fastvid___hyg_406_;
 x_13 = lean_alloc_ctor(4, 2, 0);
 lean_ctor_set(x_13, 0, x_11);
 lean_ctor_set(x_13, 1, x_12);
@@ -817,7 +837,7 @@ return x_17;
 block_26:
 {
 lean_object* x_20; lean_object* x_21; lean_object* x_22; lean_object* x_23; uint8_t x_24; lean_object* x_25; 
-x_20 = l_Fastvid_reprPredictionMode___closed__5____x40_Fastvid___hyg_379_;
+x_20 = l_Fastvid_reprPredictionMode___closed__5____x40_Fastvid___hyg_406_;
 x_21 = lean_alloc_ctor(4, 2, 0);
 lean_ctor_set(x_21, 0, x_19);
 lean_ctor_set(x_21, 1, x_20);
@@ -832,7 +852,7 @@ return x_25;
 block_34:
 {
 lean_object* x_28; lean_object* x_29; lean_object* x_30; lean_object* x_31; uint8_t x_32; lean_object* x_33; 
-x_28 = l_Fastvid_reprPredictionMode___closed__7____x40_Fastvid___hyg_379_;
+x_28 = l_Fastvid_reprPredictionMode___closed__7____x40_Fastvid___hyg_406_;
 x_29 = lean_alloc_ctor(4, 2, 0);
 lean_ctor_set(x_29, 0, x_27);
 lean_ctor_set(x_29, 1, x_28);
@@ -847,7 +867,7 @@ return x_33;
 block_42:
 {
 lean_object* x_36; lean_object* x_37; lean_object* x_38; lean_object* x_39; uint8_t x_40; lean_object* x_41; 
-x_36 = l_Fastvid_reprPredictionMode___closed__9____x40_Fastvid___hyg_379_;
+x_36 = l_Fastvid_reprPredictionMode___closed__9____x40_Fastvid___hyg_406_;
 x_37 = lean_alloc_ctor(4, 2, 0);
 lean_ctor_set(x_37, 0, x_35);
 lean_ctor_set(x_37, 1, x_36);
@@ -861,13 +881,13 @@ return x_41;
 }
 }
 }
-LEAN_EXPORT lean_object* l_Fastvid_reprPredictionMode____x40_Fastvid___hyg_379____boxed(lean_object* x_1, lean_object* x_2) {
+LEAN_EXPORT lean_object* l_Fastvid_reprPredictionMode____x40_Fastvid___hyg_406____boxed(lean_object* x_1, lean_object* x_2) {
 _start:
 {
 uint8_t x_3; lean_object* x_4; 
 x_3 = lean_unbox(x_1);
 lean_dec(x_1);
-x_4 = l_Fastvid_reprPredictionMode____x40_Fastvid___hyg_379_(x_3, x_2);
+x_4 = l_Fastvid_reprPredictionMode____x40_Fastvid___hyg_406_(x_3, x_2);
 lean_dec(x_2);
 return x_4;
 }
@@ -876,7 +896,7 @@ static lean_object* _init_l_Fastvid_instReprPredictionMode___closed__0() {
 _start:
 {
 lean_object* x_1; 
-x_1 = lean_alloc_closure((void*)(l_Fastvid_reprPredictionMode____x40_Fastvid___hyg_379____boxed), 2, 0);
+x_1 = lean_alloc_closure((void*)(l_Fastvid_reprPredictionMode____x40_Fastvid___hyg_406____boxed), 2, 0);
 return x_1;
 }
 }
@@ -1094,30 +1114,30 @@ l_Fastvid_zigzag___closed__0 = _init_l_Fastvid_zigzag___closed__0();
 lean_mark_persistent(l_Fastvid_zigzag___closed__0);
 l___private_Fastvid_0__Fastvid_zigzag_match__1_splitter___redArg___closed__0 = _init_l___private_Fastvid_0__Fastvid_zigzag_match__1_splitter___redArg___closed__0();
 lean_mark_persistent(l___private_Fastvid_0__Fastvid_zigzag_match__1_splitter___redArg___closed__0);
-l_Fastvid_reprPredictionMode___closed__0____x40_Fastvid___hyg_379_ = _init_l_Fastvid_reprPredictionMode___closed__0____x40_Fastvid___hyg_379_();
-lean_mark_persistent(l_Fastvid_reprPredictionMode___closed__0____x40_Fastvid___hyg_379_);
-l_Fastvid_reprPredictionMode___closed__1____x40_Fastvid___hyg_379_ = _init_l_Fastvid_reprPredictionMode___closed__1____x40_Fastvid___hyg_379_();
-lean_mark_persistent(l_Fastvid_reprPredictionMode___closed__1____x40_Fastvid___hyg_379_);
-l_Fastvid_reprPredictionMode___closed__2____x40_Fastvid___hyg_379_ = _init_l_Fastvid_reprPredictionMode___closed__2____x40_Fastvid___hyg_379_();
-lean_mark_persistent(l_Fastvid_reprPredictionMode___closed__2____x40_Fastvid___hyg_379_);
-l_Fastvid_reprPredictionMode___closed__3____x40_Fastvid___hyg_379_ = _init_l_Fastvid_reprPredictionMode___closed__3____x40_Fastvid___hyg_379_();
-lean_mark_persistent(l_Fastvid_reprPredictionMode___closed__3____x40_Fastvid___hyg_379_);
-l_Fastvid_reprPredictionMode___closed__4____x40_Fastvid___hyg_379_ = _init_l_Fastvid_reprPredictionMode___closed__4____x40_Fastvid___hyg_379_();
-lean_mark_persistent(l_Fastvid_reprPredictionMode___closed__4____x40_Fastvid___hyg_379_);
-l_Fastvid_reprPredictionMode___closed__5____x40_Fastvid___hyg_379_ = _init_l_Fastvid_reprPredictionMode___closed__5____x40_Fastvid___hyg_379_();
-lean_mark_persistent(l_Fastvid_reprPredictionMode___closed__5____x40_Fastvid___hyg_379_);
-l_Fastvid_reprPredictionMode___closed__6____x40_Fastvid___hyg_379_ = _init_l_Fastvid_reprPredictionMode___closed__6____x40_Fastvid___hyg_379_();
-lean_mark_persistent(l_Fastvid_reprPredictionMode___closed__6____x40_Fastvid___hyg_379_);
-l_Fastvid_reprPredictionMode___closed__7____x40_Fastvid___hyg_379_ = _init_l_Fastvid_reprPredictionMode___closed__7____x40_Fastvid___hyg_379_();
-lean_mark_persistent(l_Fastvid_reprPredictionMode___closed__7____x40_Fastvid___hyg_379_);
-l_Fastvid_reprPredictionMode___closed__8____x40_Fastvid___hyg_379_ = _init_l_Fastvid_reprPredictionMode___closed__8____x40_Fastvid___hyg_379_();
-lean_mark_persistent(l_Fastvid_reprPredictionMode___closed__8____x40_Fastvid___hyg_379_);
-l_Fastvid_reprPredictionMode___closed__9____x40_Fastvid___hyg_379_ = _init_l_Fastvid_reprPredictionMode___closed__9____x40_Fastvid___hyg_379_();
-lean_mark_persistent(l_Fastvid_reprPredictionMode___closed__9____x40_Fastvid___hyg_379_);
-l_Fastvid_reprPredictionMode___closed__10____x40_Fastvid___hyg_379_ = _init_l_Fastvid_reprPredictionMode___closed__10____x40_Fastvid___hyg_379_();
-lean_mark_persistent(l_Fastvid_reprPredictionMode___closed__10____x40_Fastvid___hyg_379_);
-l_Fastvid_reprPredictionMode___closed__11____x40_Fastvid___hyg_379_ = _init_l_Fastvid_reprPredictionMode___closed__11____x40_Fastvid___hyg_379_();
-lean_mark_persistent(l_Fastvid_reprPredictionMode___closed__11____x40_Fastvid___hyg_379_);
+l_Fastvid_reprPredictionMode___closed__0____x40_Fastvid___hyg_406_ = _init_l_Fastvid_reprPredictionMode___closed__0____x40_Fastvid___hyg_406_();
+lean_mark_persistent(l_Fastvid_reprPredictionMode___closed__0____x40_Fastvid___hyg_406_);
+l_Fastvid_reprPredictionMode___closed__1____x40_Fastvid___hyg_406_ = _init_l_Fastvid_reprPredictionMode___closed__1____x40_Fastvid___hyg_406_();
+lean_mark_persistent(l_Fastvid_reprPredictionMode___closed__1____x40_Fastvid___hyg_406_);
+l_Fastvid_reprPredictionMode___closed__2____x40_Fastvid___hyg_406_ = _init_l_Fastvid_reprPredictionMode___closed__2____x40_Fastvid___hyg_406_();
+lean_mark_persistent(l_Fastvid_reprPredictionMode___closed__2____x40_Fastvid___hyg_406_);
+l_Fastvid_reprPredictionMode___closed__3____x40_Fastvid___hyg_406_ = _init_l_Fastvid_reprPredictionMode___closed__3____x40_Fastvid___hyg_406_();
+lean_mark_persistent(l_Fastvid_reprPredictionMode___closed__3____x40_Fastvid___hyg_406_);
+l_Fastvid_reprPredictionMode___closed__4____x40_Fastvid___hyg_406_ = _init_l_Fastvid_reprPredictionMode___closed__4____x40_Fastvid___hyg_406_();
+lean_mark_persistent(l_Fastvid_reprPredictionMode___closed__4____x40_Fastvid___hyg_406_);
+l_Fastvid_reprPredictionMode___closed__5____x40_Fastvid___hyg_406_ = _init_l_Fastvid_reprPredictionMode___closed__5____x40_Fastvid___hyg_406_();
+lean_mark_persistent(l_Fastvid_reprPredictionMode___closed__5____x40_Fastvid___hyg_406_);
+l_Fastvid_reprPredictionMode___closed__6____x40_Fastvid___hyg_406_ = _init_l_Fastvid_reprPredictionMode___closed__6____x40_Fastvid___hyg_406_();
+lean_mark_persistent(l_Fastvid_reprPredictionMode___closed__6____x40_Fastvid___hyg_406_);
+l_Fastvid_reprPredictionMode___closed__7____x40_Fastvid___hyg_406_ = _init_l_Fastvid_reprPredictionMode___closed__7____x40_Fastvid___hyg_406_();
+lean_mark_persistent(l_Fastvid_reprPredictionMode___closed__7____x40_Fastvid___hyg_406_);
+l_Fastvid_reprPredictionMode___closed__8____x40_Fastvid___hyg_406_ = _init_l_Fastvid_reprPredictionMode___closed__8____x40_Fastvid___hyg_406_();
+lean_mark_persistent(l_Fastvid_reprPredictionMode___closed__8____x40_Fastvid___hyg_406_);
+l_Fastvid_reprPredictionMode___closed__9____x40_Fastvid___hyg_406_ = _init_l_Fastvid_reprPredictionMode___closed__9____x40_Fastvid___hyg_406_();
+lean_mark_persistent(l_Fastvid_reprPredictionMode___closed__9____x40_Fastvid___hyg_406_);
+l_Fastvid_reprPredictionMode___closed__10____x40_Fastvid___hyg_406_ = _init_l_Fastvid_reprPredictionMode___closed__10____x40_Fastvid___hyg_406_();
+lean_mark_persistent(l_Fastvid_reprPredictionMode___closed__10____x40_Fastvid___hyg_406_);
+l_Fastvid_reprPredictionMode___closed__11____x40_Fastvid___hyg_406_ = _init_l_Fastvid_reprPredictionMode___closed__11____x40_Fastvid___hyg_406_();
+lean_mark_persistent(l_Fastvid_reprPredictionMode___closed__11____x40_Fastvid___hyg_406_);
 l_Fastvid_instReprPredictionMode___closed__0 = _init_l_Fastvid_instReprPredictionMode___closed__0();
 lean_mark_persistent(l_Fastvid_instReprPredictionMode___closed__0);
 l_Fastvid_instReprPredictionMode = _init_l_Fastvid_instReprPredictionMode();

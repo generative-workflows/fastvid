@@ -8,6 +8,7 @@ const BLOCK_SYMBOLS: usize = 128;
 const HEADER_LEN: usize = 32;
 const DIRECTORY_ENTRY_LEN: usize = 32;
 const MAX_RICE_PARAMETER: u8 = 16;
+const SELECTOR_MARGINS: [usize; 8] = [100, 95, 90, 85, 80, 75, 67, 50];
 
 #[derive(Clone, Copy, Default)]
 struct Model {
@@ -18,6 +19,10 @@ struct Model {
     packed_tiles: usize,
     packed_tiles_by_plane: [usize; 3],
     savings_by_plane: [usize; 3],
+    selected_payload: [usize; SELECTOR_MARGINS.len()],
+    selected_tiles: [usize; SELECTOR_MARGINS.len()],
+    false_positive_tiles: [usize; SELECTOR_MARGINS.len()],
+    false_negative_tiles: [usize; SELECTOR_MARGINS.len()],
     squared_error: u64,
     max_error: u32,
 }
@@ -126,26 +131,33 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let packed_stream = overhead + model.packed_payload;
     let hybrid_stream = overhead + model.hybrid_payload;
     println!(
-        "sample\tframes\tbit_depth\tquality\ttiles\tpacked_tiles\tpacked_y_tiles\tpacked_cb_tiles\tpacked_cr_tiles\tsavings_y_bytes\tsavings_cb_bytes\tsavings_cr_bytes\tcurrent_payload_bytes\tpacked_payload_bytes\thybrid_payload_bytes\toverhead_bytes\tcurrent_stream_bytes\tpacked_stream_bytes\thybrid_stream_bytes\tpacked_delta\thybrid_delta\tsquared_error\tmax_error"
+        "sample\tframes\tbit_depth\tquality\ttiles\tpacked_tiles\tpacked_y_tiles\tpacked_cb_tiles\tpacked_cr_tiles\tsavings_y_bytes\tsavings_cb_bytes\tsavings_cr_bytes\tcurrent_payload_bytes\tpacked_payload_bytes\thybrid_payload_bytes\toverhead_bytes\tcurrent_stream_bytes\tpacked_stream_bytes\thybrid_stream_bytes\tpacked_delta\thybrid_delta\tsquared_error\tmax_error\tselector_margin\tselected_tiles\tfalse_positive_tiles\tfalse_negative_tiles\tselected_stream_bytes\tselected_delta"
     );
-    println!(
-        "{sample}\t{frames}\t{bit_depth}\t{quality}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{overhead}\t{current_stream}\t{packed_stream}\t{hybrid_stream}\t{:.8}\t{:.8}\t{}\t{}",
-        model.tiles,
-        model.packed_tiles,
-        model.packed_tiles_by_plane[0],
-        model.packed_tiles_by_plane[1],
-        model.packed_tiles_by_plane[2],
-        model.savings_by_plane[0],
-        model.savings_by_plane[1],
-        model.savings_by_plane[2],
-        model.current_payload,
-        model.packed_payload,
-        model.hybrid_payload,
-        packed_stream as f64 / current_stream as f64 - 1.0,
-        hybrid_stream as f64 / current_stream as f64 - 1.0,
-        model.squared_error,
-        model.max_error
-    );
+    for (index, margin) in SELECTOR_MARGINS.into_iter().enumerate() {
+        let selected_stream = overhead + model.selected_payload[index];
+        println!(
+            "{sample}\t{frames}\t{bit_depth}\t{quality}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{overhead}\t{current_stream}\t{packed_stream}\t{hybrid_stream}\t{:.8}\t{:.8}\t{}\t{}\t{margin}\t{}\t{}\t{}\t{selected_stream}\t{:.8}",
+            model.tiles,
+            model.packed_tiles,
+            model.packed_tiles_by_plane[0],
+            model.packed_tiles_by_plane[1],
+            model.packed_tiles_by_plane[2],
+            model.savings_by_plane[0],
+            model.savings_by_plane[1],
+            model.savings_by_plane[2],
+            model.current_payload,
+            model.packed_payload,
+            model.hybrid_payload,
+            packed_stream as f64 / current_stream as f64 - 1.0,
+            hybrid_stream as f64 / current_stream as f64 - 1.0,
+            model.squared_error,
+            model.max_error,
+            model.selected_tiles[index],
+            model.false_positive_tiles[index],
+            model.false_negative_tiles[index],
+            selected_stream as f64 / current_stream as f64 - 1.0,
+        );
+    }
     Ok(())
 }
 
@@ -187,6 +199,33 @@ fn model_tile(
     }
     let current_payload = entropy_bytes(&folded);
     let packed_payload = block_pack_bytes(&folded);
+    let sample_y = height / 2;
+    let sample_start = (origin_y + sample_y) * plane_width + origin_x;
+    let mut sampled_folded = Vec::with_capacity(width);
+    for x in 0..width {
+        let source = sample_start + x;
+        let left = if x == 0 { 0 } else { plane[source - 1] };
+        let above = if sample_y == 0 {
+            0
+        } else {
+            plane[source - plane_width]
+        };
+        let upper_left = if x == 0 || sample_y == 0 {
+            0
+        } else {
+            plane[source - plane_width - 1]
+        };
+        let prediction = (i32::from(left) + i32::from(above) - i32::from(upper_left))
+            .clamp(0, i32::from(max_sample));
+        sampled_folded.push(zigzag(quantize(
+            i32::from(plane[source]) - prediction,
+            step,
+        )));
+    }
+    let sampled_current = entropy_bytes(&sampled_folded);
+    let sampled_packed = block_pack_bytes(&sampled_folded);
+    let selected = SELECTOR_MARGINS.map(|margin| sampled_packed * 100 < sampled_current * margin);
+    let actually_better = packed_payload < current_payload;
     Model {
         current_payload,
         packed_payload,
@@ -203,6 +242,16 @@ fn model_tile(
                 0
             }
         }),
+        selected_payload: std::array::from_fn(|index| {
+            if selected[index] {
+                packed_payload
+            } else {
+                current_payload
+            }
+        }),
+        selected_tiles: selected.map(usize::from),
+        false_positive_tiles: selected.map(|choice| usize::from(choice && !actually_better)),
+        false_negative_tiles: selected.map(|choice| usize::from(!choice && actually_better)),
         squared_error,
         max_error,
     }
@@ -278,6 +327,18 @@ fn add(left: Model, right: Model) -> Model {
         }),
         savings_by_plane: std::array::from_fn(|plane| {
             left.savings_by_plane[plane] + right.savings_by_plane[plane]
+        }),
+        selected_payload: std::array::from_fn(|index| {
+            left.selected_payload[index] + right.selected_payload[index]
+        }),
+        selected_tiles: std::array::from_fn(|index| {
+            left.selected_tiles[index] + right.selected_tiles[index]
+        }),
+        false_positive_tiles: std::array::from_fn(|index| {
+            left.false_positive_tiles[index] + right.false_positive_tiles[index]
+        }),
+        false_negative_tiles: std::array::from_fn(|index| {
+            left.false_negative_tiles[index] + right.false_negative_tiles[index]
         }),
         squared_error: left.squared_error + right.squared_error,
         max_error: left.max_error.max(right.max_error),

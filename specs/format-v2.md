@@ -3,8 +3,9 @@
 Status: **experimental; incompatible changes are allowed**
 
 Version 2 adds tile-local spatial-predictor selection to the 8-bit and
-10/12/16-bit formats. Header and directory lengths, entropy payloads,
-quantization, and tile order are unchanged.
+10/12/16-bit formats. It also defines high-bit entropy mode 18 for
+fixed-width residual blocks. Header and directory lengths, quantization, and
+tile order are unchanged.
 
 ## Header
 
@@ -68,6 +69,22 @@ depth-dependent folded limits from version one. Zero-run syntax, canonical
 varints, Rice bit order/padding, quantization steps, checked dimensions, and
 payload-contiguity rules are unchanged.
 
+High-bit entropy mode 18 encodes the tile's zigzag-folded residuals in raster
+order as consecutive blocks of at most 128 symbols. Each block begins on a
+byte boundary with an unsigned one-byte width `w`, followed by exactly
+`ceil(n × w / 8)` payload bytes for the block's `n` symbols. Symbols are
+unsigned `w`-bit integers in least-significant-bit-first order. Width zero
+represents an all-zero block and has no payload bytes. The final partial byte
+must have zero padding.
+
+The decoder rejects a width greater than the bit width of twice the maximum
+sample value, a decoded residual outside that same folded limit, truncation,
+nonzero padding, or trailing payload bytes. Legacy version-1 streams do not
+permit mode 18. The normative format does not prescribe the encoder's mode
+selector; the reference speed encoder samples a source row, considers mode
+18 only against fixed-parameter Rice, and otherwise retains the established
+zero-run/Rice behavior.
+
 Quality 100 has step one. Every prediction mode therefore reconstructs the
 source exactly.
 
@@ -80,4 +97,3 @@ The version-2 decoder accepts:
 
 Legacy versions containing modes 2 through 4 are malformed. Version 2 rejects
 prediction modes greater than 4.
-

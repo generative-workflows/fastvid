@@ -1,8 +1,8 @@
 {"synthetic": false,
  "outputs":
- {"o": ["5646984323047391299"],
-  "i": "6099035465959769995",
-  "c": "18231687019965965387"},
+ {"o": ["13777871511347865969"],
+  "i": "11140216549666664883",
+  "c": "15384595119399209082"},
  "log":
  [{"message":
    ".> LEAN_PATH=/home/robert/projects/fastvid/specs/.lake/build/lib/lean /home/robert/.elan/toolchains/leanprover--lean4---v4.22.0/bin/lean /home/robert/projects/fastvid/specs/Fastvid.lean -o /home/robert/projects/fastvid/specs/.lake/build/lib/lean/Fastvid.olean -i /home/robert/projects/fastvid/specs/.lake/build/lib/lean/Fastvid.ilean -c /home/robert/projects/fastvid/specs/.lake/build/ir/Fastvid.c --setup /home/robert/projects/fastvid/specs/.lake/build/ir/Fastvid.setup.json --json",
@@ -20,7 +20,7 @@
       ["module plugins", "1723"]]]]],
   ["Lean 4.22.0, commit ba2cbbf09d4978f416e0ebd1fceeebc2c4138c05",
    "8739116525927611134"],
-  ["/home/robert/projects/fastvid/specs/Fastvid.lean", "9112771426674320938"],
+  ["/home/robert/projects/fastvid/specs/Fastvid.lean", "17949628079824333125"],
   ["options", "1723"],
   ["Module.leanArgs: #[]", "1723"]],
- "depHash": "13167309530570295882"}
+ "depHash": "11335931965746208492"}
