@@ -27,7 +27,7 @@ The demo generates a deterministic frame and reports compression, encode/decode
 throughput, PSNR, and luma block SSIM. Run `cargo run -- --help` for raw-frame
 commands.
 
-## Current benchmark
+## Maximum-compression full-corpus benchmark
 
 Current maximum-compression snapshot on a 4-vCPU AMD EPYC-Genoa VM with Rust
 1.97.1 in release mode. This is the 18-sample corpus-v2 codec track at GOP 1,
@@ -48,6 +48,35 @@ Performance decisions use warm-up plus repeated, balanced trials as defined in
 [the evaluation methodology](EVALUATION_METHODOLOGY.md). Per-sample rows must
 be retained because synthetic content compresses much more strongly than
 camera/noisy content.
+
+This table is not numerically comparable to the automatic frontier graph.
+That graph compares three preserved Fastvid binaries on four pinned
+fast-feedback cases with mixed q90/q100, GOP 1/12, and one/four-thread
+settings, then geometrically aggregates per-case medians. See
+[the frontier summary](benchmarks/README.md) for its exact scope.
+
+### Matched OpenAPV reference
+
+The external-reference panel uses native 10-bit YUV 4:2:2, the same
+1280x720x24 source bytes, all-intra coding, 256x128 tiles, and one thread.
+OpenAPV controls are selected by measured Y-PSNR distance from practical
+Fastvid q90, not by assuming nominal controls are equivalent.
+
+| Codec | Control | Ratio | Encode | Decode | Y PSNR |
+|---|---:|---:|---:|---:|---:|
+| Fastvid speed | q90 | 5.308x | 16.52 MP/s | 58.80 MP/s | 52.002 dB |
+| Fastvid practical | q90 | 5.308x | 16.55 MP/s | 59.47 MP/s | 52.002 dB |
+| Fastvid maximum | q90 | 5.308x | 16.86 MP/s | 60.05 MP/s | 52.002 dB |
+| OpenAPV medium | QP 22 | 4.408x | 17.42 MP/s | 62.48 MP/s | 51.535 dB |
+| OpenAPV fastest | QP 23 | 4.464x | 80.72 MP/s | 62.48 MP/s | 51.736 dB |
+
+All three preserved Fastvid versions converge to the same high-bit stream on
+this diagnostic: their current frontier differences are in the 8-bit path.
+Fastvid produces 15.9--17.0% lower bitrate at slightly higher measured
+quality, while OpenAPV `fastest` exposes a 4.88x one-thread encode-speed gap.
+The [matched graph](benchmarks/openapv-frontier.svg) and
+[exact one/four-thread rows](benchmarks/openapv-frontier-summary.tsv) are a
+procedural diagnostic, not a broad natural-HDR claim.
 
 ### Native high-bit smoke snapshot
 
@@ -75,8 +104,10 @@ corpus.
 - [Evaluation methodology](EVALUATION_METHODOLOGY.md) defines corpus, quality,
   throughput, bitrate, random-access, and fast/slow feedback protocols.
 - [Codec frontier](FRONTIER.md) and its
-  [automatic Pareto graph](benchmarks/frontier.svg) show the current speed,
-  practical-compression, and maximum-compression tradeoffs.
+  [automatic Pareto graph](benchmarks/frontier.svg) show the current internal
+  speed, practical-compression, and maximum-compression tradeoffs. A separate
+  [matched OpenAPV graph](benchmarks/openapv-frontier.svg) compares native
+  10-bit all-intra performance.
 - [Corpus documentation](corpus/README.md) describes reproducible media,
   checksums, capability tracks, and licenses.
 - [Format specifications](specs/format-v0.md) define the 8-bit v0 syntax;

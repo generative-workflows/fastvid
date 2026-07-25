@@ -7,6 +7,14 @@
     "aggregation": "per-case median, then geometric mean",
     "scope": "four pinned 8-bit spatial/temporal cases; screening only"
   },
+  "external_reference": {
+    "name": "OpenAPV v0.3.0.0",
+    "protocol": "matched native-10-bit all-intra diagnostic",
+    "graph": "benchmarks/openapv-frontier.svg",
+    "summary": "benchmarks/openapv-frontier-summary.tsv",
+    "evidence": "experiments/EXP-0073-matched-openapv-frontier.md",
+    "scope": "one checksummed 1280x720 24-frame procedural sequence; not part of internal slot dominance"
+  },
   "slots": [
     {
       "id": "practical-compression",

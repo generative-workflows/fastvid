@@ -21,3 +21,21 @@ three active versions occupies every position twice in six trials. The graph
 uses per-case medians and then geometric means. It is a fast screening view,
 not a replacement for the complete corpus, quality, memory, or access
 matrices.
+
+The separate matched OpenAPV diagnostic is produced with:
+
+```sh
+scripts/benchmark-openapv-frontier.sh \
+  artifacts/exp0073-openapv-frontier.tsv
+scripts/graph-openapv-frontier.py \
+  artifacts/exp0073-openapv-frontier.tsv \
+  benchmarks/openapv-frontier.svg \
+  --summary benchmarks/openapv-frontier-summary.tsv
+```
+
+[`openapv-frontier.svg`](openapv-frontier.svg) and
+[`openapv-frontier-summary.tsv`](openapv-frontier-summary.tsv) use one
+checksummed native-10-bit sequence, all-intra coding, matched tile geometry,
+and measured PSNR selection. They do not share coordinates with the four-case
+8-bit graph. The SVG shows one-thread q90-neighborhood results; the TSV also
+retains four-thread rows and the non-exact OpenAPV QP0 high-fidelity boundary.

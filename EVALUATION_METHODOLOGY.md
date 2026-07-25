@@ -1,6 +1,6 @@
 # Fastvid evaluation methodology
 
-Version: 10 (2026-07-24)
+Version: 11 (2026-07-25)
 
 This document defines the standard target used to evaluate Fastvid changes.
 Experiments may add diagnostics or deliberately diverge, but an optimization
@@ -402,3 +402,14 @@ exact. Version, compiler, architecture dispatch, command lines, encoded bytes,
 bits/luma-pixel, stream MB/s and Mb/s, and all timing/quality rows are retained.
 OpenAPV implementation details supporting this protocol are recorded in
 [research 0015](research/0015-openapv-matched-comparison.md).
+
+The codec-frontier presentation includes OpenAPV only through a separate
+**matched 10-bit external-reference panel**. It must not place OpenAPV points
+on the four-case 8-bit Fastvid graph or compare those aggregate coordinates.
+The external panel measures every active Fastvid frontier binary at q90/q100,
+sweeps OpenAPV QP on the standard diagnostic above, and selects the measured
+`medium` and `fastest` rows nearest the practical-compression q90 Y-PSNR.
+Fastvid q100 and OpenAPV QP0 are reported as distinct high-fidelity boundaries
+unless both are exact. The graph shows one-thread results; its durable summary
+also records four-thread results, quality distance, bits/pixel, bitrate, and
+maximum error.

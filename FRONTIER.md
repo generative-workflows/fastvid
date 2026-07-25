@@ -43,6 +43,43 @@ finds non-dominated points, and regenerates both files. This is a screening
 view, not a substitute for complete corpus, access, quality, or memory
 evidence.
 
+## Matched OpenAPV external reference
+
+OpenAPV is not an internal Fastvid slot and is not plotted on the incompatible
+four-case 8-bit aggregate. The separate
+[`matched 10-bit graph`](benchmarks/openapv-frontier.svg) compares all three
+preserved Fastvid binaries with pinned OpenAPV v0.3.0.0 on the same
+checksummed 1280x720, 24-frame, 10-bit YUV 4:2:2 sequence. Both codecs are
+all-intra with 256x128 tiles and measured at one/four threads.
+
+The one-thread q90-neighborhood rows are:
+
+| Codec | Control | Ratio | Encode MP/s | Decode MP/s | Y PSNR |
+|---|---:|---:|---:|---:|---:|
+| Fastvid speed | q90 | 5.307903x | 16.524 | 58.804 | 52.002293 |
+| Fastvid practical | q90 | 5.307903x | 16.552 | 59.467 | 52.002293 |
+| Fastvid maximum | q90 | 5.307903x | 16.864 | 60.045 | 52.002293 |
+| OpenAPV medium | QP 22 | 4.408004x | 17.416 | 62.481 | 51.534665 |
+| OpenAPV fastest | QP 23 | 4.464067x | 80.724 | 62.481 | 51.735588 |
+
+OpenAPV controls are the measured rows nearest practical Fastvid q90 Y-PSNR:
+the remaining quality gaps are -0.468 dB and -0.267 dB. Fastvid's bitrate is
+16.95% below `medium` and 15.90% below `fastest`, but `fastest` encodes 4.88x
+as quickly at one thread. At four threads it encodes 4.00x as quickly, while
+Fastvid decodes 12.96--16.66% faster.
+
+All three Fastvid binaries produce identical high-bit bytes and quality here.
+Their active technology split is currently confined to 8-bit coding, so a
+future high-bit speed/compression branch must establish a distinct point
+rather than inheriting an 8-bit role label.
+
+At the high-fidelity boundary, Fastvid q100 is exact at 2.949766x. OpenAPV
+QP0 is not exact (`max_error=2`) and measures about 1.966x, so it is reported
+separately rather than called a q100 match. Complete one/four-thread rows are
+in [`benchmarks/openapv-frontier-summary.tsv`](benchmarks/openapv-frontier-summary.tsv);
+provenance and controls are in
+[EXP-0073](experiments/EXP-0073-matched-openapv-frontier.md).
+
 ## Active technology tree
 
 ```text
