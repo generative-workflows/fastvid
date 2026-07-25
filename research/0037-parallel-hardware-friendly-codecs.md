@@ -190,3 +190,4 @@ more principled format direction is to separate:
 - [EXP-0100](../experiments/EXP-0100-parallel-serialization-budget.md)
 - [EXP-0102](../experiments/EXP-0102-four-lane-rice-shard-model.md)
 - [EXP-0103](../experiments/EXP-0103-independent-predictor-bands.md)
+- [EXP-0104](../experiments/EXP-0104-predictor-band-height-ladder.md)

@@ -173,7 +173,7 @@ fn model_high_bit(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>
 
 fn print_header() {
     println!(
-        "sample\tframe\tbit_depth\tquality\tgop\ttile\tplane\twidth\theight\tsamples\tcurrent_mode\toracle_mode\tcurrent_entropy\toracle_entropy\tcurrent_bytes\toracle_bytes\tcurrent_sse\toracle_sse\tcurrent_max_error\toracle_max_error\tpaeth_bytes\tpaeth_sse\taverage_bytes\taverage_sse\tclamp_bytes\tclamp_sse\thalf_bytes\thalf_sse\ttemporal_bytes\ttemporal_sse\tband16_count\tband16_max_samples\tband16_payload_bytes\tband16_control_bytes\tband16_complete_bytes\tband16_sse\tband16_max_error"
+        "sample\tframe\tbit_depth\tquality\tgop\ttile\tplane\twidth\theight\tsamples\tcurrent_mode\toracle_mode\tcurrent_entropy\toracle_entropy\tcurrent_bytes\toracle_bytes\tcurrent_sse\toracle_sse\tcurrent_max_error\toracle_max_error\tpaeth_bytes\tpaeth_sse\taverage_bytes\taverage_sse\tclamp_bytes\tclamp_sse\thalf_bytes\thalf_sse\ttemporal_bytes\ttemporal_sse\tband16_count\tband16_max_samples\tband16_payload_bytes\tband16_control_bytes\tband16_complete_bytes\tband16_sse\tband16_max_error\tband32_count\tband32_max_samples\tband32_payload_bytes\tband32_control_bytes\tband32_complete_bytes\tband32_sse\tband32_max_error\tband64_count\tband64_max_samples\tband64_payload_bytes\tband64_control_bytes\tband64_complete_bytes\tband64_sse\tband64_max_error"
     );
 }
 
@@ -196,7 +196,7 @@ fn print_models(
             })
             .unwrap_or_default();
         println!(
-            "{sample}\t{frame}\t{bit_depth}\t{quality}\t{gop}\t{tile}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{temporal_bytes}\t{temporal_sse}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{sample}\t{frame}\t{bit_depth}\t{quality}\t{gop}\t{tile}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{temporal_bytes}\t{temporal_sse}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             model.plane,
             model.width,
             model.height,
@@ -226,6 +226,20 @@ fn print_models(
             model.band16_clamp.complete_bytes,
             model.band16_clamp.squared_error,
             model.band16_clamp.max_error,
+            model.band32_clamp.bands,
+            model.band32_clamp.max_band_samples,
+            model.band32_clamp.payload_bytes,
+            model.band32_clamp.control_bytes,
+            model.band32_clamp.complete_bytes,
+            model.band32_clamp.squared_error,
+            model.band32_clamp.max_error,
+            model.band64_clamp.bands,
+            model.band64_clamp.max_band_samples,
+            model.band64_clamp.payload_bytes,
+            model.band64_clamp.control_bytes,
+            model.band64_clamp.complete_bytes,
+            model.band64_clamp.squared_error,
+            model.band64_clamp.max_error,
         );
     }
 }

@@ -508,6 +508,8 @@ pub struct TilePredictorModel {
     pub half_gradient: PredictorCandidateModel,
     pub temporal: Option<PredictorCandidateModel>,
     pub band16_clamp: PredictorBandModel,
+    pub band32_clamp: PredictorBandModel,
+    pub band64_clamp: PredictorBandModel,
 }
 
 /// Read-only complete-byte model for independently reconstructed row bands.

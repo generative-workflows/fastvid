@@ -1530,7 +1530,9 @@ fn model_predictor_tile(
         model_spatial_predictor(plane, tile, quantizer, SpatialPredictor::ClampGradient);
     let half_gradient =
         model_spatial_predictor(plane, tile, quantizer, SpatialPredictor::HalfGradient);
-    let band16_clamp = model_clamp_gradient_bands(plane, tile, quantizer);
+    let band16_clamp = model_clamp_gradient_bands(plane, tile, quantizer, 16);
+    let band32_clamp = model_clamp_gradient_bands(plane, tile, quantizer, 32);
+    let band64_clamp = model_clamp_gradient_bands(plane, tile, quantizer, 64);
     let temporal = available_reference
         .map(|reference| model_temporal_predictor(plane, reference, tile, quantizer));
     let current_temporal = current_reference
@@ -1601,6 +1603,8 @@ fn model_predictor_tile(
             half_gradient: half_gradient.summary,
             temporal: temporal.map(|candidate| candidate.summary),
             band16_clamp,
+            band32_clamp,
+            band64_clamp,
         },
         reconstruction,
     )
@@ -1610,16 +1614,17 @@ fn model_clamp_gradient_bands(
     plane: &Plane,
     tile: Tile,
     quantizer: &Quantizer,
+    band_height: u32,
 ) -> PredictorBandModel {
-    const BAND_HEIGHT: u32 = 16;
+    debug_assert!(band_height != 0);
     let mut bands = 0usize;
     let mut payload_bytes = 0usize;
     let mut squared_error = 0u64;
     let mut max_error = 0u32;
-    for offset_y in (0..tile.height).step_by(BAND_HEIGHT as usize) {
+    for offset_y in (0..tile.height).step_by(band_height as usize) {
         let band = Tile {
             y: tile.y + offset_y,
-            height: BAND_HEIGHT.min(tile.height - offset_y),
+            height: band_height.min(tile.height - offset_y),
             ..tile
         };
         let modeled =
@@ -1632,7 +1637,7 @@ fn model_clamp_gradient_bands(
     let control_bytes = bands.saturating_sub(1) * 5;
     PredictorBandModel {
         bands,
-        max_band_samples: tile.width as usize * BAND_HEIGHT.min(tile.height) as usize,
+        max_band_samples: tile.width as usize * band_height.min(tile.height) as usize,
         payload_bytes,
         control_bytes,
         complete_bytes: payload_bytes + control_bytes,
