@@ -12,7 +12,9 @@
     "protocol": "matched native-10-bit all-intra diagnostic",
     "graph": "benchmarks/openapv-frontier.svg",
     "summary": "benchmarks/openapv-frontier-summary.tsv",
-    "evidence": "experiments/EXP-0087-block-pack-speed-promotion.md",
+    "results": "artifacts/exp0086-openapv-frontier.tsv",
+    "results_sha256": "b48462cea78b6c51d8d8ae2e51dd0b640b8308f47265a4467facc4b0825405b0",
+    "evidence": "experiments/EXP-0089-portable-kernel-speed-promotion.md",
     "scope": "one checksummed 1280x720 24-frame procedural sequence; not part of internal slot dominance"
   },
   "slots": [
@@ -41,10 +43,10 @@
       "label": "Speed",
       "role": "throughput",
       "state": "preserved",
-      "source": "23801ae",
-      "binary": "artifacts/frontier/fastvid-speed-exp0086-block-pack",
-      "binary_sha256": "9a9b156f7e941a7b701b18e21fbc03175086e47025188a0ddf3e872686ee1877",
-      "evidence": "experiments/EXP-0087-block-pack-speed-promotion.md"
+      "source": "29dcc43",
+      "binary": "artifacts/frontier/fastvid-speed-exp0088-word-block",
+      "binary_sha256": "adc638be500095ee9dff4e5c8030641178dd5c41517f1a7939d3e77f5a6ec8d7",
+      "evidence": "experiments/EXP-0089-portable-kernel-speed-promotion.md"
     }
   ]
 }

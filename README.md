@@ -63,17 +63,17 @@ Fastvid q90, not by assuming nominal controls are equivalent.
 
 | Codec | Control | Ratio | Encode | Decode | Y PSNR |
 |---|---:|---:|---:|---:|---:|
-| Fastvid speed | q90 | 4.809x | 65.48 MP/s | 69.18 MP/s | 52.002 dB |
-| Fastvid practical | q90 | 5.308x | 16.53 MP/s | 58.92 MP/s | 52.002 dB |
-| Fastvid maximum | q90 | 5.308x | 16.70 MP/s | 59.78 MP/s | 52.002 dB |
+| Fastvid speed | q90 | 4.809x | 71.29 MP/s | 68.38 MP/s | 52.002 dB |
+| Fastvid practical | q90 | 5.308x | 16.84 MP/s | 60.45 MP/s | 52.002 dB |
+| Fastvid maximum | q90 | 5.308x | 16.80 MP/s | 59.88 MP/s | 52.002 dB |
 | OpenAPV medium | QP 22 | 4.408x | 17.63 MP/s | 63.47 MP/s | 51.535 dB |
 | OpenAPV fastest | QP 23 | 4.464x | 81.18 MP/s | 63.47 MP/s | 51.736 dB |
 
 The Fastvid speed branch is a distinct high-bit point with sampled scalar
 fixed-block coding. At q90 it uses 7.18% less bitrate and measures 0.266 dB
-higher Y-PSNR than OpenAPV `fastest`; Fastvid is 19.35% slower to encode and
-8.99% faster to decode. At the high-fidelity boundary, Fastvid speed q100 is
-exact at 2.744x and 66.04 MP/s encode; OpenAPV `fastest` QP0 has maximum error
+higher Y-PSNR than OpenAPV `fastest`; Fastvid is 12.18% slower to encode and
+7.73% faster to decode. At the high-fidelity boundary, Fastvid speed q100 is
+exact at 2.744x and 64.47 MP/s encode; OpenAPV `fastest` QP0 has maximum error
 2 at 1.965x and 63.20 MP/s. These are distinct quality boundaries, not a
 nominal-control match.
 The [matched graph](benchmarks/openapv-frontier.svg) and

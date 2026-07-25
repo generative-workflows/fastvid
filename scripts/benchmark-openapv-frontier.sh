@@ -9,6 +9,12 @@ openapv_build="${2:-/tmp/openapv-cmake-build}"
 corpus_dir="${3:-$repo_dir/artifacts/corpus-v2}"
 trials="${4:-5}"
 manifest="${5:-$repo_dir/frontier.json}"
+reference_results="${6:-$(jq -r '.external_reference.results // empty' "$manifest")}"
+if [[ "$reference_results" == "--refresh" ]]; then
+  reference_results=""
+elif [[ -n "$reference_results" && "$reference_results" != /* ]]; then
+  reference_results="$repo_dir/$reference_results"
+fi
 
 if (( trials < 3 )); then
   echo "at least three trials are required" >&2
@@ -46,7 +52,11 @@ for slot in "${slots[@]}"; do
   binaries["$slot"]="$binary"
 done
 
-for required in "$encoder" "$decoder" "$input"; do
+required_files=("$input")
+if [[ -z "$reference_results" ]]; then
+  required_files+=("$encoder" "$decoder")
+fi
+for required in "${required_files[@]}"; do
   if [[ ! -e "$required" ]]; then
     echo "missing required file: $required" >&2
     exit 1
@@ -118,58 +128,93 @@ for quality in 90 100; do
   done
 done
 
-metrics_binary="${binaries[practical-compression]}"
-for preset in medium fastest; do
-  for qp in 0 20 21 22 23 24; do
-    for threads in 1 4; do
-      common_args=(
-        -i "$input" -w "$width" -h "$height" -z "$fps"
-        -d "$bit_depth" --input-csp 2 --profile 422-10
-        --preset "$preset" -q "$qp" -m "$threads" --max-au "$frames"
-        --tile-w 256 --tile-h 128 -v 2
-      )
-      "$encoder" "${common_args[@]}" -o "$bitstream" > /dev/null
-      "$decoder" -i "$bitstream" --max-au "$frames" -m "$threads" \
-        -o "$decoded" -v 2 > /dev/null
-      for trial in $(seq 1 "$trials"); do
-        encode_log="$("$encoder" "${common_args[@]}" -o "$bitstream" 2>&1)"
-        decode_log="$("$decoder" -i "$bitstream" --max-au "$frames" \
-          -m "$threads" -o "$decoded" -v 2 2>&1)"
-        encode_ms="$(printf '%s\n' "$encode_log" |
-          awk -F'= ' '/Total encoding time/{split($2,a," "); print a[1]}')"
-        decode_ms="$(printf '%s\n' "$decode_log" |
-          awk -F'= ' '/Total decoding time/{split($2,a," "); print a[1]}')"
-        if [[ -z "$encode_ms" || -z "$decode_ms" ]]; then
-          echo "failed to parse OpenAPV codec time" >&2
-          exit 1
-        fi
-        encoded_bytes="$(stat -c %s "$bitstream")"
-        metrics="$("$metrics_binary" metrics-yuv422p16le \
-          "$input" "$decoded" "$width" "$height" "$frames" "$bit_depth" |
-          tail -n 1)"
-        read -r _ _ y_psnr cb_psnr cr_psnr y_ssim max_error <<< "$metrics"
-        read -r ratio bpp encode_mpps decode_mpps encode_raw decode_raw \
-          stream_mb stream_mbps <<< "$(awk \
-          -v raw="$raw_bytes" -v encoded="$encoded_bytes" -v px="$pixels" \
-          -v ems="$encode_ms" -v dms="$decode_ms" \
-          -v frames="$frames" -v fps="$fps" 'BEGIN {
-            printf "%.6f %.6f %.3f %.3f %.3f %.3f %.6f %.6f",
-              raw/encoded, encoded*8/px, px/(ems*1000), px/(dms*1000),
-              raw/(ems*1000), raw/(dms*1000),
-              encoded*fps/frames/1000000, encoded*fps/frames*8/1000000
-          }')"
-        printf 'openapv\texternal\tOpenAPV %s\t%s\tqp%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-          "$preset" "$preset" "$qp" "$threads" "$trial" "$frames" \
-          "$bit_depth" "$raw_bytes" "$encoded_bytes" "$ratio" "$bpp" \
-          "$encode_ms" "$decode_ms" "$encode_mpps" "$decode_mpps" \
-          "$encode_raw" "$decode_raw" "$stream_mb" "$stream_mbps" \
-          "$y_psnr" "$cb_psnr" "$cr_psnr" "$y_ssim" "$max_error" \
-          >> "$output"
+if [[ -n "$reference_results" ]]; then
+  expected_reference_hash="$(jq -r '.external_reference.results_sha256 // empty' "$manifest")"
+  observed_reference_hash="$(sha256sum "$reference_results" | cut -d ' ' -f 1)"
+  if [[ -z "$expected_reference_hash" || "$observed_reference_hash" != "$expected_reference_hash" ]]; then
+    echo "OpenAPV reference result hash mismatch" >&2
+    exit 1
+  fi
+  if ! awk -F $'\t' -v trials="$trials" '
+    NR == 1 { next }
+    $1 == "openapv" {
+      key = $4 FS $5 FS $6
+      seen[key FS $7] = 1
+      keys[key] = 1
+      rows++
+    }
+    END {
+      if (rows == 0) exit 1
+      for (key in keys) {
+        count = 0
+        for (trial = 1; trial <= trials; trial++) {
+          if (seen[key FS trial]) count++
+        }
+        if (count != trials) exit 2
+      }
+    }
+  ' "$reference_results"; then
+    echo "OpenAPV reference trial matrix is incomplete" >&2
+    exit 1
+  fi
+  awk -F $'\t' 'NR > 1 && $1 == "openapv"' "$reference_results" >> "$output"
+  echo "reused_openapv_results_sha256=$observed_reference_hash"
+else
+  metrics_binary="${binaries[practical-compression]}"
+  for preset in medium fastest; do
+    for qp in 0 20 21 22 23 24; do
+      for threads in 1 4; do
+        common_args=(
+          -i "$input" -w "$width" -h "$height" -z "$fps"
+          -d "$bit_depth" --input-csp 2 --profile 422-10
+          --preset "$preset" -q "$qp" -m "$threads" --max-au "$frames"
+          --tile-w 256 --tile-h 128 -v 2
+        )
+        "$encoder" "${common_args[@]}" -o "$bitstream" > /dev/null
+        "$decoder" -i "$bitstream" --max-au "$frames" -m "$threads" \
+          -o "$decoded" -v 2 > /dev/null
+        for trial in $(seq 1 "$trials"); do
+          encode_log="$("$encoder" "${common_args[@]}" -o "$bitstream" 2>&1)"
+          decode_log="$("$decoder" -i "$bitstream" --max-au "$frames" \
+            -m "$threads" -o "$decoded" -v 2 2>&1)"
+          encode_ms="$(printf '%s\n' "$encode_log" |
+            awk -F'= ' '/Total encoding time/{split($2,a," "); print a[1]}')"
+          decode_ms="$(printf '%s\n' "$decode_log" |
+            awk -F'= ' '/Total decoding time/{split($2,a," "); print a[1]}')"
+          if [[ -z "$encode_ms" || -z "$decode_ms" ]]; then
+            echo "failed to parse OpenAPV codec time" >&2
+            exit 1
+          fi
+          encoded_bytes="$(stat -c %s "$bitstream")"
+          metrics="$("$metrics_binary" metrics-yuv422p16le \
+            "$input" "$decoded" "$width" "$height" "$frames" "$bit_depth" |
+            tail -n 1)"
+          read -r _ _ y_psnr cb_psnr cr_psnr y_ssim max_error <<< "$metrics"
+          read -r ratio bpp encode_mpps decode_mpps encode_raw decode_raw \
+            stream_mb stream_mbps <<< "$(awk \
+            -v raw="$raw_bytes" -v encoded="$encoded_bytes" -v px="$pixels" \
+            -v ems="$encode_ms" -v dms="$decode_ms" \
+            -v frames="$frames" -v fps="$fps" 'BEGIN {
+              printf "%.6f %.6f %.3f %.3f %.3f %.3f %.6f %.6f",
+                raw/encoded, encoded*8/px, px/(ems*1000), px/(dms*1000),
+                raw/(ems*1000), raw/(dms*1000),
+                encoded*fps/frames/1000000, encoded*fps/frames*8/1000000
+            }')"
+          printf 'openapv\texternal\tOpenAPV %s\t%s\tqp%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$preset" "$preset" "$qp" "$threads" "$trial" "$frames" \
+            "$bit_depth" "$raw_bytes" "$encoded_bytes" "$ratio" "$bpp" \
+            "$encode_ms" "$decode_ms" "$encode_mpps" "$decode_mpps" \
+            "$encode_raw" "$decode_raw" "$stream_mb" "$stream_mbps" \
+            "$y_psnr" "$cb_psnr" "$cr_psnr" "$y_ssim" "$max_error" \
+            >> "$output"
+        done
       done
     done
   done
-done
+fi
 
 echo "results: $output"
-echo "openapv_encoder_sha256=$(sha256sum "$encoder" | cut -d ' ' -f 1)"
-echo "openapv_decoder_sha256=$(sha256sum "$decoder" | cut -d ' ' -f 1)"
+if [[ -z "$reference_results" ]]; then
+  echo "openapv_encoder_sha256=$(sha256sum "$encoder" | cut -d ' ' -f 1)"
+  echo "openapv_decoder_sha256=$(sha256sum "$decoder" | cut -d ' ' -f 1)"
+fi

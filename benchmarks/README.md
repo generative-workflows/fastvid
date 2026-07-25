@@ -41,3 +41,9 @@ checksummed native-10-bit sequence, all-intra coding, matched tile geometry,
 and measured PSNR selection. They do not share coordinates with the four-case
 8-bit graph. The SVG shows one-thread q90-neighborhood results; the TSV also
 retains four-thread rows and the non-exact OpenAPV QP0 high-fidelity boundary.
+
+OpenAPV is a pinned external target. By default the harness validates and
+reuses the checksummed six-trial OpenAPV rows named in `frontier.json`, then
+remeasures only the current Fastvid slots. Pass `--refresh` as the sixth
+argument only when the OpenAPV binary, corpus, controls, or benchmark machine
+changes. This keeps routine promotion feedback focused on code that changed.

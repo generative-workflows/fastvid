@@ -90,3 +90,4 @@ patent review.
 - [EXP-0086: sampled block-pack format](../experiments/EXP-0086-sampled-block-pack-format.md)
 - [EXP-0087: block-pack speed promotion](../experiments/EXP-0087-block-pack-speed-promotion.md)
 - [EXP-0088: portable block-pack kernel](../experiments/EXP-0088-portable-block-pack-kernel.md)
+- [EXP-0089: portable-kernel speed promotion](../experiments/EXP-0089-portable-kernel-speed-promotion.md)
