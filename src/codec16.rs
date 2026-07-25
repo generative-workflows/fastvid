@@ -16,6 +16,8 @@ const MAX_TILES: usize = 1 << 20;
 const ENTROPY_ZERO_RUN: u8 = 0;
 const ENTROPY_RICE_BASE: u8 = 1;
 const MAX_RICE_PARAMETER: u8 = 16;
+const ENTROPY_BLOCK_PACK: u8 = ENTROPY_RICE_BASE + MAX_RICE_PARAMETER + 1;
+const BLOCK_PACK_SYMBOLS: usize = 128;
 const PREDICT_SPATIAL: u8 = 0;
 const PREDICT_TEMPORAL: u8 = 1;
 const PREDICT_AVERAGE: u8 = 2;
@@ -608,6 +610,7 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, CodecError> {
     let mut next_payload_offset = directory_end;
     let mut zero_run_tiles = 0;
     let mut rice_tiles = 0;
+    let mut block_pack_tiles = 0;
     let mut spatial_tiles = 0;
     let mut temporal_tiles = 0;
     for (index, expected_tile) in expected.into_iter().enumerate() {
@@ -618,6 +621,7 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, CodecError> {
         let entropy_mode = bytes[start + 1];
         if entropy_mode != ENTROPY_ZERO_RUN
             && !(ENTROPY_RICE_BASE..=ENTROPY_RICE_BASE + MAX_RICE_PARAMETER).contains(&entropy_mode)
+            && !(version == VERSION && entropy_mode == ENTROPY_BLOCK_PACK)
         {
             return Err(CodecError::Malformed("unknown tile entropy mode"));
         }
@@ -653,7 +657,10 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, CodecError> {
             return Err(CodecError::Malformed("truncated tile payload"));
         }
         zero_run_tiles += usize::from(entropy_mode == ENTROPY_ZERO_RUN);
-        rice_tiles += usize::from(entropy_mode != ENTROPY_ZERO_RUN);
+        rice_tiles += usize::from(
+            (ENTROPY_RICE_BASE..=ENTROPY_RICE_BASE + MAX_RICE_PARAMETER).contains(&entropy_mode),
+        );
+        block_pack_tiles += usize::from(entropy_mode == ENTROPY_BLOCK_PACK);
         spatial_tiles += usize::from(prediction_mode != PREDICT_TEMPORAL);
         temporal_tiles += usize::from(prediction_mode == PREDICT_TEMPORAL);
         entries.push(DirectoryEntry {
@@ -680,6 +687,7 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, CodecError> {
             tile_count,
             zero_run_tiles,
             rice_tiles,
+            block_pack_tiles,
             spatial_tiles,
             temporal_tiles,
             encoded_bytes: bytes.len(),
@@ -807,6 +815,20 @@ fn encode_best_tile(
     quantizer: &Quantizer16,
     prefer_temporal: bool,
 ) -> EncodedTile {
+    if let Some(reference) = reference.filter(|_| prefer_temporal) {
+        return encode_temporal_tile(plane, reference, tile, quantizer);
+    }
+    encode_sampled_fixed_gradient_tile(plane, tile, quantizer)
+}
+
+#[allow(dead_code)]
+fn encode_best_tile_exhaustive(
+    plane: &Plane16,
+    reference: Option<&Plane16>,
+    tile: Tile,
+    quantizer: &Quantizer16,
+    prefer_temporal: bool,
+) -> EncodedTile {
     if quantizer.max_sample == i32::from(u16::MAX)
         && let Some(reference) = reference
     {
@@ -908,6 +930,230 @@ fn encode_best_tile(
         });
     let (prediction_mode, folded, _, _) = candidates.swap_remove(selected);
     finish_entropy(folded, prediction_mode)
+}
+
+fn encode_sampled_fixed_gradient_tile(
+    plane: &Plane16,
+    tile: Tile,
+    quantizer: &Quantizer16,
+) -> EncodedTile {
+    let (sampled_mode, try_block_pack) = sample_fixed_gradient_entropy(plane, tile, quantizer);
+    if try_block_pack {
+        return encode_fixed_gradient_block_tile(plane, tile, quantizer);
+    }
+    if sampled_mode != ENTROPY_ZERO_RUN {
+        return encode_fixed_gradient_rice_tile(
+            plane,
+            tile,
+            quantizer,
+            sampled_mode - ENTROPY_RICE_BASE,
+        );
+    }
+    encode_fixed_gradient_tile(plane, tile, quantizer)
+}
+
+fn sample_fixed_gradient_entropy(
+    plane: &Plane16,
+    tile: Tile,
+    quantizer: &Quantizer16,
+) -> (u8, bool) {
+    let width = tile.width as usize;
+    let plane_width = plane.width as usize;
+    let origin_x = tile.x as usize;
+    let origin_y = tile.y as usize;
+    let y = tile.height as usize / 2;
+    let row_start = (origin_y + y) * plane_width + origin_x;
+    let mut folded = Vec::with_capacity(width);
+    for x in 0..width {
+        let source = row_start + x;
+        let left = if x == 0 { 0 } else { plane.data[source - 1] };
+        let above = if y == 0 {
+            0
+        } else {
+            plane.data[source - plane_width]
+        };
+        let upper_left = if x == 0 || y == 0 {
+            0
+        } else {
+            plane.data[source - plane_width - 1]
+        };
+        let prediction = i32::from(spatial_prediction(
+            SpatialPredictor::ClampGradient,
+            left,
+            above,
+            upper_left,
+            quantizer.max_sample as u16,
+        ));
+        let quantized = quantizer.quantize(i32::from(plane.data[source]) - prediction);
+        folded.push(zigzag(quantized));
+    }
+    let (legacy_mode, legacy_bytes) = modeled_entropy_cost(&folded);
+    (
+        legacy_mode,
+        legacy_mode != ENTROPY_ZERO_RUN && modeled_block_pack_cost(&folded) < legacy_bytes,
+    )
+}
+
+fn modeled_block_pack_cost(folded: &[u32]) -> usize {
+    folded
+        .chunks(BLOCK_PACK_SYMBOLS)
+        .map(|block| {
+            let maximum = block.iter().copied().max().unwrap_or(0);
+            let width = (u32::BITS - maximum.leading_zeros()) as usize;
+            1 + (block.len() * width).div_ceil(8)
+        })
+        .sum()
+}
+
+fn encode_fixed_gradient_block_tile(
+    plane: &Plane16,
+    tile: Tile,
+    quantizer: &Quantizer16,
+) -> EncodedTile {
+    let width = tile.width as usize;
+    let height = tile.height as usize;
+    let plane_width = plane.width as usize;
+    let origin_x = tile.x as usize;
+    let origin_y = tile.y as usize;
+    let mut reconstructed_row = vec![0u16; width];
+    let mut payload = Vec::with_capacity(width * height);
+    let mut block = [0u32; BLOCK_PACK_SYMBOLS];
+    let mut block_len = 0usize;
+    for y in 0..height {
+        let row_start = (origin_y + y) * plane_width + origin_x;
+        let mut left = 0;
+        let mut upper_left = 0;
+        for (&sample, reconstructed_slot) in plane.data[row_start..row_start + width]
+            .iter()
+            .zip(&mut reconstructed_row)
+        {
+            let above = *reconstructed_slot;
+            let prediction = i32::from(spatial_prediction(
+                SpatialPredictor::ClampGradient,
+                left,
+                above,
+                upper_left,
+                quantizer.max_sample as u16,
+            ));
+            let quantized = quantizer.quantize(i32::from(sample) - prediction);
+            let reconstructed =
+                (prediction + quantized * quantizer.step).clamp(0, quantizer.max_sample) as u16;
+            *reconstructed_slot = reconstructed;
+            upper_left = above;
+            left = reconstructed;
+            let folded = zigzag(quantized);
+            block[block_len] = folded;
+            block_len += 1;
+            if block_len == BLOCK_PACK_SYMBOLS {
+                put_fixed_block(&mut payload, &block);
+                block_len = 0;
+            }
+        }
+    }
+    if block_len != 0 {
+        put_fixed_block(&mut payload, &block[..block_len]);
+    }
+    EncodedTile {
+        entropy_mode: ENTROPY_BLOCK_PACK,
+        prediction_mode: PREDICT_CLAMP_GRADIENT,
+        payload,
+    }
+}
+
+fn put_fixed_block(output: &mut Vec<u8>, folded: &[u32]) {
+    let maximum = folded.iter().copied().max().unwrap_or(0);
+    let width = (u32::BITS - maximum.leading_zeros()) as u8;
+    output.push(width);
+    let mut writer = BitWriter::new(output);
+    for &value in folded {
+        writer.put_bits(value, width);
+    }
+    writer.finish();
+}
+
+fn encode_fixed_gradient_rice_tile(
+    plane: &Plane16,
+    tile: Tile,
+    quantizer: &Quantizer16,
+    rice_parameter: u8,
+) -> EncodedTile {
+    let width = tile.width as usize;
+    let height = tile.height as usize;
+    let plane_width = plane.width as usize;
+    let origin_x = tile.x as usize;
+    let origin_y = tile.y as usize;
+    let mut reconstructed_row = vec![0u16; width];
+    let mut payload = Vec::with_capacity(width * height);
+    {
+        let mut writer = BitWriter::new(&mut payload);
+        for y in 0..height {
+            let row_start = (origin_y + y) * plane_width + origin_x;
+            let mut left = 0;
+            let mut upper_left = 0;
+            for (&sample, reconstructed_slot) in plane.data[row_start..row_start + width]
+                .iter()
+                .zip(&mut reconstructed_row)
+            {
+                let above = *reconstructed_slot;
+                let prediction = i32::from(spatial_prediction(
+                    SpatialPredictor::ClampGradient,
+                    left,
+                    above,
+                    upper_left,
+                    quantizer.max_sample as u16,
+                ));
+                let quantized = quantizer.quantize(i32::from(sample) - prediction);
+                let reconstructed =
+                    (prediction + quantized * quantizer.step).clamp(0, quantizer.max_sample) as u16;
+                *reconstructed_slot = reconstructed;
+                upper_left = above;
+                left = reconstructed;
+                writer.put_rice(zigzag(quantized), rice_parameter);
+            }
+        }
+        writer.finish();
+    }
+    EncodedTile {
+        entropy_mode: ENTROPY_RICE_BASE + rice_parameter,
+        prediction_mode: PREDICT_CLAMP_GRADIENT,
+        payload,
+    }
+}
+
+fn encode_fixed_gradient_tile(plane: &Plane16, tile: Tile, quantizer: &Quantizer16) -> EncodedTile {
+    let width = tile.width as usize;
+    let height = tile.height as usize;
+    let plane_width = plane.width as usize;
+    let origin_x = tile.x as usize;
+    let origin_y = tile.y as usize;
+    let mut reconstructed_row = vec![0u16; width];
+    let mut folded = Vec::with_capacity(width * height);
+    for y in 0..height {
+        let row_start = (origin_y + y) * plane_width + origin_x;
+        let mut left = 0;
+        let mut upper_left = 0;
+        for (&sample, reconstructed_slot) in plane.data[row_start..row_start + width]
+            .iter()
+            .zip(&mut reconstructed_row)
+        {
+            let above = *reconstructed_slot;
+            let prediction = i32::from(spatial_prediction(
+                SpatialPredictor::ClampGradient,
+                left,
+                above,
+                upper_left,
+                quantizer.max_sample as u16,
+            ));
+            let quantized = quantizer.quantize(i32::from(sample) - prediction);
+            let reconstructed =
+                (prediction + quantized * quantizer.step).clamp(0, quantizer.max_sample) as u16;
+            *reconstructed_slot = reconstructed;
+            upper_left = above;
+            left = reconstructed;
+            folded.push(zigzag(quantized));
+        }
+    }
+    finish_entropy(folded, PREDICT_CLAMP_GRADIENT)
 }
 
 fn encode_temporal_tile(
@@ -1412,6 +1658,41 @@ fn model_folded_payload(
         }
         return Ok(model);
     }
+    if entropy_mode == ENTROPY_BLOCK_PACK {
+        let mut cursor = 0usize;
+        let mut decoded = 0usize;
+        let max_width = (u32::BITS - max_folded.leading_zeros()) as u8;
+        while decoded < sample_count {
+            let width = *payload
+                .get(cursor)
+                .ok_or(CodecError::Malformed("truncated block-pack control"))?;
+            cursor += 1;
+            if width > max_width {
+                return Err(CodecError::Malformed("block-pack width is out of range"));
+            }
+            let count = BLOCK_PACK_SYMBOLS.min(sample_count - decoded);
+            let bytes = (count * usize::from(width)).div_ceil(8);
+            let end = cursor
+                .checked_add(bytes)
+                .filter(|&end| end <= payload.len())
+                .ok_or(CodecError::Malformed("truncated block-pack payload"))?;
+            let mut reader = BitReader::new(&payload[cursor..end]);
+            for _ in 0..count {
+                let folded = reader.get_bits(width)?;
+                if folded > max_folded {
+                    return Err(CodecError::Malformed("residual is out of range"));
+                }
+                model.push(folded);
+            }
+            reader.finish()?;
+            cursor = end;
+            decoded += count;
+        }
+        if cursor != payload.len() {
+            return Err(CodecError::Malformed("trailing tile payload bytes"));
+        }
+        return Ok(model);
+    }
     if !(ENTROPY_RICE_BASE..=ENTROPY_RICE_BASE + MAX_RICE_PARAMETER).contains(&entropy_mode) {
         return Err(CodecError::Malformed("unknown tile entropy mode"));
     }
@@ -1442,6 +1723,9 @@ fn decode_tile_payload(
     if entropy_mode == ENTROPY_ZERO_RUN {
         return decode_zero_run(payload, count, width, step, context, max_sample);
     }
+    if entropy_mode == ENTROPY_BLOCK_PACK {
+        return decode_block_pack(payload, count, width, step, context, max_sample);
+    }
     decode_rice(
         payload,
         count,
@@ -1451,6 +1735,59 @@ fn decode_tile_payload(
         context,
         max_sample,
     )
+}
+
+fn decode_block_pack(
+    payload: &[u8],
+    sample_count: usize,
+    width: usize,
+    step: i32,
+    context: PredictionContext<'_>,
+    max_sample: u16,
+) -> Result<Vec<u16>, CodecError> {
+    let max_folded = u32::from(max_sample) * 2;
+    let max_width = (u32::BITS - max_folded.leading_zeros()) as u8;
+    let mut output = vec![0u16; sample_count];
+    let mut cursor = 0usize;
+    let mut index = 0usize;
+    while index < sample_count {
+        let block_width = *payload
+            .get(cursor)
+            .ok_or(CodecError::Malformed("truncated block-pack control"))?;
+        cursor += 1;
+        if block_width > max_width {
+            return Err(CodecError::Malformed("block-pack width is out of range"));
+        }
+        let count = BLOCK_PACK_SYMBOLS.min(sample_count - index);
+        let bytes = (count * usize::from(block_width)).div_ceil(8);
+        let end = cursor
+            .checked_add(bytes)
+            .filter(|&end| end <= payload.len())
+            .ok_or(CodecError::Malformed("truncated block-pack payload"))?;
+        let mut reader = BitReader::new(&payload[cursor..end]);
+        for _ in 0..count {
+            let folded = reader.get_bits(block_width)?;
+            if folded > max_folded {
+                return Err(CodecError::Malformed("residual is out of range"));
+            }
+            reconstruct(
+                &mut output,
+                index,
+                width,
+                unzigzag(folded),
+                step,
+                context,
+                max_sample,
+            )?;
+            index += 1;
+        }
+        reader.finish()?;
+        cursor = end;
+    }
+    if cursor != payload.len() {
+        return Err(CodecError::Malformed("trailing tile payload bytes"));
+    }
+    Ok(output)
 }
 
 fn decode_zero_run(
@@ -1850,7 +2187,7 @@ impl<'a> BitWriter<'a> {
     }
 
     fn put_bits(&mut self, value: u32, count: u8) {
-        debug_assert!(count <= 16);
+        debug_assert!(count <= 17);
         if count != 0 {
             self.buffer |= (u64::from(value) & ((1u64 << count) - 1)) << self.buffered_bits;
             self.buffered_bits += count;
@@ -2243,7 +2580,7 @@ mod tests {
         assert!(inspect16(&reserved).is_err());
 
         let mut invalid_entropy = encoded.clone();
-        invalid_entropy[HEADER_LEN + 1] = ENTROPY_RICE_BASE + MAX_RICE_PARAMETER + 1;
+        invalid_entropy[HEADER_LEN + 1] = ENTROPY_BLOCK_PACK + 1;
         assert!(inspect16(&invalid_entropy).is_err());
 
         let mut huge = encoded;
@@ -2518,6 +2855,53 @@ mod tests {
             )
             .unwrap();
             assert_eq!(decoded, modeled.reconstruction);
+        }
+    }
+
+    #[test]
+    fn block_pack_round_trips_and_rejects_malformed_blocks() {
+        let frame = patterned_frame(10, true);
+        let tile = Tile {
+            plane: 0,
+            x: 0,
+            y: 0,
+            width: frame.planes[0].width,
+            height: frame.planes[0].height,
+        };
+        let quantizer = Quantizer16::new(1, 10);
+        let encoded = encode_fixed_gradient_block_tile(&frame.planes[0], tile, &quantizer);
+        let decoded = decode_tile_payload(
+            tile,
+            &encoded.payload,
+            1,
+            encoded.entropy_mode,
+            encoded.prediction_mode,
+            None,
+            1023,
+        )
+        .unwrap();
+        assert_eq!(decoded, frame.planes[0].data);
+
+        let tiny = Tile {
+            plane: 0,
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        };
+        for payload in [&[18][..], &[1][..], &[1, 0x80][..], &[0, 0][..]] {
+            assert!(
+                decode_tile_payload(
+                    tiny,
+                    payload,
+                    1,
+                    ENTROPY_BLOCK_PACK,
+                    PREDICT_CLAMP_GRADIENT,
+                    None,
+                    1023,
+                )
+                .is_err()
+            );
         }
     }
 

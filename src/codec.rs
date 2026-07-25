@@ -73,6 +73,7 @@ pub struct StreamInfo {
     pub tile_count: usize,
     pub zero_run_tiles: usize,
     pub rice_tiles: usize,
+    pub block_pack_tiles: usize,
     pub spatial_tiles: usize,
     pub temporal_tiles: usize,
     pub encoded_bytes: usize,
@@ -723,6 +724,7 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, CodecError> {
             tile_count,
             zero_run_tiles,
             rice_tiles,
+            block_pack_tiles: 0,
             spatial_tiles,
             temporal_tiles,
             encoded_bytes: bytes.len(),
@@ -825,6 +827,20 @@ fn encode_tile(
 }
 
 fn encode_best_tile(
+    plane: &Plane,
+    reference: Option<&Plane>,
+    tile: Tile,
+    quantizer: &Quantizer,
+    prefer_temporal: bool,
+) -> EncodedTile {
+    if let Some(reference) = reference.filter(|_| prefer_temporal) {
+        return encode_speed_temporal_tile(plane, reference, tile, quantizer);
+    }
+    encode_speed_spatial_tile(plane, tile, quantizer)
+}
+
+#[allow(dead_code)]
+fn encode_best_tile_exhaustive(
     plane: &Plane,
     reference: Option<&Plane>,
     tile: Tile,
@@ -978,6 +994,41 @@ impl ResidualAccumulator {
             }
         }
         legacy
+    }
+
+    fn finish_legacy(mut self, prediction_mode: u8) -> EncodedTile {
+        count_zero_run(&mut self.zero_run_bytes, &mut self.zero_run);
+        let (rice_parameter, rice_bits) = best_rice_parameter(&self.histogram, self.folded.len());
+        let rice_bytes = rice_bits.div_ceil(8);
+        if rice_bytes >= self.zero_run_bytes {
+            let mut payload = Vec::with_capacity(self.zero_run_bytes);
+            let mut zero_run = 0;
+            for &folded in &self.folded {
+                if folded == 0 {
+                    zero_run += 1;
+                } else {
+                    flush_zero_run(&mut payload, &mut zero_run);
+                    put_varint(&mut payload, u32::from(folded) * 2 - 1);
+                }
+            }
+            flush_zero_run(&mut payload, &mut zero_run);
+            return EncodedTile {
+                entropy_mode: ENTROPY_ZERO_RUN,
+                prediction_mode,
+                payload,
+            };
+        }
+        let mut payload = Vec::with_capacity(rice_bytes);
+        let mut writer = BitWriter::new(&mut payload);
+        for folded in self.folded {
+            writer.put_rice(u32::from(folded), rice_parameter);
+        }
+        writer.finish();
+        EncodedTile {
+            entropy_mode: ENTROPY_RICE_BASE + rice_parameter,
+            prediction_mode,
+            payload,
+        }
     }
 
     fn finish(mut self, prediction_mode: u8) -> EncodedTile {
@@ -1231,6 +1282,63 @@ fn encode_temporal_tile(
         }
     }
     residuals.finish(PREDICT_TEMPORAL)
+}
+
+fn encode_speed_temporal_tile(
+    plane: &Plane,
+    reference: &Plane,
+    tile: Tile,
+    quantizer: &Quantizer,
+) -> EncodedTile {
+    let width = tile.width as usize;
+    let plane_width = plane.width as usize;
+    let origin_x = tile.x as usize;
+    let origin_y = tile.y as usize;
+    let mut residuals = ResidualAccumulator::new(width * tile.height as usize);
+    for y in 0..tile.height as usize {
+        let start = (origin_y + y) * plane_width + origin_x;
+        for (&sample, &prediction) in plane.data[start..start + width]
+            .iter()
+            .zip(&reference.data[start..start + width])
+        {
+            residuals.push(quantizer.quantize(i32::from(sample) - i32::from(prediction)));
+        }
+    }
+    residuals.finish_legacy(PREDICT_TEMPORAL)
+}
+
+fn encode_speed_spatial_tile(plane: &Plane, tile: Tile, quantizer: &Quantizer) -> EncodedTile {
+    let width = tile.width as usize;
+    let height = tile.height as usize;
+    let plane_width = plane.width as usize;
+    let origin_x = tile.x as usize;
+    let origin_y = tile.y as usize;
+    let mut reconstructed_row = vec![0u8; width];
+    let mut residuals = ResidualAccumulator::new(width * height);
+    for y in 0..height {
+        let row_start = (origin_y + y) * plane_width + origin_x;
+        let mut left = 0;
+        let mut upper_left = 0;
+        for (&sample, reconstructed_slot) in plane.data[row_start..row_start + width]
+            .iter()
+            .zip(&mut reconstructed_row)
+        {
+            let above = *reconstructed_slot;
+            let prediction = i32::from(spatial_prediction(
+                SpatialPredictor::ClampGradient,
+                left,
+                above,
+                upper_left,
+            ));
+            let quantized = quantizer.quantize(i32::from(sample) - prediction);
+            let reconstructed = (prediction + quantized * quantizer.step).clamp(0, 255) as u8;
+            *reconstructed_slot = reconstructed;
+            upper_left = above;
+            left = reconstructed;
+            residuals.push(quantized);
+        }
+    }
+    residuals.finish_legacy(PREDICT_CLAMP_GRADIENT)
 }
 
 fn encode_spatial_tile(plane: &Plane, tile: Tile, quantizer: &Quantizer) -> EncodedTile {
