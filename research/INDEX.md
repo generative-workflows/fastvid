@@ -38,3 +38,4 @@ before entering the format.
 | [0031](0031-modern-simd-rans-implementation.md) | htscodecs SIMD rANS, ryg_rans | Wider-state vector kernels, gather regressions, and Zen 4 limits | Reviewed |
 | [0032](0032-chroma-from-luma-prediction.md) | AV1 CfL paper, specification, and SVT-AV1 | Charged tile-local cross-plane chroma prediction | Reviewed |
 | [0033](0033-reversible-squeeze-transform.md) | JPEG XL 2025 overview and libjxl v0.11.2 | Reversible lifting, frequency separation, and SIMD dependency layout | Reviewed |
+| [0034](0034-block-bitpacking-kernels.md) | FastPFOR/SIMD-BP128, Revec, SFVInt | Charged 128-symbol bit packing, specialized widths, and SIMD/BMI dispatch limits | Reviewed |
