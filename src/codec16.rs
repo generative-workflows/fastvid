@@ -1,8 +1,8 @@
 use crate::codec::StreamInfo;
 use crate::model::{
     ByteFormatModel, CodecError, CodecOptions, Frame16, FrameRate, MAX_FRAME_BYTES, PixelFormat,
-    Plane16, PredictorCandidateModel, PredictorModelMode, TileEntropyModel, TilePredictorModel,
-    TileResidualMappingModel, checked_area, fold_bounded_residual, sample_max,
+    Plane16, PredictorBandModel, PredictorCandidateModel, PredictorModelMode, TileEntropyModel,
+    TilePredictorModel, TileResidualMappingModel, checked_area, fold_bounded_residual, sample_max,
 };
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1598,6 +1598,7 @@ fn model_predictor_tile(
         model_spatial_predictor(plane, tile, quantizer, SpatialPredictor::ClampGradient);
     let half_gradient =
         model_spatial_predictor(plane, tile, quantizer, SpatialPredictor::HalfGradient);
+    let band16_clamp = model_clamp_gradient_bands(plane, tile, quantizer);
     let temporal = available_reference
         .map(|reference| model_temporal_predictor(plane, reference, tile, quantizer));
     let current_temporal = current_reference
@@ -1667,9 +1668,45 @@ fn model_predictor_tile(
             clamp_gradient: clamp_gradient.summary,
             half_gradient: half_gradient.summary,
             temporal: temporal.map(|candidate| candidate.summary),
+            band16_clamp,
         },
         reconstruction,
     )
+}
+
+fn model_clamp_gradient_bands(
+    plane: &Plane16,
+    tile: Tile,
+    quantizer: &Quantizer16,
+) -> PredictorBandModel {
+    const BAND_HEIGHT: u32 = 16;
+    let mut bands = 0usize;
+    let mut payload_bytes = 0usize;
+    let mut squared_error = 0u64;
+    let mut max_error = 0u32;
+    for offset_y in (0..tile.height).step_by(BAND_HEIGHT as usize) {
+        let band = Tile {
+            y: tile.y + offset_y,
+            height: BAND_HEIGHT.min(tile.height - offset_y),
+            ..tile
+        };
+        let modeled =
+            model_spatial_predictor(plane, band, quantizer, SpatialPredictor::ClampGradient);
+        bands += 1;
+        payload_bytes += modeled.summary.payload_bytes;
+        squared_error += modeled.summary.squared_error;
+        max_error = max_error.max(modeled.summary.max_error);
+    }
+    let control_bytes = bands.saturating_sub(1) * 5;
+    PredictorBandModel {
+        bands,
+        max_band_samples: tile.width as usize * BAND_HEIGHT.min(tile.height) as usize,
+        payload_bytes,
+        control_bytes,
+        complete_bytes: payload_bytes + control_bytes,
+        squared_error,
+        max_error,
+    }
 }
 
 fn model_temporal_predictor(
@@ -3062,6 +3099,57 @@ mod tests {
             assert_eq!(paired.1.prediction_mode, second_scalar.prediction_mode);
             assert_eq!(paired.1.payload, second_scalar.payload);
         }
+    }
+
+    #[test]
+    fn independent_band_model_charges_each_added_boundary() {
+        let width = 7;
+        let height = 17;
+        let data = (0..width * height)
+            .map(|index| ((index * 71 + index * index * 3) % 1024) as u16)
+            .collect();
+        let plane = Plane16::new(width, height, 10, data).unwrap();
+        let tile = Tile {
+            plane: 0,
+            x: 0,
+            y: 0,
+            width,
+            height,
+        };
+        let quantizer = Quantizer16::new(quantization_step(90, 10), 10);
+        let bands = model_clamp_gradient_bands(&plane, tile, &quantizer);
+        let first = model_spatial_predictor(
+            &plane,
+            Tile { height: 16, ..tile },
+            &quantizer,
+            SpatialPredictor::ClampGradient,
+        );
+        let second = model_spatial_predictor(
+            &plane,
+            Tile {
+                y: 16,
+                height: 1,
+                ..tile
+            },
+            &quantizer,
+            SpatialPredictor::ClampGradient,
+        );
+        assert_eq!(bands.bands, 2);
+        assert_eq!(bands.max_band_samples, width as usize * 16);
+        assert_eq!(
+            bands.payload_bytes,
+            first.summary.payload_bytes + second.summary.payload_bytes
+        );
+        assert_eq!(bands.control_bytes, 5);
+        assert_eq!(bands.complete_bytes, bands.payload_bytes + 5);
+        assert_eq!(
+            bands.squared_error,
+            first.summary.squared_error + second.summary.squared_error
+        );
+        assert_eq!(
+            bands.max_error,
+            first.summary.max_error.max(second.summary.max_error)
+        );
     }
 
     #[test]

@@ -173,7 +173,7 @@ fn model_high_bit(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>
 
 fn print_header() {
     println!(
-        "sample\tframe\tbit_depth\tquality\tgop\ttile\tplane\twidth\theight\tsamples\tcurrent_mode\toracle_mode\tcurrent_entropy\toracle_entropy\tcurrent_bytes\toracle_bytes\tcurrent_sse\toracle_sse\tcurrent_max_error\toracle_max_error\tpaeth_bytes\tpaeth_sse\taverage_bytes\taverage_sse\tclamp_bytes\tclamp_sse\thalf_bytes\thalf_sse\ttemporal_bytes\ttemporal_sse"
+        "sample\tframe\tbit_depth\tquality\tgop\ttile\tplane\twidth\theight\tsamples\tcurrent_mode\toracle_mode\tcurrent_entropy\toracle_entropy\tcurrent_bytes\toracle_bytes\tcurrent_sse\toracle_sse\tcurrent_max_error\toracle_max_error\tpaeth_bytes\tpaeth_sse\taverage_bytes\taverage_sse\tclamp_bytes\tclamp_sse\thalf_bytes\thalf_sse\ttemporal_bytes\ttemporal_sse\tband16_count\tband16_max_samples\tband16_payload_bytes\tband16_control_bytes\tband16_complete_bytes\tband16_sse\tband16_max_error"
     );
 }
 
@@ -196,7 +196,7 @@ fn print_models(
             })
             .unwrap_or_default();
         println!(
-            "{sample}\t{frame}\t{bit_depth}\t{quality}\t{gop}\t{tile}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{temporal_bytes}\t{temporal_sse}",
+            "{sample}\t{frame}\t{bit_depth}\t{quality}\t{gop}\t{tile}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{temporal_bytes}\t{temporal_sse}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             model.plane,
             model.width,
             model.height,
@@ -219,6 +219,13 @@ fn print_models(
             model.clamp_gradient.squared_error,
             model.half_gradient.payload_bytes,
             model.half_gradient.squared_error,
+            model.band16_clamp.bands,
+            model.band16_clamp.max_band_samples,
+            model.band16_clamp.payload_bytes,
+            model.band16_clamp.control_bytes,
+            model.band16_clamp.complete_bytes,
+            model.band16_clamp.squared_error,
+            model.band16_clamp.max_error,
         );
     }
 }

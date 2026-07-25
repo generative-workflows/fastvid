@@ -507,6 +507,19 @@ pub struct TilePredictorModel {
     pub clamp_gradient: PredictorCandidateModel,
     pub half_gradient: PredictorCandidateModel,
     pub temporal: Option<PredictorCandidateModel>,
+    pub band16_clamp: PredictorBandModel,
+}
+
+/// Read-only complete-byte model for independently reconstructed row bands.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PredictorBandModel {
+    pub bands: usize,
+    pub max_band_samples: usize,
+    pub payload_bytes: usize,
+    pub control_bytes: usize,
+    pub complete_bytes: usize,
+    pub squared_error: u64,
+    pub max_error: u32,
 }
 
 /// Read-only exact-byte model for one tile-local chroma-from-luma candidate.

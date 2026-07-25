@@ -1,7 +1,8 @@
 use crate::model::{
     ByteFormatModel, ChromaFromLumaTileModel, CodecError, CodecOptions, Frame, FrameRate,
-    PixelFormat, Plane, PredictorCandidateModel, PredictorModelMode, TileEntropyModel,
-    TilePredictorModel, TileResidualMappingModel, checked_area, fold_bounded_residual,
+    PixelFormat, Plane, PredictorBandModel, PredictorCandidateModel, PredictorModelMode,
+    TileEntropyModel, TilePredictorModel, TileResidualMappingModel, checked_area,
+    fold_bounded_residual,
 };
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1529,6 +1530,7 @@ fn model_predictor_tile(
         model_spatial_predictor(plane, tile, quantizer, SpatialPredictor::ClampGradient);
     let half_gradient =
         model_spatial_predictor(plane, tile, quantizer, SpatialPredictor::HalfGradient);
+    let band16_clamp = model_clamp_gradient_bands(plane, tile, quantizer);
     let temporal = available_reference
         .map(|reference| model_temporal_predictor(plane, reference, tile, quantizer));
     let current_temporal = current_reference
@@ -1598,9 +1600,45 @@ fn model_predictor_tile(
             clamp_gradient: clamp_gradient.summary,
             half_gradient: half_gradient.summary,
             temporal: temporal.map(|candidate| candidate.summary),
+            band16_clamp,
         },
         reconstruction,
     )
+}
+
+fn model_clamp_gradient_bands(
+    plane: &Plane,
+    tile: Tile,
+    quantizer: &Quantizer,
+) -> PredictorBandModel {
+    const BAND_HEIGHT: u32 = 16;
+    let mut bands = 0usize;
+    let mut payload_bytes = 0usize;
+    let mut squared_error = 0u64;
+    let mut max_error = 0u32;
+    for offset_y in (0..tile.height).step_by(BAND_HEIGHT as usize) {
+        let band = Tile {
+            y: tile.y + offset_y,
+            height: BAND_HEIGHT.min(tile.height - offset_y),
+            ..tile
+        };
+        let modeled =
+            model_spatial_predictor(plane, band, quantizer, SpatialPredictor::ClampGradient);
+        bands += 1;
+        payload_bytes += modeled.summary.payload_bytes;
+        squared_error += modeled.summary.squared_error;
+        max_error = max_error.max(modeled.summary.max_error);
+    }
+    let control_bytes = bands.saturating_sub(1) * 5;
+    PredictorBandModel {
+        bands,
+        max_band_samples: tile.width as usize * BAND_HEIGHT.min(tile.height) as usize,
+        payload_bytes,
+        control_bytes,
+        complete_bytes: payload_bytes + control_bytes,
+        squared_error,
+        max_error,
+    }
 }
 
 fn model_temporal_predictor(

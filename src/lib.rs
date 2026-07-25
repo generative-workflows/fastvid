@@ -27,6 +27,6 @@ pub use metrics::{
 };
 pub use model::{
     ChromaFromLumaTileModel, CodecError, CodecOptions, Frame, Frame16, FrameRate, PixelFormat,
-    Plane, Plane16, PredictorCandidateModel, PredictorModelMode, TileEntropyModel,
-    TilePredictorModel, TileResidualMappingModel,
+    Plane, Plane16, PredictorBandModel, PredictorCandidateModel, PredictorModelMode,
+    TileEntropyModel, TilePredictorModel, TileResidualMappingModel,
 };
