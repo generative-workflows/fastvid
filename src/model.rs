@@ -447,6 +447,17 @@ pub struct TileEntropyModel {
     pub context_order0_table_bytes: u64,
     pub context_order0_control_bytes: u64,
     pub context_order0_complete_bytes: u64,
+    pub rice4_shard_supported: bool,
+    pub rice4_shard_payload_bytes: u64,
+    pub rice4_shard_control_bytes: u64,
+    pub rice4_shard_complete_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RiceLaneSizeModel {
+    pub(crate) payload_bytes: u64,
+    pub(crate) control_bytes: u64,
+    pub(crate) complete_bytes: u64,
 }
 
 /// Read-only size model for predictor-bounded residual symbols in one tile.
@@ -715,6 +726,40 @@ impl ByteFormatModel {
         best
     }
 
+    pub(crate) fn rice_lane_size(
+        &self,
+        parameter: u8,
+        shard_symbols: usize,
+        lanes: usize,
+    ) -> RiceLaneSizeModel {
+        debug_assert!(shard_symbols != 0);
+        debug_assert!(lanes != 0);
+        let shard_count = self.values.len().div_ceil(shard_symbols);
+        let mut payload_bytes = 0u64;
+        let mut control_bytes = 0u64;
+        for (shard_index, shard) in self.values.chunks(shard_symbols).enumerate() {
+            let active_lanes = lanes.min(shard.len());
+            let mut lane_bits = vec![0u64; active_lanes];
+            for (index, &value) in shard.iter().enumerate() {
+                lane_bits[index % active_lanes] +=
+                    u64::from(value >> parameter) + 1 + u64::from(parameter);
+            }
+            payload_bytes += lane_bits
+                .into_iter()
+                .map(|bits| bits.div_ceil(8))
+                .sum::<u64>();
+            control_bytes += (active_lanes.saturating_sub(1) as u64) * 4;
+            if shard_index + 1 != shard_count {
+                control_bytes += 4;
+            }
+        }
+        RiceLaneSizeModel {
+            payload_bytes,
+            control_bytes,
+            complete_bytes: payload_bytes + control_bytes,
+        }
+    }
+
     fn context_order0_candidate(
         &self,
         context_count: u8,
@@ -911,6 +956,18 @@ mod tests {
         partial.push_zeros(5);
         assert_eq!(partial.stream_vbyte_bytes(), 7);
         assert_eq!(partial.stream_vbyte_0124_bytes(), 2);
+    }
+
+    #[test]
+    fn four_lane_rice_model_charges_alignment_and_lengths() {
+        let mut model = ByteFormatModel::default();
+        for value in 0..=4 {
+            model.push(value);
+        }
+        let size = model.rice_lane_size(1, 4, 2);
+        assert_eq!(size.payload_bytes, 3);
+        assert_eq!(size.control_bytes, 8);
+        assert_eq!(size.complete_bytes, 11);
     }
 
     #[test]

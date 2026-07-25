@@ -349,6 +349,9 @@ pub fn analyze_entropy16(bytes: &[u8]) -> Result<Vec<TileEntropyModel>, CodecErr
                 model_folded_payload(payload, sample_count, entry.entropy_mode, max_folded)?;
             let order0 = model.order0_size();
             let context_order0 = model.context_order0_size();
+            let rice4_shard = (ENTROPY_RICE_BASE..=ENTROPY_RICE_BASE + MAX_RICE_PARAMETER)
+                .contains(&entry.entropy_mode)
+                .then(|| model.rice_lane_size(entry.entropy_mode - ENTROPY_RICE_BASE, 4096, 4));
             Ok(TileEntropyModel {
                 plane: entry.tile.plane,
                 width: entry.tile.width,
@@ -378,6 +381,10 @@ pub fn analyze_entropy16(bytes: &[u8]) -> Result<Vec<TileEntropyModel>, CodecErr
                 context_order0_table_bytes: context_order0.table_bytes,
                 context_order0_control_bytes: context_order0.control_bytes,
                 context_order0_complete_bytes: context_order0.complete_bytes,
+                rice4_shard_supported: rice4_shard.is_some(),
+                rice4_shard_payload_bytes: rice4_shard.unwrap_or_default().payload_bytes,
+                rice4_shard_control_bytes: rice4_shard.unwrap_or_default().control_bytes,
+                rice4_shard_complete_bytes: rice4_shard.unwrap_or_default().complete_bytes,
             })
         })
         .collect()
