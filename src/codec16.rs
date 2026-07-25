@@ -111,16 +111,21 @@ fn encode_internal(
     )?;
     let step = quantization_step(options.quality, frame.bit_depth());
     let quantizer = Quantizer16::new(step, frame.bit_depth());
-    let payloads = parallel_map(tiles.len(), options.threads, |index| {
-        let tile = tiles[index];
-        encode_best_tile(
-            &frame.planes[tile.plane],
-            reference.map(|frame| &frame.planes[tile.plane]),
-            tile,
-            &quantizer,
-            prefer_temporal,
-        )
-    });
+    let payloads =
+        if options.threads == 1 && reference.is_none() && frame.bit_depth() == 10 && step > 1 {
+            encode_intra_tile_pairs(frame, &tiles, &quantizer)
+        } else {
+            parallel_map(tiles.len(), options.threads, |index| {
+                let tile = tiles[index];
+                encode_best_tile(
+                    &frame.planes[tile.plane],
+                    reference.map(|frame| &frame.planes[tile.plane]),
+                    tile,
+                    &quantizer,
+                    prefer_temporal,
+                )
+            })
+        };
     let directory_bytes = tiles
         .len()
         .checked_mul(DIRECTORY_ENTRY_LEN)
@@ -180,6 +185,74 @@ fn encode_internal(
     }
     debug_assert_eq!(output.len(), stream_len);
     Ok(output)
+}
+
+fn encode_intra_tile_pairs(
+    frame: &Frame16,
+    tiles: &[Tile],
+    quantizer: &Quantizer16,
+) -> Vec<EncodedTile> {
+    let mut payloads = Vec::with_capacity(tiles.len());
+    let mut pairs = tiles.chunks_exact(2);
+    for pair in &mut pairs {
+        let first = pair[0];
+        let second = pair[1];
+        let first_plane = &frame.planes[first.plane];
+        let second_plane = &frame.planes[second.plane];
+        let first_selection = sample_fixed_gradient_entropy(first_plane, first, quantizer);
+        let second_selection = sample_fixed_gradient_entropy(second_plane, second, quantizer);
+        let same_rice_parameter = first_selection.0 == second_selection.0
+            && first_selection.0 != ENTROPY_ZERO_RUN
+            && !first_selection.1
+            && !second_selection.1;
+        if first.plane == second.plane
+            && first.width == second.width
+            && first.height == second.height
+            && same_rice_parameter
+        {
+            let parameter = first_selection.0 - ENTROPY_RICE_BASE;
+            let encoded = match parameter {
+                0 => Some(encode_fixed_gradient_rice_tile_pair_specialized::<0>(
+                    first_plane,
+                    first,
+                    second,
+                    quantizer,
+                )),
+                4 => Some(encode_fixed_gradient_rice_tile_pair_specialized::<4>(
+                    first_plane,
+                    first,
+                    second,
+                    quantizer,
+                )),
+                _ => None,
+            };
+            if let Some((first_encoded, second_encoded)) = encoded {
+                payloads.push(first_encoded);
+                payloads.push(second_encoded);
+                continue;
+            }
+        }
+        payloads.push(encode_sampled_fixed_gradient_tile_selected(
+            first_plane,
+            first,
+            quantizer,
+            first_selection,
+        ));
+        payloads.push(encode_sampled_fixed_gradient_tile_selected(
+            second_plane,
+            second,
+            quantizer,
+            second_selection,
+        ));
+    }
+    if let Some(&tile) = pairs.remainder().first() {
+        payloads.push(encode_sampled_fixed_gradient_tile(
+            &frame.planes[tile.plane],
+            tile,
+            quantizer,
+        ));
+    }
+    payloads
 }
 
 pub fn decode16(bytes: &[u8], threads: usize) -> Result<Frame16, CodecError> {
@@ -937,7 +1010,16 @@ fn encode_sampled_fixed_gradient_tile(
     tile: Tile,
     quantizer: &Quantizer16,
 ) -> EncodedTile {
-    let (sampled_mode, try_block_pack) = sample_fixed_gradient_entropy(plane, tile, quantizer);
+    let selection = sample_fixed_gradient_entropy(plane, tile, quantizer);
+    encode_sampled_fixed_gradient_tile_selected(plane, tile, quantizer, selection)
+}
+
+fn encode_sampled_fixed_gradient_tile_selected(
+    plane: &Plane16,
+    tile: Tile,
+    quantizer: &Quantizer16,
+    (sampled_mode, try_block_pack): (u8, bool),
+) -> EncodedTile {
     if try_block_pack {
         return encode_fixed_gradient_block_tile(plane, tile, quantizer);
     }
@@ -1177,6 +1259,142 @@ fn encode_fixed_gradient_rice_tile_specialized<const RICE_PARAMETER: u8>(
         prediction_mode: PREDICT_CLAMP_GRADIENT,
         payload,
     }
+}
+
+fn encode_fixed_gradient_rice_tile_pair_specialized<const RICE_PARAMETER: u8>(
+    plane: &Plane16,
+    first: Tile,
+    second: Tile,
+    quantizer: &Quantizer16,
+) -> (EncodedTile, EncodedTile) {
+    debug_assert_eq!(first.plane, second.plane);
+    debug_assert_eq!(first.width, second.width);
+    debug_assert_eq!(first.height, second.height);
+    let width = first.width as usize;
+    let height = first.height as usize;
+    let plane_width = plane.width as usize;
+    let first_origin_x = first.x as usize;
+    let first_origin_y = first.y as usize;
+    let second_origin_x = second.x as usize;
+    let second_origin_y = second.y as usize;
+    let mut first_reconstructed_row = vec![0u16; width];
+    let mut second_reconstructed_row = vec![0u16; width];
+    let mut first_payload = Vec::with_capacity(width * height);
+    let mut second_payload = Vec::with_capacity(width * height);
+    {
+        let mut first_writer = BitWriter::new(&mut first_payload);
+        let mut second_writer = BitWriter::new(&mut second_payload);
+        for y in 0..height {
+            let first_start = (first_origin_y + y) * plane_width + first_origin_x;
+            let second_start = (second_origin_y + y) * plane_width + second_origin_x;
+            let first_source_row = &plane.data[first_start..first_start + width];
+            let second_source_row = &plane.data[second_start..second_start + width];
+            let mut first_left = 0;
+            let mut first_upper_left = 0;
+            let mut second_left = 0;
+            let mut second_upper_left = 0;
+            let mut x = 0;
+            while x + 4 <= width {
+                let mut first_values = [0u32; 4];
+                let mut second_values = [0u32; 4];
+                for offset in 0..4 {
+                    let index = x + offset;
+
+                    let first_above = first_reconstructed_row[index];
+                    let first_prediction = i32::from(spatial_prediction(
+                        SpatialPredictor::ClampGradient,
+                        first_left,
+                        first_above,
+                        first_upper_left,
+                        quantizer.max_sample as u16,
+                    ));
+                    let first_quantized =
+                        quantizer.quantize(i32::from(first_source_row[index]) - first_prediction);
+                    let first_reconstructed = (first_prediction + first_quantized * quantizer.step)
+                        .clamp(0, quantizer.max_sample)
+                        as u16;
+                    first_reconstructed_row[index] = first_reconstructed;
+                    first_upper_left = first_above;
+                    first_left = first_reconstructed;
+                    first_values[offset] = zigzag(first_quantized);
+
+                    let second_above = second_reconstructed_row[index];
+                    let second_prediction = i32::from(spatial_prediction(
+                        SpatialPredictor::ClampGradient,
+                        second_left,
+                        second_above,
+                        second_upper_left,
+                        quantizer.max_sample as u16,
+                    ));
+                    let second_quantized =
+                        quantizer.quantize(i32::from(second_source_row[index]) - second_prediction);
+                    let second_reconstructed =
+                        (second_prediction + second_quantized * quantizer.step)
+                            .clamp(0, quantizer.max_sample) as u16;
+                    second_reconstructed_row[index] = second_reconstructed;
+                    second_upper_left = second_above;
+                    second_left = second_reconstructed;
+                    second_values[offset] = zigzag(second_quantized);
+                }
+                first_writer.put_rice4_specialized::<RICE_PARAMETER>(first_values);
+                second_writer.put_rice4_specialized::<RICE_PARAMETER>(second_values);
+                x += 4;
+            }
+            while x < width {
+                let first_above = first_reconstructed_row[x];
+                let first_prediction = i32::from(spatial_prediction(
+                    SpatialPredictor::ClampGradient,
+                    first_left,
+                    first_above,
+                    first_upper_left,
+                    quantizer.max_sample as u16,
+                ));
+                let first_quantized =
+                    quantizer.quantize(i32::from(first_source_row[x]) - first_prediction);
+                let first_reconstructed = (first_prediction + first_quantized * quantizer.step)
+                    .clamp(0, quantizer.max_sample)
+                    as u16;
+                first_reconstructed_row[x] = first_reconstructed;
+                first_upper_left = first_above;
+                first_left = first_reconstructed;
+
+                let second_above = second_reconstructed_row[x];
+                let second_prediction = i32::from(spatial_prediction(
+                    SpatialPredictor::ClampGradient,
+                    second_left,
+                    second_above,
+                    second_upper_left,
+                    quantizer.max_sample as u16,
+                ));
+                let second_quantized =
+                    quantizer.quantize(i32::from(second_source_row[x]) - second_prediction);
+                let second_reconstructed = (second_prediction + second_quantized * quantizer.step)
+                    .clamp(0, quantizer.max_sample)
+                    as u16;
+                second_reconstructed_row[x] = second_reconstructed;
+                second_upper_left = second_above;
+                second_left = second_reconstructed;
+
+                first_writer.put_rice(zigzag(first_quantized), RICE_PARAMETER);
+                second_writer.put_rice(zigzag(second_quantized), RICE_PARAMETER);
+                x += 1;
+            }
+        }
+        first_writer.finish();
+        second_writer.finish();
+    }
+    (
+        EncodedTile {
+            entropy_mode: ENTROPY_RICE_BASE + RICE_PARAMETER,
+            prediction_mode: PREDICT_CLAMP_GRADIENT,
+            payload: first_payload,
+        },
+        EncodedTile {
+            entropy_mode: ENTROPY_RICE_BASE + RICE_PARAMETER,
+            prediction_mode: PREDICT_CLAMP_GRADIENT,
+            payload: second_payload,
+        },
+    )
 }
 
 fn encode_fixed_gradient_rice_tile_scalar(
@@ -2787,6 +3005,55 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn interleaved_rice_tile_pairs_match_independent_tiles() {
+        let width = 14;
+        let height = 5;
+        let data = (0..width * height)
+            .map(|index| ((index * 977 + index * index * 17 + 131) % 1024) as u16)
+            .collect();
+        let plane = Plane16::new(width, height, 10, data).unwrap();
+        let first = Tile {
+            plane: 0,
+            x: 0,
+            y: 0,
+            width: 7,
+            height,
+        };
+        let second = Tile { x: 7, ..first };
+        let quantizer = Quantizer16::new(quantization_step(90, 10), 10);
+        {
+            let first_scalar =
+                encode_fixed_gradient_rice_tile_specialized::<0>(&plane, first, &quantizer);
+            let second_scalar =
+                encode_fixed_gradient_rice_tile_specialized::<0>(&plane, second, &quantizer);
+            let paired = encode_fixed_gradient_rice_tile_pair_specialized::<0>(
+                &plane, first, second, &quantizer,
+            );
+            assert_eq!(paired.0.entropy_mode, first_scalar.entropy_mode);
+            assert_eq!(paired.0.prediction_mode, first_scalar.prediction_mode);
+            assert_eq!(paired.0.payload, first_scalar.payload);
+            assert_eq!(paired.1.entropy_mode, second_scalar.entropy_mode);
+            assert_eq!(paired.1.prediction_mode, second_scalar.prediction_mode);
+            assert_eq!(paired.1.payload, second_scalar.payload);
+        }
+        {
+            let first_scalar =
+                encode_fixed_gradient_rice_tile_specialized::<4>(&plane, first, &quantizer);
+            let second_scalar =
+                encode_fixed_gradient_rice_tile_specialized::<4>(&plane, second, &quantizer);
+            let paired = encode_fixed_gradient_rice_tile_pair_specialized::<4>(
+                &plane, first, second, &quantizer,
+            );
+            assert_eq!(paired.0.entropy_mode, first_scalar.entropy_mode);
+            assert_eq!(paired.0.prediction_mode, first_scalar.prediction_mode);
+            assert_eq!(paired.0.payload, first_scalar.payload);
+            assert_eq!(paired.1.entropy_mode, second_scalar.entropy_mode);
+            assert_eq!(paired.1.prediction_mode, second_scalar.prediction_mode);
+            assert_eq!(paired.1.payload, second_scalar.payload);
         }
     }
 

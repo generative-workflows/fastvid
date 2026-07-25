@@ -40,3 +40,4 @@ before entering the format.
 | [0033](0033-reversible-squeeze-transform.md) | JPEG XL 2025 overview and libjxl v0.11.2 | Reversible lifting, frequency separation, and SIMD dependency layout | Reviewed |
 | [0034](0034-block-bitpacking-kernels.md) | FastPFOR/SIMD-BP128, Revec, SFVInt | Charged 128-symbol bit packing, specialized widths, and SIMD/BMI dispatch limits | Reviewed |
 | [0035](0035-runtime-invariant-integer-division.md) | Optimal reciprocal bounds, libdivide, `strength_reduce` | Exact runtime-invariant quantization without dependent table loads | Reviewed |
+| [0036](0036-independent-chain-software-pipelining.md) | AMD/Intel optimization manuals, LLVM pipeliner, Cimple | Interleave independent causal tile chains for scalar ILP | Reviewed |
