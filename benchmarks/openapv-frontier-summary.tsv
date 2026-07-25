@@ -1,21 +1,21 @@
 scope	codec	slot	label	preset	control	threads	ratio	bits_per_luma_pixel	encode_mpps	decode_mpps	encoded_stream_mbps	y_psnr	y_psnr_delta	y_block_ssim	max_error
-matched-q90	fastvid	speed	Speed	frontier	q90	1	4.809339	6.653721	76.255	69.115	147.169656	52.001930	-0.000363	0.99373056	4
-matched-q90	fastvid	practical-compression	Practical compression	frontier	q90	1	5.307903	6.028746	16.888	60.267	133.346224	52.002293	+0.000000	0.99373118	4
-matched-q90	fastvid	maximum-compression	Maximum compression	frontier	q90	1	5.307903	6.028746	16.946	60.703	133.346224	52.002293	+0.000000	0.99373118	4
+matched-q90	fastvid	speed	Speed	frontier	q90	1	4.809339	6.653721	93.787	68.387	147.169656	52.001930	-0.000363	0.99373056	4
+matched-q90	fastvid	practical-compression	Practical compression	frontier	q90	1	5.307903	6.028746	16.797	60.331	133.346224	52.002293	+0.000000	0.99373118	4
+matched-q90	fastvid	maximum-compression	Maximum compression	frontier	q90	1	5.307903	6.028746	16.922	60.227	133.346224	52.002293	+0.000000	0.99373118	4
 matched-q90	openapv	external	OpenAPV medium	medium	qp22	1	4.408004	7.259521	17.633	63.468	160.568984	51.534665	-0.467628	0.99291577	14
 matched-q90	openapv	external	OpenAPV fastest	fastest	qp23	1	4.464067	7.168351	81.182	63.471	158.552448	51.735588	-0.266705	0.99329400	16
-matched-q90	fastvid	speed	Speed	frontier	q90	4	4.809339	6.653721	196.718	156.946	147.169656	52.001930	-0.000363	0.99373056	4
-matched-q90	fastvid	practical-compression	Practical compression	frontier	q90	4	5.307903	6.028746	60.450	164.832	133.346224	52.002293	+0.000000	0.99373118	4
-matched-q90	fastvid	maximum-compression	Maximum compression	frontier	q90	4	5.307903	6.028746	59.477	164.788	133.346224	52.002293	+0.000000	0.99373118	4
+matched-q90	fastvid	speed	Speed	frontier	q90	4	4.809339	6.653721	220.073	160.341	147.169656	52.001930	-0.000363	0.99373056	4
+matched-q90	fastvid	practical-compression	Practical compression	frontier	q90	4	5.307903	6.028746	60.151	169.528	133.346224	52.002293	+0.000000	0.99373118	4
+matched-q90	fastvid	maximum-compression	Maximum compression	frontier	q90	4	5.307903	6.028746	60.008	166.915	133.346224	52.002293	+0.000000	0.99373118	4
 matched-q90	openapv	external	OpenAPV medium	medium	qp22	4	4.408004	7.259521	62.932	147.483	160.568984	51.534665	-0.467628	0.99291577	14
 matched-q90	openapv	external	OpenAPV fastest	fastest	qp23	4	4.464067	7.168351	218.557	134.888	158.552448	51.735588	-0.266705	0.99329400	16
-high-fidelity-boundary	fastvid	speed	Speed	frontier	q100	1	2.743688	11.663135	66.036	61.882	257.969880	inf	inf	1.00000000	0
-high-fidelity-boundary	fastvid	practical-compression	Practical compression	frontier	q100	1	2.949766	10.848316	18.285	56.959	239.947400	inf	inf	1.00000000	0
-high-fidelity-boundary	fastvid	maximum-compression	Maximum compression	frontier	q100	1	2.949766	10.848316	18.375	57.222	239.947400	inf	inf	1.00000000	0
+high-fidelity-boundary	fastvid	speed	Speed	frontier	q100	1	2.743688	11.663135	63.843	62.020	257.969880	inf	inf	1.00000000	0
+high-fidelity-boundary	fastvid	practical-compression	Practical compression	frontier	q100	1	2.949766	10.848316	18.233	57.005	239.947400	inf	inf	1.00000000	0
+high-fidelity-boundary	fastvid	maximum-compression	Maximum compression	frontier	q100	1	2.949766	10.848316	18.271	57.093	239.947400	inf	inf	1.00000000	0
 high-fidelity-boundary	openapv	external	OpenAPV medium	medium	qp0	1	1.966334	16.273938	14.275	36.529	359.953472	74.832624	+22.830331	0.99997549	2
 high-fidelity-boundary	openapv	external	OpenAPV fastest	fastest	qp0	1	1.965097	16.284180	63.200	36.349	360.180000	74.785154	+22.782861	0.99997514	2
-high-fidelity-boundary	fastvid	speed	Speed	frontier	q100	4	2.743688	11.663135	184.660	148.675	257.969880	inf	inf	1.00000000	0
-high-fidelity-boundary	fastvid	practical-compression	Practical compression	frontier	q100	4	2.949766	10.848316	66.227	162.225	239.947400	inf	inf	1.00000000	0
-high-fidelity-boundary	fastvid	maximum-compression	Maximum compression	frontier	q100	4	2.949766	10.848316	65.446	159.113	239.947400	inf	inf	1.00000000	0
+high-fidelity-boundary	fastvid	speed	Speed	frontier	q100	4	2.743688	11.663135	181.061	146.760	257.969880	inf	inf	1.00000000	0
+high-fidelity-boundary	fastvid	practical-compression	Practical compression	frontier	q100	4	2.949766	10.848316	62.833	152.528	239.947400	inf	inf	1.00000000	0
+high-fidelity-boundary	fastvid	maximum-compression	Maximum compression	frontier	q100	4	2.949766	10.848316	65.350	160.897	239.947400	inf	inf	1.00000000	0
 high-fidelity-boundary	openapv	external	OpenAPV medium	medium	qp0	4	1.966334	16.273938	51.921	79.441	359.953472	74.832624	+22.830331	0.99997549	2
 high-fidelity-boundary	openapv	external	OpenAPV fastest	fastest	qp0	4	1.965097	16.284180	184.333	76.669	360.180000	74.785154	+22.782861	0.99997514	2

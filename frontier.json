@@ -43,10 +43,10 @@
       "label": "Speed",
       "role": "throughput",
       "state": "preserved",
-      "source": "91a755e",
-      "binary": "artifacts/frontier/fastvid-speed-exp0095-block-rice4",
-      "binary_sha256": "637ee0535510f38dd9dc99f02fc5acbd75f7d927f5b2a3517d2b8f4b167c1407",
-      "evidence": "experiments/EXP-0096-rice4-speed-promotion.md"
+      "source": "7525dc2",
+      "binary": "artifacts/frontier/fastvid-speed-exp0099-tile-pairs",
+      "binary_sha256": "41f5719eb0630cc8dd78067806dfe4775b30d9e3b9b59e0701775d40c91e71af",
+      "evidence": "experiments/EXP-0101-tile-pair-speed-promotion.md"
     }
   ]
 }

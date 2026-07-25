@@ -63,17 +63,19 @@ Fastvid q90, not by assuming nominal controls are equivalent.
 
 | Codec | Control | Ratio | Encode | Decode | Y PSNR |
 |---|---:|---:|---:|---:|---:|
-| Fastvid speed | q90 | 4.809x | 76.26 MP/s | 69.12 MP/s | 52.002 dB |
-| Fastvid practical | q90 | 5.308x | 16.89 MP/s | 60.27 MP/s | 52.002 dB |
-| Fastvid maximum | q90 | 5.308x | 16.95 MP/s | 60.70 MP/s | 52.002 dB |
+| Fastvid speed | q90 | 4.809x | 93.79 MP/s | 68.39 MP/s | 52.002 dB |
+| Fastvid practical | q90 | 5.308x | 16.80 MP/s | 60.33 MP/s | 52.002 dB |
+| Fastvid maximum | q90 | 5.308x | 16.92 MP/s | 60.23 MP/s | 52.002 dB |
 | OpenAPV medium | QP 22 | 4.408x | 17.63 MP/s | 63.47 MP/s | 51.535 dB |
 | OpenAPV fastest | QP 23 | 4.464x | 81.18 MP/s | 63.47 MP/s | 51.736 dB |
 
 The Fastvid speed branch is a distinct high-bit point with sampled fixed-block
-coding and specialized four-symbol Rice emission. At q90 it uses 7.18% less
-bitrate and measures 0.266 dB higher Y-PSNR than OpenAPV `fastest`; Fastvid is
-6.07% slower to encode and 8.89% faster to decode. At the high-fidelity
-boundary, Fastvid speed q100 is exact at 2.744x and 66.04 MP/s encode;
+coding, specialized four-symbol Rice emission, and interleaved independent
+Rice tile chains. At q90 it uses 7.18% less bitrate and measures 0.266 dB
+higher Y-PSNR than OpenAPV `fastest`; Fastvid is 15.53% faster to encode and
+7.75% faster to decode. At four threads Fastvid is 0.69% faster to encode and
+18.87% faster to decode. At the high-fidelity boundary, Fastvid speed q100 is
+exact at 2.744x and 63.84 MP/s encode;
 OpenAPV `fastest` QP0 has maximum error 2 at 1.965x and 63.20 MP/s. These are
 distinct quality boundaries, not a nominal-control match.
 The [matched graph](benchmarks/openapv-frontier.svg) and
