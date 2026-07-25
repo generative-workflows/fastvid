@@ -64,21 +64,24 @@ Fastvid q90, not by assuming nominal controls are equivalent.
 
 | Codec | Control | Ratio | Encode | Decode | Y PSNR |
 |---|---:|---:|---:|---:|---:|
-| Fastvid speed | q90 | 5.308x | 16.52 MP/s | 58.80 MP/s | 52.002 dB |
-| Fastvid practical | q90 | 5.308x | 16.55 MP/s | 59.47 MP/s | 52.002 dB |
-| Fastvid maximum | q90 | 5.308x | 16.86 MP/s | 60.05 MP/s | 52.002 dB |
-| OpenAPV medium | QP 22 | 4.408x | 17.42 MP/s | 62.48 MP/s | 51.535 dB |
-| OpenAPV fastest | QP 23 | 4.464x | 80.72 MP/s | 62.48 MP/s | 51.736 dB |
+| Fastvid speed | q90 | 4.685x | 67.30 MP/s | 64.51 MP/s | 52.002 dB |
+| Fastvid practical | q90 | 5.308x | 16.64 MP/s | 59.52 MP/s | 52.002 dB |
+| Fastvid maximum | q90 | 5.308x | 16.80 MP/s | 59.62 MP/s | 52.002 dB |
+| OpenAPV medium | QP 22 | 4.408x | 17.67 MP/s | 62.66 MP/s | 51.535 dB |
+| OpenAPV fastest | QP 23 | 4.464x | 80.43 MP/s | 61.96 MP/s | 51.736 dB |
 
-All three preserved Fastvid versions converge to the same high-bit stream on
-this diagnostic: their current frontier differences are in the 8-bit path.
-Fastvid produces 15.9--17.0% lower bitrate at slightly higher measured
-quality, while OpenAPV `fastest` exposes a 4.88x one-thread encode-speed gap.
+The unified Fastvid speed branch now establishes a distinct high-bit point.
+At q90 it uses 4.72% less bitrate and measures 0.266 dB higher Y-PSNR than
+OpenAPV `fastest`; OpenAPV encodes 19.51% faster, while Fastvid decodes 4.12%
+faster. At the high-fidelity boundary, Fastvid speed q100 is exact at 2.744x
+and 64.08 MP/s encode; OpenAPV `fastest` QP0 has maximum error 2 at 1.965x
+and 62.48 MP/s. These are distinct quality boundaries, not a nominal-control
+match.
 The [matched graph](benchmarks/openapv-frontier.svg) and
 [exact one/four-thread rows](benchmarks/openapv-frontier-summary.tsv) are a
 procedural diagnostic, not a broad natural-HDR claim.
 
-### Native high-bit smoke snapshot
+### Maximum-compression native high-bit smoke snapshot
 
 Four to six balanced trials, one thread, using the checksummed native
 high-bit supplement. Stills use GOP 1 and motion uses GOP 12.

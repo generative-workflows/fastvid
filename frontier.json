@@ -12,7 +12,7 @@
     "protocol": "matched native-10-bit all-intra diagnostic",
     "graph": "benchmarks/openapv-frontier.svg",
     "summary": "benchmarks/openapv-frontier-summary.tsv",
-    "evidence": "experiments/EXP-0073-matched-openapv-frontier.md",
+    "evidence": "experiments/EXP-0078-unified-speed-frontier.md",
     "scope": "one checksummed 1280x720 24-frame procedural sequence; not part of internal slot dominance"
   },
   "slots": [
@@ -41,10 +41,10 @@
       "label": "Speed",
       "role": "throughput",
       "state": "preserved",
-      "source": "4ad0318 + artifacts/frontier/exp0060-speed.patch",
-      "binary": "artifacts/frontier/fastvid-speed-exp0060",
-      "binary_sha256": "f8e6bb69d7cf52b4531210e7423ec75a5626549ac1bacc964c1e123ca2bde8f7",
-      "evidence": "experiments/EXP-0060-fixed-gradient-speed-tier.md"
+      "source": "5cb2508 + artifacts/frontier/exp0078-unified-speed.patch",
+      "binary": "artifacts/frontier/fastvid-speed-exp0078",
+      "binary_sha256": "bf1002e7e790bb5607180ff2874edd57957536c83cce620982f0a6999614ccb3",
+      "evidence": "experiments/EXP-0078-unified-speed-frontier.md"
     }
   ]
 }

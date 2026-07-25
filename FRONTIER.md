@@ -12,14 +12,16 @@ machine-readable companion is [`frontier.json`](frontier.json).
 |---|---|---|---|---|---|
 | Practical compression | `4ad0318` | `1235c7e82cf34fdddf5c341a5c17d265687368092174d175db709f22b17131c9` | v2 encode; v0/v1/v2 decode | [EXP-0052](experiments/EXP-0052-16bit-temporal-decode-guard.md) | Preserved |
 | Maximum compression | `36b1d20` | `d4d7edaf68a67601f753652757d62bcc49ff237e9ef0954ad0174ddc45322a14` | 8-bit v3 / high-bit v2 encode; legacy decode | [EXP-0068](experiments/EXP-0068-four-state-rans.md) | Preserved |
-| Speed | `4ad0318` + `exp0060-speed.patch` | `f8e6bb69d7cf52b4531210e7423ec75a5626549ac1bacc964c1e123ca2bde8f7` | v2 encode; v0/v1/v2 decode | [EXP-0060](experiments/EXP-0060-fixed-gradient-speed-tier.md) | Preserved |
+| Speed | `5cb2508` + `exp0078-unified-speed.patch` | `bf1002e7e790bb5607180ff2874edd57957536c83cce620982f0a6999614ccb3` | 8-bit v3 / high-bit v2 encode; legacy decode | [EXP-0078](experiments/EXP-0078-unified-speed-frontier.md) | Preserved |
 
 The speed source is reproduced by applying
-`artifacts/frontier/exp0060-speed.patch` to Git commit `4ad0318`; the other
-two active base sources are retained directly in Git. The speed tier uses fixed
-clamp-gradient intra prediction and frame-gated temporal prediction, trading
-some spatial compression for materially higher encode, decode, and
-single-frame-access throughput.
+`artifacts/frontier/exp0078-unified-speed.patch` to Git commit `5cb2508`; the
+other two active base sources are retained directly in Git. The speed tier
+uses fixed clamp-gradient intra prediction and frame-gated temporal
+prediction at every bit depth. Its high-bit path samples one source row to
+stream Rice tiles directly and retains exact buffered fallback for sparse
+zero-run tiles. It trades some spatial compression for materially higher
+encode, decode, and single-frame-access throughput.
 
 The maximum-compression tier retains scalar order-0 rANS on small payloads
 and uses four interleaved states only when their 12-byte cost is at most 0.5%
@@ -56,29 +58,28 @@ The one-thread q90-neighborhood rows are:
 
 | Codec | Control | Ratio | Encode MP/s | Decode MP/s | Y PSNR |
 |---|---:|---:|---:|---:|---:|
-| Fastvid speed | q90 | 5.307903x | 16.524 | 58.804 | 52.002293 |
-| Fastvid practical | q90 | 5.307903x | 16.552 | 59.467 | 52.002293 |
-| Fastvid maximum | q90 | 5.307903x | 16.864 | 60.045 | 52.002293 |
-| OpenAPV medium | QP 22 | 4.408004x | 17.416 | 62.481 | 51.534665 |
-| OpenAPV fastest | QP 23 | 4.464067x | 80.724 | 62.481 | 51.735588 |
+| Fastvid speed | q90 | 4.685392x | 67.301 | 64.511 | 52.001930 |
+| Fastvid practical | q90 | 5.307903x | 16.642 | 59.517 | 52.002293 |
+| Fastvid maximum | q90 | 5.307903x | 16.802 | 59.620 | 52.002293 |
+| OpenAPV medium | QP 22 | 4.408004x | 17.666 | 62.658 | 51.534665 |
+| OpenAPV fastest | QP 23 | 4.464067x | 80.431 | 61.956 | 51.735588 |
 
 OpenAPV controls are the measured rows nearest practical Fastvid q90 Y-PSNR:
-the remaining quality gaps are -0.468 dB and -0.267 dB. Fastvid's bitrate is
-16.95% below `medium` and 15.90% below `fastest`, but `fastest` encodes 4.88x
-as quickly at one thread. At four threads it encodes 4.00x as quickly, while
-Fastvid decodes 12.96--16.66% faster.
+the remaining gaps are -0.468 dB and -0.267 dB. The Fastvid speed point is a
+separate rate/speed tradeoff: versus `fastest`, it uses 4.72% less bitrate at
+0.266 dB higher Y-PSNR, encodes 16.32% more slowly (OpenAPV is 19.51%
+faster), and decodes 4.12% faster. At four threads OpenAPV encodes 16.42%
+faster and Fastvid decodes 4.68% faster.
 
-All three Fastvid binaries produce identical high-bit bytes and quality here.
-Their active technology split is currently confined to 8-bit coding, so a
-future high-bit speed/compression branch must establish a distinct point
-rather than inheriting an 8-bit role label.
-
-At the high-fidelity boundary, Fastvid q100 is exact at 2.949766x. OpenAPV
-QP0 is not exact (`max_error=2`) and measures about 1.966x, so it is reported
-separately rather than called a q100 match. Complete one/four-thread rows are
+At the high-fidelity boundary, Fastvid speed q100 is exact at 2.743688x,
+64.077 MP/s encode, and 257.969880 Mb/s. OpenAPV `fastest` QP0 is not exact
+(`max_error=2`) at 1.965097x, 62.481 MP/s, and 360.180000 Mb/s. Fastvid is
+2.55% faster to encode and uses 28.38% less bitrate at this distinct,
+higher-fidelity boundary; it is not called a nominal q100 match. Complete
+one/four-thread rows are
 in [`benchmarks/openapv-frontier-summary.tsv`](benchmarks/openapv-frontier-summary.tsv);
 provenance and controls are in
-[EXP-0073](experiments/EXP-0073-matched-openapv-frontier.md).
+[EXP-0078](experiments/EXP-0078-unified-speed-frontier.md).
 
 ## Active technology tree
 
@@ -123,12 +124,14 @@ versions are active so confirmation cost remains bounded.
   (`1235c7e82cf34fdddf5c341a5c17d265687368092174d175db709f22b17131c9`);
 - `artifacts/frontier/fastvid-rans4-exp0068`
   (`d4d7edaf68a67601f753652757d62bcc49ff237e9ef0954ad0174ddc45322a14`);
-- `artifacts/frontier/fastvid-speed-exp0060`
-  (`f8e6bb69d7cf52b4531210e7423ec75a5626549ac1bacc964c1e123ca2bde8f7`),
-  reproduced by `artifacts/frontier/exp0060-speed.patch`.
+- `artifacts/frontier/fastvid-speed-exp0078`
+  (`bf1002e7e790bb5607180ff2874edd57957536c83cce620982f0a6999614ccb3`),
+  reproduced by `artifacts/frontier/exp0078-unified-speed.patch`.
 
 Historical reference:
 
+- `artifacts/frontier/fastvid-speed-exp0060`
+  (`f8e6bb69d7cf52b4531210e7423ec75a5626549ac1bacc964c1e123ca2bde8f7`);
 - `artifacts/frontier/fastvid-rans-exp0055`
   (`dda826459cfa9cb017b751749d2b780419b18cc1a2ff9ff309492ea8b4df61da`);
 - `artifacts/frontier/fastvid-balanced-exp0045`
