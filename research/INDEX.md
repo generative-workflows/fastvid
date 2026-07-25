@@ -41,3 +41,4 @@ before entering the format.
 | [0034](0034-block-bitpacking-kernels.md) | FastPFOR/SIMD-BP128, Revec, SFVInt | Charged 128-symbol bit packing, specialized widths, and SIMD/BMI dispatch limits | Reviewed |
 | [0035](0035-runtime-invariant-integer-division.md) | Optimal reciprocal bounds, libdivide, `strength_reduce` | Exact runtime-invariant quantization without dependent table loads | Reviewed |
 | [0036](0036-independent-chain-software-pipelining.md) | AMD/Intel optimization manuals, LLVM pipeliner, Cimple | Interleave independent causal tile chains for scalar ILP | Reviewed |
+| [0037](0037-parallel-hardware-friendly-codecs.md) | HTJ2K, JPEG XL/XS, GDeflate, CUDA scan | Independent work units, bounded serial span, entropy lanes, and two-pass output | Reviewed |

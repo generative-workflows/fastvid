@@ -1,6 +1,6 @@
 # Fastvid evaluation methodology
 
-Version: 11 (2026-07-25)
+Version: 12 (2026-07-25)
 
 This document defines the standard target used to evaluate Fastvid changes.
 Experiments may add diagnostics or deliberately diverge, but an optimization
@@ -10,7 +10,9 @@ The design is grounded in [research 0004](research/0004-codec-evaluation.md),
 modern metric review in
 [research 0018](research/0018-modern-perceptual-metrics.md), and the
 finite-block entropy accounting in
-[research 0024](research/0024-finite-block-ans-entropy-models.md).
+[research 0024](research/0024-finite-block-ans-entropy-models.md), and the
+parallel-hardware architecture review in
+[research 0037](research/0037-parallel-hardware-friendly-codecs.md).
 
 ## Goals and tracks
 
@@ -234,6 +236,65 @@ For planar 10/12/16-bit YUV 4:2:2 stored in `u16`, an even-width frame contains
 4 raw bytes per luma pixel, so 1 MP/s equals 4 decimal MB/s. This storage
 throughput is intentionally the same for all three depths; compressed bitrate
 and bits per luma pixel expose their coding differences.
+
+## Parallel-hardware readiness
+
+CPU throughput does not establish GPU suitability. Every format-changing
+experiment must include a static dependency/layout audit, even while the
+implementation remains CPU-only. Report per frame, plane, predictor mode, and
+entropy mode:
+
+- independently schedulable access tiles and execution shards;
+- total samples and shards per luma megapixel;
+- maximum samples in one shard;
+- maximum serial predictor span and entropy-state span in symbols;
+- normative entropy lanes per shard and whether their starts are directly
+  indexed;
+- p50, p95, and maximum samples and encoded bytes per shard;
+- all restart/lane metadata and padding in bytes, bits per luma pixel, and
+  percent of the complete stream;
+- peak scratch bytes and total memory amplification relative to raw input;
+- output assembly stages and any globally serialized payload bytes.
+
+“Parallel” means normative independent decoder state, not merely an encoder
+that computes code lengths concurrently. A variable-length payload with one
+undelimited state has the full payload's symbol count as its entropy serial
+span. A causal predictor reports its dependency-DAG span separately from the
+current implementation's traversal span. Temporal reference depth remains an
+access metric and is not hidden inside the intra-frame count.
+
+The first exploration target is at least 1,000 execution shards for a
+1920x1080 YUV 4:2:2 frame and no more than 4,096 serial symbols in any entropy
+state. These are architecture targets, not grounds for silently shrinking
+the default access tile or accepting a rate regression. A different target
+must be justified against a named GPU's SM count, occupancy, and measured
+kernel behavior. Default shard geometry is a fitted constant under the
+holdout policy unless the candidate is byte-identical or selected
+content-adaptively with all control costs charged.
+
+Canonical variable-size output should use private size production, an
+exclusive scan of sizes, and disjoint final writes. A mutex-protected append,
+per-shard heap allocation, or repeated collection must be reported as an
+implementation limitation rather than attributed to the format. Access tiles
+may contain multiple execution shards so random-access geometry and hardware
+granularity can evolve independently.
+
+Once a CUDA implementation exists, preserve the static audit and additionally
+record:
+
+- exact GPU model, compute capability, SM count, clocks/power policy, driver,
+  CUDA toolkit, compiler flags, and kernel/binary commit;
+- kernel-only and end-to-end encode/decode time, with host/device transfers
+  and launch overhead reported separately;
+- luma MP/s, raw GB/s, compressed GB/s, and playback bitrate;
+- achieved occupancy, active warps, branch/warp divergence, global-memory
+  load/store efficiency, and effective memory bandwidth;
+- per-kernel launches, scratch/peak device memory, and CPU orchestration time;
+- exact decoded equality against the scalar normative implementation at
+  quality 100 and identical bounded-error/quality metrics otherwise.
+
+CPU and GPU frontier points remain separate panels. GPU kernel-only throughput
+must never be presented as end-to-end codec throughput.
 
 ## Feedback tiers
 

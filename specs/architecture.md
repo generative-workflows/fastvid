@@ -13,6 +13,50 @@ Decoding reverses the flow. Each tile owns its predictor state and payload;
 workers never depend on adjacent tiles. The final plane assembly is a
 non-overlapping copy.
 
+## Parallel-hardware mapping
+
+The current format's access tile is also its smallest independently indexed
+execution unit. At default 256x128 luma geometry this yields 90 tiles at
+1280x720, 216 at 1920x1080, and 765 at 3840x2160 for planar YUV 4:2:2. A full
+luma tile nevertheless contains 32,768 samples:
+
+- spatial clamp-gradient reconstruction is causal through reconstructed left,
+  above, and upper-left samples;
+- a Rice payload has one variable-length decoder state spanning the tile;
+- zero-run payloads are also sequential within their runs;
+- fixed block pack bounds entropy decisions to 128 residuals, but the
+  predictor remains tile-causal;
+- temporal residual formation is sample-independent, although the selected
+  entropy payload may still serialize it.
+
+Thus tile count alone is not the parallelism contract. The evaluation
+methodology separately records access units, execution shards, predictor
+dependency span, and entropy-state span.
+
+A future parallel-oriented format version should retain access tiles while
+adding independently located execution shards or normative entropy lanes
+inside them:
+
+```text
+classify/count each shard in parallel
+              ↓
+exclusive scan of canonical shard sizes
+              ↓
+write disjoint payload ranges in parallel
+              ↓
+write canonical tile/shard directory
+```
+
+No worker appends through a shared output mutex. Source, reconstruction, and
+per-mode metadata remain planar/contiguous; implementations may compact shard
+indices into homogeneous predictor/entropy queues to avoid SIMD/warp
+divergence. The scalar Rust mapping remains normative and must agree exactly
+with future CPU SIMD and CUDA kernels.
+
+Research and quantitative gates are in
+[`research/0037-parallel-hardware-friendly-codecs.md`](../research/0037-parallel-hardware-friendly-codecs.md)
+and [`EVALUATION_METHODOLOGY.md`](../EVALUATION_METHODOLOGY.md).
+
 ## Core invariants
 
 - Rust forbids unsafe code at the crate level.
