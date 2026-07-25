@@ -1064,6 +1064,26 @@ fn put_fixed_block(output: &mut Vec<u8>, folded: &[u32]) {
     let maximum = folded.iter().copied().max().unwrap_or(0);
     let width = (u32::BITS - maximum.leading_zeros()) as u8;
     output.push(width);
+    if width <= 8 {
+        let mut chunks = folded.chunks_exact(8);
+        for chunk in &mut chunks {
+            let mut packed = 0u64;
+            for (index, &value) in chunk.iter().enumerate() {
+                packed |= u64::from(value) << (index * usize::from(width));
+            }
+            output.extend_from_slice(&packed.to_le_bytes()[..usize::from(width)]);
+        }
+        let remainder = chunks.remainder();
+        if remainder.is_empty() {
+            return;
+        }
+        let mut writer = BitWriter::new(output);
+        for &value in remainder {
+            writer.put_bits(value, width);
+        }
+        writer.finish();
+        return;
+    }
     let mut writer = BitWriter::new(output);
     for &value in folded {
         writer.put_bits(value, width);
@@ -1764,6 +1784,59 @@ fn decode_block_pack(
             .checked_add(bytes)
             .filter(|&end| end <= payload.len())
             .ok_or(CodecError::Malformed("truncated block-pack payload"))?;
+        if block_width <= 8 {
+            let group_count = count / 8;
+            let group_bytes = usize::from(block_width);
+            for group in 0..group_count {
+                let start = cursor + group * group_bytes;
+                let mut packed_bytes = [0u8; 8];
+                packed_bytes[..group_bytes].copy_from_slice(&payload[start..start + group_bytes]);
+                let mut packed = u64::from_le_bytes(packed_bytes);
+                let mask = if block_width == 0 {
+                    0
+                } else {
+                    (1u64 << block_width) - 1
+                };
+                for _ in 0..8 {
+                    let folded = (packed & mask) as u32;
+                    reconstruct(
+                        &mut output,
+                        index,
+                        width,
+                        unzigzag(folded),
+                        step,
+                        context,
+                        max_sample,
+                    )?;
+                    index += 1;
+                    packed >>= block_width;
+                }
+            }
+            let remainder = count % 8;
+            if remainder != 0 {
+                let remainder_start = cursor + group_count * group_bytes;
+                let mut reader = BitReader::new(&payload[remainder_start..end]);
+                for _ in 0..remainder {
+                    let folded = reader.get_bits(block_width)?;
+                    if folded > max_folded {
+                        return Err(CodecError::Malformed("residual is out of range"));
+                    }
+                    reconstruct(
+                        &mut output,
+                        index,
+                        width,
+                        unzigzag(folded),
+                        step,
+                        context,
+                        max_sample,
+                    )?;
+                    index += 1;
+                }
+                reader.finish()?;
+            }
+            cursor = end;
+            continue;
+        }
         let mut reader = BitReader::new(&payload[cursor..end]);
         for _ in 0..count {
             let folded = reader.get_bits(block_width)?;
@@ -2902,6 +2975,35 @@ mod tests {
                 )
                 .is_err()
             );
+        }
+    }
+
+    #[test]
+    fn word_fixed_blocks_match_scalar_writer_for_every_width_and_length() {
+        for width in 0..=17 {
+            let mask = if width == 0 { 0 } else { (1u32 << width) - 1 };
+            for length in 0..=BLOCK_PACK_SYMBOLS {
+                let mut folded: Vec<u32> = (0..length)
+                    .map(|index| (index as u32).wrapping_mul(0x9e37_79b9) & mask)
+                    .collect();
+                if let Some(first) = folded.first_mut() {
+                    *first = mask;
+                }
+                let mut optimized = Vec::new();
+                put_fixed_block(&mut optimized, &folded);
+                let actual_width = folded
+                    .iter()
+                    .copied()
+                    .max()
+                    .map_or(0, |maximum| (u32::BITS - maximum.leading_zeros()) as u8);
+                let mut reference = vec![actual_width];
+                let mut writer = BitWriter::new(&mut reference);
+                for &value in &folded {
+                    writer.put_bits(value, actual_width);
+                }
+                writer.finish();
+                assert_eq!(optimized, reference, "width {width}, length {length}");
+            }
         }
     }
 

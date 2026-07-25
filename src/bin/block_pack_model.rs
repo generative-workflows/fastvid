@@ -23,6 +23,7 @@ struct Model {
     selected_tiles: [usize; SELECTOR_MARGINS.len()],
     false_positive_tiles: [usize; SELECTOR_MARGINS.len()],
     false_negative_tiles: [usize; SELECTOR_MARGINS.len()],
+    packed_blocks_by_width: [usize; 18],
     squared_error: u64,
     max_error: u32,
 }
@@ -131,12 +132,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let packed_stream = overhead + model.packed_payload;
     let hybrid_stream = overhead + model.hybrid_payload;
     println!(
-        "sample\tframes\tbit_depth\tquality\ttiles\tpacked_tiles\tpacked_y_tiles\tpacked_cb_tiles\tpacked_cr_tiles\tsavings_y_bytes\tsavings_cb_bytes\tsavings_cr_bytes\tcurrent_payload_bytes\tpacked_payload_bytes\thybrid_payload_bytes\toverhead_bytes\tcurrent_stream_bytes\tpacked_stream_bytes\thybrid_stream_bytes\tpacked_delta\thybrid_delta\tsquared_error\tmax_error\tselector_margin\tselected_tiles\tfalse_positive_tiles\tfalse_negative_tiles\tselected_stream_bytes\tselected_delta"
+        "sample\tframes\tbit_depth\tquality\ttiles\tpacked_tiles\tpacked_y_tiles\tpacked_cb_tiles\tpacked_cr_tiles\tsavings_y_bytes\tsavings_cb_bytes\tsavings_cr_bytes\tcurrent_payload_bytes\tpacked_payload_bytes\thybrid_payload_bytes\toverhead_bytes\tcurrent_stream_bytes\tpacked_stream_bytes\thybrid_stream_bytes\tpacked_delta\thybrid_delta\tsquared_error\tmax_error\tpacked_width_histogram\tselector_margin\tselected_tiles\tfalse_positive_tiles\tfalse_negative_tiles\tselected_stream_bytes\tselected_delta"
     );
+    let width_histogram = model
+        .packed_blocks_by_width
+        .iter()
+        .enumerate()
+        .filter(|(_, count)| **count != 0)
+        .map(|(width, count)| format!("{width}:{count}"))
+        .collect::<Vec<_>>()
+        .join(",");
     for (index, margin) in SELECTOR_MARGINS.into_iter().enumerate() {
         let selected_stream = overhead + model.selected_payload[index];
         println!(
-            "{sample}\t{frames}\t{bit_depth}\t{quality}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{overhead}\t{current_stream}\t{packed_stream}\t{hybrid_stream}\t{:.8}\t{:.8}\t{}\t{}\t{margin}\t{}\t{}\t{}\t{selected_stream}\t{:.8}",
+            "{sample}\t{frames}\t{bit_depth}\t{quality}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{overhead}\t{current_stream}\t{packed_stream}\t{hybrid_stream}\t{:.8}\t{:.8}\t{}\t{}\t{width_histogram}\t{margin}\t{}\t{}\t{}\t{selected_stream}\t{:.8}",
             model.tiles,
             model.packed_tiles,
             model.packed_tiles_by_plane[0],
@@ -226,6 +235,14 @@ fn model_tile(
     let sampled_packed = block_pack_bytes(&sampled_folded);
     let selected = SELECTOR_MARGINS.map(|margin| sampled_packed * 100 < sampled_current * margin);
     let actually_better = packed_payload < current_payload;
+    let mut packed_blocks_by_width = [0usize; 18];
+    if actually_better {
+        for block in folded.chunks(BLOCK_SYMBOLS) {
+            let maximum = block.iter().copied().max().unwrap_or(0);
+            let width = (u32::BITS - maximum.leading_zeros()) as usize;
+            packed_blocks_by_width[width] += 1;
+        }
+    }
     Model {
         current_payload,
         packed_payload,
@@ -252,6 +269,7 @@ fn model_tile(
         selected_tiles: selected.map(usize::from),
         false_positive_tiles: selected.map(|choice| usize::from(choice && !actually_better)),
         false_negative_tiles: selected.map(|choice| usize::from(!choice && actually_better)),
+        packed_blocks_by_width,
         squared_error,
         max_error,
     }
@@ -339,6 +357,9 @@ fn add(left: Model, right: Model) -> Model {
         }),
         false_negative_tiles: std::array::from_fn(|index| {
             left.false_negative_tiles[index] + right.false_negative_tiles[index]
+        }),
+        packed_blocks_by_width: std::array::from_fn(|width| {
+            left.packed_blocks_by_width[width] + right.packed_blocks_by_width[width]
         }),
         squared_error: left.squared_error + right.squared_error,
         max_error: left.max_error.max(right.max_error),
