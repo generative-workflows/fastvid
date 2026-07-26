@@ -43,8 +43,10 @@ the version-2 speed path, and the exact convex Rice bound raises it further to
 about 0.407x. Evaluating adjacent Rice parameters in one residual pass raises
 it again to about 0.474x. Exact selector lengths then permit one Rice-body
 allocation and four direct disjoint lane writes, reaching about 0.527x while
-retaining identical format decisions. It remains non-promoted until encoder
-engineering closes that gap.
+retaining identical format decisions. Charging zero-run bytes inside the
+existing parameter-zero traversal avoids most losing zero-run construction
+and reaches about 0.581x. It remains non-promoted until encoder engineering
+closes that gap.
 
 The former balanced snapshot (`156054c`, binary `06ef3278…6ab8`) remains a
 reproducible historical reference under EXP-0045. EXP-0061 retired it from

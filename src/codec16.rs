@@ -351,20 +351,21 @@ fn encode_parallel_shard(folded: &[u32], output: &mut Vec<u8>) {
 
 #[cfg_attr(feature = "profile-stages", inline(never))]
 fn encode_parallel_shard_with_block_pack(folded: &[u32], output: &mut Vec<u8>) {
-    let zero_run = encode_zero_run_folded(folded);
-    let (rice_parameter, rice_body) = encode_parallel_rice(folded);
+    let rice_selection = best_parallel_rice_parameter(folded);
+    let rice_body = encode_parallel_rice_selected(folded, rice_selection);
     let mut block_pack = Vec::with_capacity(modeled_block_pack_cost(folded));
     for block in folded.chunks(BLOCK_PACK_SYMBOLS) {
         put_fixed_block(&mut block_pack, block);
     }
-    let (mode, body) = [
-        (ENTROPY_ZERO_RUN, zero_run),
-        (ENTROPY_RICE_BASE + rice_parameter, rice_body),
-        (ENTROPY_BLOCK_PACK, block_pack),
-    ]
-    .into_iter()
-    .min_by_key(|(_, body)| body.len())
-    .expect("entropy shards are nonempty");
+    let (mode, body) = if rice_selection.zero_run_bytes <= rice_body.len()
+        && rice_selection.zero_run_bytes <= block_pack.len()
+    {
+        (ENTROPY_ZERO_RUN, encode_zero_run_folded(folded))
+    } else if rice_body.len() <= block_pack.len() {
+        (ENTROPY_RICE_BASE + rice_selection.parameter, rice_body)
+    } else {
+        (ENTROPY_BLOCK_PACK, block_pack)
+    };
     output.push(mode);
     put_u16(
         output,
@@ -391,8 +392,13 @@ fn encode_zero_run_folded(folded: &[u32]) -> Vec<u8> {
 
 #[cfg_attr(feature = "profile-stages", inline(never))]
 fn encode_parallel_rice(folded: &[u32]) -> (u8, Vec<u8>) {
-    let lane_count = PARALLEL_RICE_LANES.min(folded.len());
     let selection = best_parallel_rice_parameter(folded);
+    let body = encode_parallel_rice_selected(folded, selection);
+    (selection.parameter, body)
+}
+
+fn encode_parallel_rice_selected(folded: &[u32], selection: ParallelRiceSelection) -> Vec<u8> {
+    let lane_count = PARALLEL_RICE_LANES.min(folded.len());
     let length_bytes = lane_count.saturating_sub(1) * size_of::<u32>();
     let payload_bytes = selection.lane_bytes[..lane_count].iter().sum::<usize>();
     let mut body = vec![0u8; length_bytes + payload_bytes];
@@ -418,13 +424,14 @@ fn encode_parallel_rice(folded: &[u32]) -> (u8, Vec<u8>) {
         payload_offset += lane_bytes;
     }
     debug_assert_eq!(payload_offset, body.len());
-    (selection.parameter, body)
+    body
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ParallelRiceSelection {
     parameter: u8,
     lane_bytes: [usize; PARALLEL_RICE_LANES],
+    zero_run_bytes: usize,
 }
 
 #[cfg_attr(feature = "profile-stages", inline(never))]
@@ -434,6 +441,8 @@ fn best_parallel_rice_parameter(folded: &[u32]) -> ParallelRiceSelection {
     let mut best_bytes = u64::MAX;
     let mut best_lane_bytes = [0usize; PARALLEL_RICE_LANES];
     let mut previous_total_bits = None;
+    let mut zero_run_bytes = 0usize;
+    let mut zero_run = 0u32;
     let mut parameter = 0;
     while parameter <= MAX_RICE_PARAMETER {
         let next_parameter = parameter + 1;
@@ -450,6 +459,17 @@ fn best_parallel_rice_parameter(folded: &[u32]) -> ParallelRiceSelection {
                 quotient_sums[1] += next_quotient;
                 bits[1][lane] += next_quotient + 1 + u64::from(next_parameter);
             }
+            if parameter == 0 {
+                if value == 0 {
+                    zero_run += 1;
+                } else {
+                    count_zero_run(&mut zero_run_bytes, &mut zero_run);
+                    zero_run_bytes += varint_length(value * 2 - 1);
+                }
+            }
+        }
+        if parameter == 0 {
+            count_zero_run(&mut zero_run_bytes, &mut zero_run);
         }
         if update_best_parallel_rice_parameter(
             parameter,
@@ -480,6 +500,7 @@ fn best_parallel_rice_parameter(folded: &[u32]) -> ParallelRiceSelection {
     ParallelRiceSelection {
         parameter: best_parameter,
         lane_bytes: best_lane_bytes,
+        zero_run_bytes,
     }
 }
 
@@ -4222,6 +4243,32 @@ mod tests {
             assert_eq!(
                 encode_parallel_rice(&folded),
                 encode_parallel_rice_vector_reference(&folded)
+            );
+        }
+    }
+
+    #[test]
+    fn selector_fused_zero_run_cost_matches_emitted_body() {
+        let cases = [
+            vec![],
+            vec![0],
+            vec![1],
+            vec![0, 0, 0, 1, 0, 127, 0, 0],
+            vec![0; 4096],
+            (0..4096)
+                .map(|index| {
+                    if index % 127 < 96 {
+                        0
+                    } else {
+                        ((index * 4093 + 131) % 131_071) as u32
+                    }
+                })
+                .collect(),
+        ];
+        for folded in cases {
+            assert_eq!(
+                best_parallel_rice_parameter(&folded).zero_run_bytes,
+                encode_zero_run_folded(&folded).len()
             );
         }
     }
