@@ -124,10 +124,14 @@ pub fn encode16_parallel_full_tile(
         quantization_step(options.quality, frame.bit_depth()),
         frame.bit_depth(),
     );
-    let payloads = parallel_map(tiles.len(), options.threads, |index| {
-        let tile = tiles[index];
-        encode_parallel_full_tile(&frame.planes[tile.plane], tile, &quantizer)
-    });
+    let payloads = if options.threads == 1 {
+        encode_parallel_full_tile_pairs(frame, &tiles, &quantizer)
+    } else {
+        parallel_map(tiles.len(), options.threads, |index| {
+            let tile = tiles[index];
+            encode_parallel_full_tile(&frame.planes[tile.plane], tile, &quantizer)
+        })
+    };
     serialize_encoded_tiles(frame, options, &tiles, payloads, FULL_TILE_PARALLEL_VERSION)
 }
 
@@ -295,6 +299,11 @@ fn encode_parallel_tile(plane: &Plane16, tile: Tile, quantizer: &Quantizer16) ->
 
 #[cfg_attr(feature = "profile-stages", inline(never))]
 fn encode_parallel_full_tile(plane: &Plane16, tile: Tile, quantizer: &Quantizer16) -> EncodedTile {
+    finish_parallel_full_tile(stage_parallel_full_tile(plane, tile, quantizer))
+}
+
+#[cfg_attr(feature = "profile-stages", inline(never))]
+fn stage_parallel_full_tile(plane: &Plane16, tile: Tile, quantizer: &Quantizer16) -> Vec<u32> {
     let width = tile.width as usize;
     let height = tile.height as usize;
     let plane_width = plane.width as usize;
@@ -322,6 +331,70 @@ fn encode_parallel_full_tile(plane: &Plane16, tile: Tile, quantizer: &Quantizer1
             left = reconstructed;
         }
     }
+    folded
+}
+
+#[cfg_attr(feature = "profile-stages", inline(never))]
+fn stage_parallel_full_tile_pair(
+    plane: &Plane16,
+    first: Tile,
+    second: Tile,
+    quantizer: &Quantizer16,
+) -> (Vec<u32>, Vec<u32>) {
+    debug_assert_eq!(first.plane, second.plane);
+    debug_assert_eq!(first.width, second.width);
+    debug_assert_eq!(first.height, second.height);
+    let width = first.width as usize;
+    let height = first.height as usize;
+    let plane_width = plane.width as usize;
+    let first_origin_x = first.x as usize;
+    let first_origin_y = first.y as usize;
+    let second_origin_x = second.x as usize;
+    let second_origin_y = second.y as usize;
+    let mut first_reconstructed_row = vec![0u16; width];
+    let mut second_reconstructed_row = vec![0u16; width];
+    let mut first_folded = Vec::with_capacity(width * height);
+    let mut second_folded = Vec::with_capacity(width * height);
+    for y in 0..height {
+        let first_row_start = (first_origin_y + y) * plane_width + first_origin_x;
+        let second_row_start = (second_origin_y + y) * plane_width + second_origin_x;
+        let first_source = &plane.data[first_row_start..first_row_start + width];
+        let second_source = &plane.data[second_row_start..second_row_start + width];
+        let mut first_left = 0u16;
+        let mut first_upper_left = 0u16;
+        let mut second_left = 0u16;
+        let mut second_upper_left = 0u16;
+        for x in 0..width {
+            let first_above = first_reconstructed_row[x];
+            let first_prediction = (i32::from(first_left) + i32::from(first_above)
+                - i32::from(first_upper_left))
+            .clamp(0, quantizer.max_sample);
+            let first_quantized = quantizer.quantize(i32::from(first_source[x]) - first_prediction);
+            let first_reconstructed = (first_prediction + first_quantized * quantizer.step)
+                .clamp(0, quantizer.max_sample) as u16;
+            first_folded.push(zigzag(first_quantized));
+            first_reconstructed_row[x] = first_reconstructed;
+            first_upper_left = first_above;
+            first_left = first_reconstructed;
+
+            let second_above = second_reconstructed_row[x];
+            let second_prediction = (i32::from(second_left) + i32::from(second_above)
+                - i32::from(second_upper_left))
+            .clamp(0, quantizer.max_sample);
+            let second_quantized =
+                quantizer.quantize(i32::from(second_source[x]) - second_prediction);
+            let second_reconstructed = (second_prediction + second_quantized * quantizer.step)
+                .clamp(0, quantizer.max_sample) as u16;
+            second_folded.push(zigzag(second_quantized));
+            second_reconstructed_row[x] = second_reconstructed;
+            second_upper_left = second_above;
+            second_left = second_reconstructed;
+        }
+    }
+    (first_folded, second_folded)
+}
+
+fn finish_parallel_full_tile(folded: Vec<u32>) -> EncodedTile {
     let mut payload = Vec::new();
     for shard in folded.chunks(PARALLEL_SHARD_SYMBOLS) {
         encode_parallel_shard_with_block_pack(shard, &mut payload);
@@ -331,6 +404,48 @@ fn encode_parallel_full_tile(plane: &Plane16, tile: Tile, quantizer: &Quantizer1
         prediction_mode: PREDICT_FULL_TILE_CLAMP_GRADIENT,
         payload,
     }
+}
+
+fn encode_parallel_full_tile_pairs(
+    frame: &Frame16,
+    tiles: &[Tile],
+    quantizer: &Quantizer16,
+) -> Vec<EncodedTile> {
+    let mut payloads = Vec::with_capacity(tiles.len());
+    let mut pairs = tiles.chunks_exact(2);
+    for pair in &mut pairs {
+        let first = pair[0];
+        let second = pair[1];
+        if first.plane == second.plane
+            && first.width == second.width
+            && first.height == second.height
+        {
+            let plane = &frame.planes[first.plane];
+            let (first_folded, second_folded) =
+                stage_parallel_full_tile_pair(plane, first, second, quantizer);
+            payloads.push(finish_parallel_full_tile(first_folded));
+            payloads.push(finish_parallel_full_tile(second_folded));
+        } else {
+            payloads.push(encode_parallel_full_tile(
+                &frame.planes[first.plane],
+                first,
+                quantizer,
+            ));
+            payloads.push(encode_parallel_full_tile(
+                &frame.planes[second.plane],
+                second,
+                quantizer,
+            ));
+        }
+    }
+    if let Some(&tile) = pairs.remainder().first() {
+        payloads.push(encode_parallel_full_tile(
+            &frame.planes[tile.plane],
+            tile,
+            quantizer,
+        ));
+    }
+    payloads
 }
 
 fn encode_parallel_shard(folded: &[u32], output: &mut Vec<u8>) {
@@ -3814,6 +3929,47 @@ mod tests {
             decode_block_pack_folded(&encoded[3..], folded.len(), 2047).unwrap(),
             folded
         );
+    }
+
+    #[test]
+    fn interleaved_full_tile_predictors_match_scalar_staging() {
+        let width = 17;
+        let height = 9;
+        let data = (0..width * height)
+            .map(|index| ((index * 977 + index * index * 17 + 131) % 4096) as u16)
+            .collect();
+        let plane = Plane16::new(width, height, 12, data).unwrap();
+        let full = Tile {
+            plane: 0,
+            x: 0,
+            y: 0,
+            width: 8,
+            height,
+        };
+        let edge = Tile { width: 1, ..full };
+        for (first, second) in [
+            (full, Tile { x: 8, ..full }),
+            (edge, Tile { x: 16, ..edge }),
+        ] {
+            for quality in [90, 100] {
+                let quantizer = Quantizer16::new(quantization_step(quality, 12), 12);
+                let first_scalar = stage_parallel_full_tile(&plane, first, &quantizer);
+                let second_scalar = stage_parallel_full_tile(&plane, second, &quantizer);
+                let paired = stage_parallel_full_tile_pair(&plane, first, second, &quantizer);
+                assert_eq!(paired.0, first_scalar);
+                assert_eq!(paired.1, second_scalar);
+                let first_paired = finish_parallel_full_tile(paired.0);
+                let first_scalar = finish_parallel_full_tile(first_scalar);
+                assert_eq!(first_paired.entropy_mode, first_scalar.entropy_mode);
+                assert_eq!(first_paired.prediction_mode, first_scalar.prediction_mode);
+                assert_eq!(first_paired.payload, first_scalar.payload);
+                let second_paired = finish_parallel_full_tile(paired.1);
+                let second_scalar = finish_parallel_full_tile(second_scalar);
+                assert_eq!(second_paired.entropy_mode, second_scalar.entropy_mode);
+                assert_eq!(second_paired.prediction_mode, second_scalar.prediction_mode);
+                assert_eq!(second_paired.payload, second_scalar.payload);
+            }
+        }
     }
 
     #[test]

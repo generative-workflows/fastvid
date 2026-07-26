@@ -44,3 +44,4 @@ before entering the format.
 | [0037](0037-parallel-hardware-friendly-codecs.md) | HTJ2K, JPEG XL/XS, GDeflate, CUDA scan | Independent work units, bounded serial span, entropy lanes, and two-pass output | Reviewed |
 | [0038](0038-lossless-wavefront-scheduling.md) | Recent lossless wavefront codecs, PILC, DietGPU | Exact causal scheduling, raster staging, and parallel entropy handoff | Reviewed |
 | [0039](0039-parallel-rice-bitstream-hardware.md) | 2024 parallel Bayer FPGA codec and OMLS license audit | Fixed-width parallel Rice packing, bounded unary output, and incompatible source boundary | Reviewed |
+| [0040](0040-edge-gpu-predictive-compression.md) | Ferraz et al., parallel CCSDS-123 on Jetson GPUs | Causal-kernel isolation, heterogeneous entropy selection, and serial-output limits | Reviewed |
