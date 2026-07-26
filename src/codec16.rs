@@ -422,34 +422,75 @@ fn best_parallel_rice_parameter(folded: &[u32]) -> u8 {
     let mut best_parameter = 0;
     let mut best_bytes = u64::MAX;
     let mut previous_total_bits = None;
-    for parameter in 0..=MAX_RICE_PARAMETER {
-        let mut bits = [0u64; PARALLEL_RICE_LANES];
-        let mut quotient_sum = 0u64;
+    let mut parameter = 0;
+    while parameter <= MAX_RICE_PARAMETER {
+        let next_parameter = parameter + 1;
+        let has_next = next_parameter <= MAX_RICE_PARAMETER;
+        let mut bits = [[0u64; PARALLEL_RICE_LANES]; 2];
+        let mut quotient_sums = [0u64; 2];
         for (index, &value) in folded.iter().enumerate() {
             let quotient = u64::from(value >> parameter);
-            quotient_sum += quotient;
-            bits[index % lane_count] += quotient + 1 + u64::from(parameter);
+            let lane = index % lane_count;
+            quotient_sums[0] += quotient;
+            bits[0][lane] += quotient + 1 + u64::from(parameter);
+            if has_next {
+                let next_quotient = quotient >> 1;
+                quotient_sums[1] += next_quotient;
+                bits[1][lane] += next_quotient + 1 + u64::from(next_parameter);
+            }
         }
-        let bytes = bits[..lane_count]
-            .iter()
-            .map(|&lane| lane.div_ceil(8))
-            .sum::<u64>();
-        let total_bits = bits[..lane_count].iter().sum::<u64>();
-        if bytes < best_bytes {
-            best_parameter = parameter;
-            best_bytes = bytes;
-        }
-        // B(p) = n(p + 1) + sum(value >> p) is discrete-convex:
-        // B(p + 1) - B(p) increases with p. Once B stops falling,
-        // ceil(B / 8) lower-bounds every later sum of lane byte ceilings.
-        let convex_bound = previous_total_bits
-            .is_some_and(|previous| total_bits >= previous && total_bits.div_ceil(8) >= best_bytes);
-        if quotient_sum == 0 || convex_bound {
+        if update_best_parallel_rice_parameter(
+            parameter,
+            &bits[0][..lane_count],
+            quotient_sums[0],
+            &mut best_parameter,
+            &mut best_bytes,
+            &mut previous_total_bits,
+        ) {
             break;
         }
-        previous_total_bits = Some(total_bits);
+        if has_next
+            && update_best_parallel_rice_parameter(
+                next_parameter,
+                &bits[1][..lane_count],
+                quotient_sums[1],
+                &mut best_parameter,
+                &mut best_bytes,
+                &mut previous_total_bits,
+            )
+        {
+            break;
+        }
+        parameter += 2;
     }
     best_parameter
+}
+
+#[inline(always)]
+fn update_best_parallel_rice_parameter(
+    parameter: u8,
+    lane_bits: &[u64],
+    quotient_sum: u64,
+    best_parameter: &mut u8,
+    best_bytes: &mut u64,
+    previous_total_bits: &mut Option<u64>,
+) -> bool {
+    let bytes = lane_bits.iter().map(|&lane| lane.div_ceil(8)).sum::<u64>();
+    let total_bits = lane_bits.iter().sum::<u64>();
+    if bytes < *best_bytes {
+        *best_parameter = parameter;
+        *best_bytes = bytes;
+    }
+    // B(p) = n(p + 1) + sum(value >> p) is discrete-convex:
+    // B(p + 1) - B(p) increases with p. Once B stops falling,
+    // ceil(B / 8) lower-bounds every later sum of lane byte ceilings.
+    let convex_bound = previous_total_bits
+        .is_some_and(|previous| total_bits >= previous && total_bits.div_ceil(8) >= *best_bytes);
+    if quotient_sum == 0 || convex_bound {
+        return true;
+    }
+    *previous_total_bits = Some(total_bits);
+    false
 }
 
 fn encode_intra_tile_pairs(
