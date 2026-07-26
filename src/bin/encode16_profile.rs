@@ -1,4 +1,4 @@
-use fastvid::{CodecOptions, Frame16, FrameRate, encode16};
+use fastvid::{CodecOptions, Frame16, FrameRate, encode16, encode16_parallel_full_tile};
 use std::env;
 use std::fs;
 use std::hint::black_box;
@@ -16,9 +16,9 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let arguments: Vec<String> = env::args().skip(1).collect();
-    if !(8..=9).contains(&arguments.len()) {
+    if !(8..=10).contains(&arguments.len()) {
         return Err(
-            "usage: encode16_profile INPUT WIDTH HEIGHT FRAMES BIT_DEPTH QUALITY TILE_WIDTH TILE_HEIGHT [REPETITIONS]"
+            "usage: encode16_profile INPUT WIDTH HEIGHT FRAMES BIT_DEPTH QUALITY TILE_WIDTH TILE_HEIGHT [REPETITIONS [VARIANT]]"
                 .into(),
         );
     }
@@ -30,6 +30,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let tile_width: u16 = arguments[6].parse()?;
     let tile_height: u16 = arguments[7].parse()?;
     let repetitions: usize = arguments.get(8).map_or(Ok(1), |value| value.parse())?;
+    let variant = arguments.get(9).map(String::as_str).unwrap_or("baseline");
+    if !matches!(variant, "baseline" | "bounded-full-tile") {
+        return Err("variant must be baseline or bounded-full-tile".into());
+    }
     if repetitions == 0 {
         return Err("repetitions must be nonzero".into());
     }
@@ -65,7 +69,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut encoded_bytes = 0usize;
     for _ in 0..repetitions {
         for frame in &input_frames {
-            let encoded = encode16(black_box(frame), options)?;
+            let encoded = if variant == "bounded-full-tile" {
+                encode16_parallel_full_tile(black_box(frame), options)?
+            } else {
+                encode16(black_box(frame), options)?
+            };
             encoded_bytes += black_box(encoded.len());
         }
     }

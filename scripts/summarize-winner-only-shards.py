@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""Compare EXP-0111 candidate-only rows with fixed EXP-0110 results."""
+
+import csv
+import math
+import statistics
+import sys
+
+
+def load(path: str) -> list[dict[str, str]]:
+    with open(path, encoding="utf-8", newline="") as source:
+        return list(csv.DictReader(source, delimiter="\t"))
+
+
+def geometric_mean(values: list[float]) -> float:
+    return math.exp(statistics.fmean(math.log(value) for value in values))
+
+
+def main() -> None:
+    reference_rows = [
+        row
+        for row in load(sys.argv[1])
+        if row["variant"] == "bounded-full-tile" and row["quality"] == "90"
+    ]
+    candidate_rows = load(sys.argv[2])
+    samples = sorted({row["sample"] for row in candidate_rows})
+    encode_ratios = []
+    decode_ratios = []
+    exact_bytes = True
+    for sample in samples:
+        reference = next(row for row in reference_rows if row["sample"] == sample)
+        candidates = [row for row in candidate_rows if row["sample"] == sample]
+        encoded_bytes = {int(row["encoded_bytes"]) for row in candidates}
+        exact_bytes &= encoded_bytes == {int(reference["encoded_bytes"])}
+        encode = statistics.median(float(row["encode_mpps"]) for row in candidates)
+        decode = statistics.median(float(row["decode_mpps"]) for row in candidates)
+        encode_ratio = encode / float(reference["encode_mpps"])
+        decode_ratio = decode / float(reference["decode_mpps"])
+        encode_ratios.append(encode_ratio)
+        decode_ratios.append(decode_ratio)
+        print(
+            f"{sample}: encode={encode:.3f} MP/s ({encode_ratio:.3f}x), "
+            f"decode={decode:.3f} MP/s ({decode_ratio:.3f}x), "
+            f"bitrate={float(candidates[0]['encoded_stream_mbps']):.6f} Mb/s"
+        )
+    geometric_encode = geometric_mean(encode_ratios)
+    geometric_decode = geometric_mean(decode_ratios)
+    passed = exact_bytes and geometric_encode >= 1.75 and geometric_decode >= 0.95
+    print(
+        f"geometric ratios: encode={geometric_encode:.4f}x "
+        f"decode={geometric_decode:.4f}x exact_bytes={exact_bytes}"
+    )
+    print(f"gate={'PASS' if passed else 'FAIL'}")
+
+
+if __name__ == "__main__":
+    main()
