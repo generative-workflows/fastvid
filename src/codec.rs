@@ -298,6 +298,13 @@ pub fn analyze_entropy(bytes: &[u8]) -> Result<Vec<TileEntropyModel>, CodecError
             let rice4_shard = (ENTROPY_RICE_BASE..=ENTROPY_RICE_BASE + MAX_RICE_PARAMETER)
                 .contains(&entry.entropy_mode)
                 .then(|| model.rice_lane_size(entry.entropy_mode - ENTROPY_RICE_BASE, 4096, 4));
+            let diagonal_order = (entry.prediction_mode != PREDICT_TEMPORAL).then(|| {
+                model.diagonal_order_size(
+                    entry.tile.width as usize,
+                    entry.tile.height as usize,
+                    false,
+                )
+            });
             Ok(TileEntropyModel {
                 plane: entry.tile.plane,
                 width: entry.tile.width,
@@ -331,6 +338,13 @@ pub fn analyze_entropy(bytes: &[u8]) -> Result<Vec<TileEntropyModel>, CodecError
                 rice4_shard_payload_bytes: rice4_shard.unwrap_or_default().payload_bytes,
                 rice4_shard_control_bytes: rice4_shard.unwrap_or_default().control_bytes,
                 rice4_shard_complete_bytes: rice4_shard.unwrap_or_default().complete_bytes,
+                diagonal_order_supported: diagonal_order.is_some(),
+                raster_best_bytes: diagonal_order.unwrap_or_default().raster_best_bytes,
+                raster_rice_bytes: diagonal_order.unwrap_or_default().raster_rice_bytes,
+                diagonal_zero_run_bytes: diagonal_order.unwrap_or_default().diagonal_zero_run_bytes,
+                diagonal_rice_bytes: diagonal_order.unwrap_or_default().diagonal_rice_bytes,
+                diagonal_block_bytes: diagonal_order.unwrap_or_default().diagonal_block_bytes,
+                diagonal_best_bytes: diagonal_order.unwrap_or_default().diagonal_best_bytes,
             })
         })
         .collect()
@@ -1643,6 +1657,10 @@ fn model_clamp_gradient_bands(
         complete_bytes: payload_bytes + control_bytes,
         squared_error,
         max_error,
+        parallel_payload_bytes: payload_bytes,
+        parallel_control_bytes: control_bytes,
+        parallel_complete_bytes: payload_bytes + control_bytes,
+        max_entropy_span: tile.width as usize * band_height.min(tile.height) as usize,
     }
 }
 

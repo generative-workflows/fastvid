@@ -352,6 +352,13 @@ pub fn analyze_entropy16(bytes: &[u8]) -> Result<Vec<TileEntropyModel>, CodecErr
             let rice4_shard = (ENTROPY_RICE_BASE..=ENTROPY_RICE_BASE + MAX_RICE_PARAMETER)
                 .contains(&entry.entropy_mode)
                 .then(|| model.rice_lane_size(entry.entropy_mode - ENTROPY_RICE_BASE, 4096, 4));
+            let diagonal_order = (entry.prediction_mode != PREDICT_TEMPORAL).then(|| {
+                model.diagonal_order_size(
+                    entry.tile.width as usize,
+                    entry.tile.height as usize,
+                    true,
+                )
+            });
             Ok(TileEntropyModel {
                 plane: entry.tile.plane,
                 width: entry.tile.width,
@@ -385,6 +392,13 @@ pub fn analyze_entropy16(bytes: &[u8]) -> Result<Vec<TileEntropyModel>, CodecErr
                 rice4_shard_payload_bytes: rice4_shard.unwrap_or_default().payload_bytes,
                 rice4_shard_control_bytes: rice4_shard.unwrap_or_default().control_bytes,
                 rice4_shard_complete_bytes: rice4_shard.unwrap_or_default().complete_bytes,
+                diagonal_order_supported: diagonal_order.is_some(),
+                raster_best_bytes: diagonal_order.unwrap_or_default().raster_best_bytes,
+                raster_rice_bytes: diagonal_order.unwrap_or_default().raster_rice_bytes,
+                diagonal_zero_run_bytes: diagonal_order.unwrap_or_default().diagonal_zero_run_bytes,
+                diagonal_rice_bytes: diagonal_order.unwrap_or_default().diagonal_rice_bytes,
+                diagonal_block_bytes: diagonal_order.unwrap_or_default().diagonal_block_bytes,
+                diagonal_best_bytes: diagonal_order.unwrap_or_default().diagonal_best_bytes,
             })
         })
         .collect()
@@ -1581,8 +1595,17 @@ enum SpatialPredictor {
 struct ModeledPredictor {
     summary: PredictorCandidateModel,
     reconstruction: Vec<u16>,
+    parallel_entropy: ParallelEntropyModel,
     #[cfg(test)]
     encoded: EncodedTile,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ParallelEntropyModel {
+    payload_bytes: usize,
+    control_bytes: usize,
+    complete_bytes: usize,
+    max_span: usize,
 }
 
 fn model_predictor_tile(
@@ -1687,6 +1710,9 @@ fn model_clamp_gradient_bands(
     debug_assert!(band_height != 0);
     let mut bands = 0usize;
     let mut payload_bytes = 0usize;
+    let mut parallel_payload_bytes = 0usize;
+    let mut parallel_entropy_control_bytes = 0usize;
+    let mut max_entropy_span = 0usize;
     let mut squared_error = 0u64;
     let mut max_error = 0u32;
     for offset_y in (0..tile.height).step_by(band_height as usize) {
@@ -1699,6 +1725,9 @@ fn model_clamp_gradient_bands(
             model_spatial_predictor(plane, band, quantizer, SpatialPredictor::ClampGradient);
         bands += 1;
         payload_bytes += modeled.summary.payload_bytes;
+        parallel_payload_bytes += modeled.parallel_entropy.payload_bytes;
+        parallel_entropy_control_bytes += modeled.parallel_entropy.control_bytes;
+        max_entropy_span = max_entropy_span.max(modeled.parallel_entropy.max_span);
         squared_error += modeled.summary.squared_error;
         max_error = max_error.max(modeled.summary.max_error);
     }
@@ -1711,6 +1740,12 @@ fn model_clamp_gradient_bands(
         complete_bytes: payload_bytes + control_bytes,
         squared_error,
         max_error,
+        parallel_payload_bytes,
+        parallel_control_bytes: control_bytes + parallel_entropy_control_bytes,
+        parallel_complete_bytes: parallel_payload_bytes
+            + control_bytes
+            + parallel_entropy_control_bytes,
+        max_entropy_span,
     }
 }
 
@@ -1746,11 +1781,13 @@ fn model_temporal_predictor(
             folded.push(zigzag(quantized));
         }
     }
+    let parallel_entropy = model_parallel_entropy(&folded);
     candidate_model(
         finish_entropy(folded, PREDICT_TEMPORAL),
         squared_error,
         max_error,
         reconstruction,
+        parallel_entropy,
     )
 }
 
@@ -1799,11 +1836,13 @@ fn model_spatial_predictor(
             folded.push(zigzag(quantized));
         }
     }
+    let parallel_entropy = model_parallel_entropy(&folded);
     candidate_model(
         finish_entropy(folded, spatial_prediction_mode(mode)),
         squared_error,
         max_error,
         reconstruction,
+        parallel_entropy,
     )
 }
 
@@ -1812,6 +1851,7 @@ fn candidate_model(
     squared_error: u64,
     max_error: u32,
     reconstruction: Vec<u16>,
+    parallel_entropy: ParallelEntropyModel,
 ) -> ModeledPredictor {
     ModeledPredictor {
         summary: PredictorCandidateModel {
@@ -1821,9 +1861,44 @@ fn candidate_model(
             zero_run: encoded.entropy_mode == ENTROPY_ZERO_RUN,
         },
         reconstruction,
+        parallel_entropy,
         #[cfg(test)]
         encoded,
     }
+}
+
+// research/0038: preserve raster locality while bounding entropy state after
+// dependency-exact wavefront prediction.
+fn model_parallel_entropy(folded: &[u32]) -> ParallelEntropyModel {
+    const SHARD_SYMBOLS: usize = 4096;
+    const LANES: usize = 4;
+    let shard_count = folded.len().div_ceil(SHARD_SYMBOLS);
+    let mut result = ParallelEntropyModel::default();
+    for (shard_index, shard) in folded.chunks(SHARD_SYMBOLS).enumerate() {
+        let zero_run_bytes = modeled_zero_run_cost(shard);
+        let mut format = ByteFormatModel::default();
+        for &value in shard {
+            format.push(value);
+        }
+        let rice_parameter = best_rice_parameter(shard).0;
+        let rice = format.rice_lane_size(rice_parameter, SHARD_SYMBOLS, LANES);
+        if zero_run_bytes as u64 <= rice.complete_bytes {
+            result.payload_bytes += zero_run_bytes;
+            result.max_span = result.max_span.max(shard.len());
+        } else {
+            result.payload_bytes += rice.payload_bytes as usize;
+            result.control_bytes += rice.control_bytes as usize;
+            result.max_span = result.max_span.max(shard.len().div_ceil(LANES));
+        }
+        // One mode/parameter byte per shard and one u32 length except for the
+        // final shard; the enclosing predictor band delimits the final one.
+        result.control_bytes += 1;
+        if shard_index + 1 != shard_count {
+            result.control_bytes += 4;
+        }
+    }
+    result.complete_bytes = result.payload_bytes + result.control_bytes;
+    result
 }
 
 fn spatial_prediction_mode(mode: SpatialPredictor) -> u8 {
@@ -1931,6 +2006,17 @@ fn model_bounded_spatial_tile(plane: &Plane16, tile: Tile, quantizer: &Quantizer
 }
 
 fn modeled_entropy_cost(folded: &[u32]) -> (u8, usize) {
+    let zero_run_bytes = modeled_zero_run_cost(folded);
+    let (parameter, rice_bits) = best_rice_parameter(folded);
+    let rice_bytes = usize::try_from(rice_bits.div_ceil(8)).expect("modeled tile size fits usize");
+    if rice_bytes >= zero_run_bytes {
+        (ENTROPY_ZERO_RUN, zero_run_bytes)
+    } else {
+        (ENTROPY_RICE_BASE + parameter, rice_bytes)
+    }
+}
+
+fn modeled_zero_run_cost(folded: &[u32]) -> usize {
     let mut zero_run_bytes = 0usize;
     let mut zero_run = 0u32;
     for &value in folded {
@@ -1942,13 +2028,7 @@ fn modeled_entropy_cost(folded: &[u32]) -> (u8, usize) {
         }
     }
     count_zero_run(&mut zero_run_bytes, &mut zero_run);
-    let (parameter, rice_bits) = best_rice_parameter(folded);
-    let rice_bytes = usize::try_from(rice_bits.div_ceil(8)).expect("modeled tile size fits usize");
-    if rice_bytes >= zero_run_bytes {
-        (ENTROPY_ZERO_RUN, zero_run_bytes)
-    } else {
-        (ENTROPY_RICE_BASE + parameter, rice_bytes)
-    }
+    zero_run_bytes
 }
 
 fn finish_entropy(folded: Vec<u32>, prediction_mode: u8) -> EncodedTile {
@@ -3154,6 +3234,31 @@ mod tests {
         assert_eq!(
             bands.max_error,
             first.summary.max_error.max(second.summary.max_error)
+        );
+    }
+
+    #[test]
+    fn parallel_entropy_model_charges_shards_modes_and_rice_lanes() {
+        let zero_runs = model_parallel_entropy(&vec![0; 5000]);
+        assert_eq!(
+            zero_runs,
+            ParallelEntropyModel {
+                payload_bytes: 4,
+                control_bytes: 6,
+                complete_bytes: 10,
+                max_span: 4096,
+            }
+        );
+
+        let rice = model_parallel_entropy(&vec![1; 4096]);
+        assert_eq!(
+            rice,
+            ParallelEntropyModel {
+                payload_bytes: 1024,
+                control_bytes: 13,
+                complete_bytes: 1037,
+                max_span: 1024,
+            }
         );
     }
 

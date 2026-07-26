@@ -53,6 +53,13 @@ indices into homogeneous predictor/entropy queues to avoid SIMD/warp
 divergence. The scalar Rust mapping remains normative and must agree exactly
 with future CPU SIMD and CUDA kernels.
 
+The leading measured format model is EXP-0107: independent 64-row predictor
+bands retain raster residual order, split entropy at 4,096 symbols, and use
+four byte-aligned Rice lanes where Rice wins. It bounds predictor units to
+16,384 samples and entropy states to 4,096 symbols for +1.727% aggregate
+modeled high-bit q90 bytes. This is accepted design evidence, not yet
+normative syntax or an implemented stream version.
+
 Research and quantitative gates are in
 [`research/0037-parallel-hardware-friendly-codecs.md`](../research/0037-parallel-hardware-friendly-codecs.md)
 and [`EVALUATION_METHODOLOGY.md`](../EVALUATION_METHODOLOGY.md).

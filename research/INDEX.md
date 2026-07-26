@@ -42,3 +42,4 @@ before entering the format.
 | [0035](0035-runtime-invariant-integer-division.md) | Optimal reciprocal bounds, libdivide, `strength_reduce` | Exact runtime-invariant quantization without dependent table loads | Reviewed |
 | [0036](0036-independent-chain-software-pipelining.md) | AMD/Intel optimization manuals, LLVM pipeliner, Cimple | Interleave independent causal tile chains for scalar ILP | Reviewed |
 | [0037](0037-parallel-hardware-friendly-codecs.md) | HTJ2K, JPEG XL/XS, GDeflate, CUDA scan | Independent work units, bounded serial span, entropy lanes, and two-pass output | Reviewed |
+| [0038](0038-lossless-wavefront-scheduling.md) | Recent lossless wavefront codecs, PILC, DietGPU | Exact causal scheduling, raster staging, and parallel entropy handoff | Reviewed |

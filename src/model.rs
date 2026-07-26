@@ -451,6 +451,13 @@ pub struct TileEntropyModel {
     pub rice4_shard_payload_bytes: u64,
     pub rice4_shard_control_bytes: u64,
     pub rice4_shard_complete_bytes: u64,
+    pub diagonal_order_supported: bool,
+    pub raster_best_bytes: u64,
+    pub raster_rice_bytes: u64,
+    pub diagonal_zero_run_bytes: u64,
+    pub diagonal_rice_bytes: u64,
+    pub diagonal_block_bytes: u64,
+    pub diagonal_best_bytes: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -458,6 +465,16 @@ pub(crate) struct RiceLaneSizeModel {
     pub(crate) payload_bytes: u64,
     pub(crate) control_bytes: u64,
     pub(crate) complete_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct EntropyOrderSizeModel {
+    pub(crate) raster_best_bytes: u64,
+    pub(crate) raster_rice_bytes: u64,
+    pub(crate) diagonal_zero_run_bytes: u64,
+    pub(crate) diagonal_rice_bytes: u64,
+    pub(crate) diagonal_block_bytes: u64,
+    pub(crate) diagonal_best_bytes: u64,
 }
 
 /// Read-only size model for predictor-bounded residual symbols in one tile.
@@ -522,6 +539,10 @@ pub struct PredictorBandModel {
     pub complete_bytes: usize,
     pub squared_error: u64,
     pub max_error: u32,
+    pub parallel_payload_bytes: usize,
+    pub parallel_control_bytes: usize,
+    pub parallel_complete_bytes: usize,
+    pub max_entropy_span: usize,
 }
 
 /// Read-only exact-byte model for one tile-local chroma-from-luma candidate.
@@ -775,6 +796,44 @@ impl ByteFormatModel {
         }
     }
 
+    pub(crate) fn diagonal_order_size(
+        &self,
+        width: usize,
+        height: usize,
+        allow_block_pack: bool,
+    ) -> EntropyOrderSizeModel {
+        // research/0038: execution order need not become entropy storage order;
+        // this rejected-format model quantifies that distinction.
+        debug_assert_eq!(self.values.len(), width * height);
+        let mut diagonal = Vec::with_capacity(self.values.len());
+        for sum in 0..width + height - 1 {
+            let first_x = sum.saturating_sub(height - 1);
+            let last_x = sum.min(width - 1);
+            for x in first_x..=last_x {
+                let y = sum - x;
+                diagonal.push(self.values[y * width + x]);
+            }
+        }
+        let raster_zero = modeled_zero_run_bytes(&self.values);
+        let raster_rice = modeled_best_rice_bytes(&self.values);
+        let diagonal_zero_run_bytes = modeled_zero_run_bytes(&diagonal);
+        let diagonal_rice_bytes = modeled_best_rice_bytes(&diagonal);
+        let raster_block = allow_block_pack.then(|| modeled_block_pack_bytes(&self.values));
+        let diagonal_block = allow_block_pack.then(|| modeled_block_pack_bytes(&diagonal));
+        EntropyOrderSizeModel {
+            raster_best_bytes: raster_zero
+                .min(raster_rice)
+                .min(raster_block.unwrap_or(u64::MAX)),
+            raster_rice_bytes: raster_rice,
+            diagonal_zero_run_bytes,
+            diagonal_rice_bytes,
+            diagonal_block_bytes: diagonal_block.unwrap_or(0),
+            diagonal_best_bytes: diagonal_zero_run_bytes
+                .min(diagonal_rice_bytes)
+                .min(diagonal_block.unwrap_or(u64::MAX)),
+        }
+    }
+
     fn context_order0_candidate(
         &self,
         context_count: u8,
@@ -817,6 +876,50 @@ impl ByteFormatModel {
             complete_bytes: payload_bytes + table_bytes + control_bytes,
         }
     }
+}
+
+fn modeled_zero_run_bytes(values: &[u32]) -> u64 {
+    let mut bytes = 0u64;
+    let mut run = 0u32;
+    for &value in values {
+        if value == 0 {
+            run += 1;
+        } else {
+            if run != 0 {
+                bytes += model_varint_length((run - 1) * 2);
+                run = 0;
+            }
+            bytes += model_varint_length(value * 2 - 1);
+        }
+    }
+    if run != 0 {
+        bytes += model_varint_length((run - 1) * 2);
+    }
+    bytes
+}
+
+fn modeled_best_rice_bytes(values: &[u32]) -> u64 {
+    (0u8..=16)
+        .map(|parameter| {
+            values
+                .iter()
+                .map(|&value| u64::from(value >> parameter) + 1 + u64::from(parameter))
+                .sum::<u64>()
+                .div_ceil(8)
+        })
+        .min()
+        .unwrap_or(0)
+}
+
+fn modeled_block_pack_bytes(values: &[u32]) -> u64 {
+    values
+        .chunks(128)
+        .map(|block| {
+            let maximum = block.iter().copied().max().unwrap_or(0);
+            let width = u64::from(u32::BITS - maximum.leading_zeros());
+            1 + (block.len() as u64 * width).div_ceil(8)
+        })
+        .sum()
 }
 
 fn bits_to_bytes(bits: f64) -> u64 {
@@ -983,6 +1086,21 @@ mod tests {
         assert_eq!(size.payload_bytes, 3);
         assert_eq!(size.control_bytes, 8);
         assert_eq!(size.complete_bytes, 11);
+    }
+
+    #[test]
+    fn diagonal_order_model_reorders_symbols_and_preserves_rice_bits() {
+        let mut model = ByteFormatModel::default();
+        for index in 0..256 {
+            model.push(u32::from(index == 128));
+        }
+        let size = model.diagonal_order_size(128, 2, false);
+        assert_eq!(size.raster_best_bytes, 5);
+        assert_eq!(size.raster_rice_bytes, 33);
+        assert_eq!(size.diagonal_zero_run_bytes, 4);
+        assert_eq!(size.diagonal_rice_bytes, 33);
+        assert_eq!(size.diagonal_block_bytes, 0);
+        assert_eq!(size.diagonal_best_bytes, 4);
     }
 
     #[test]

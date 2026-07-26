@@ -170,6 +170,12 @@ more principled format direction is to separate:
 10. Keep temporal dependency depth and single-frame access separate from
     intra-frame hardware parallelism.
 
+EXP-0106 tested direct anti-diagonal residual serialization for coalesced
+wavefront output. Rice size was exactly invariant, but changed zero-run and
+fixed-block grouping regressed the representative q90 screen by 2.66%
+overall and as much as 29.39%. Wavefront execution should therefore preserve
+raster entropy order through a scatter or bounded staging step.
+
 ## Candidate exploration order
 
 1. **Analytical restart budget:** measure the directory/padding lower bound
@@ -192,3 +198,4 @@ more principled format direction is to separate:
 - [EXP-0103](../experiments/EXP-0103-independent-predictor-bands.md)
 - [EXP-0104](../experiments/EXP-0104-predictor-band-height-ladder.md)
 - [EXP-0105](../experiments/EXP-0105-predictor-wavefront-model.md)
+- [EXP-0106](../experiments/EXP-0106-diagonal-residual-order-model.md)

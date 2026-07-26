@@ -1,6 +1,6 @@
 # Fastvid evaluation methodology
 
-Version: 12 (2026-07-25)
+Version: 13 (2026-07-26)
 
 This document defines the standard target used to evaluate Fastvid changes.
 Experiments may add diagnostics or deliberately diverge, but an optimization
@@ -12,7 +12,9 @@ modern metric review in
 finite-block entropy accounting in
 [research 0024](research/0024-finite-block-ans-entropy-models.md), and the
 parallel-hardware architecture review in
-[research 0037](research/0037-parallel-hardware-friendly-codecs.md).
+[research 0037](research/0037-parallel-hardware-friendly-codecs.md), and the
+lossless wavefront/entropy-handoff review in
+[research 0038](research/0038-lossless-wavefront-scheduling.md).
 
 ## Goals and tracks
 
