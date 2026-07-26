@@ -388,16 +388,7 @@ fn encode_zero_run_folded(folded: &[u32]) -> Vec<u8> {
 
 fn encode_parallel_rice(folded: &[u32]) -> (u8, Vec<u8>) {
     let lane_count = PARALLEL_RICE_LANES.min(folded.len());
-    let parameter = (0..=MAX_RICE_PARAMETER)
-        .min_by_key(|&parameter| {
-            let mut bits = vec![0u64; lane_count];
-            for (index, &value) in folded.iter().enumerate() {
-                bits[index % lane_count] +=
-                    u64::from(value >> parameter) + 1 + u64::from(parameter);
-            }
-            bits.into_iter().map(|lane| lane.div_ceil(8)).sum::<u64>()
-        })
-        .expect("entropy shards are nonempty");
+    let parameter = best_parallel_rice_parameter(folded);
     let mut lanes = vec![Vec::new(); lane_count];
     for (lane, lane_output) in lanes.iter_mut().enumerate() {
         let mut writer = BitWriter::new(lane_output);
@@ -419,6 +410,33 @@ fn encode_parallel_rice(folded: &[u32]) -> (u8, Vec<u8>) {
         body.extend_from_slice(&lane);
     }
     (parameter, body)
+}
+
+fn best_parallel_rice_parameter(folded: &[u32]) -> u8 {
+    let lane_count = PARALLEL_RICE_LANES.min(folded.len());
+    let mut best_parameter = 0;
+    let mut best_bytes = u64::MAX;
+    for parameter in 0..=MAX_RICE_PARAMETER {
+        let mut bits = [0u64; PARALLEL_RICE_LANES];
+        let mut quotient_sum = 0u64;
+        for (index, &value) in folded.iter().enumerate() {
+            let quotient = u64::from(value >> parameter);
+            quotient_sum += quotient;
+            bits[index % lane_count] += quotient + 1 + u64::from(parameter);
+        }
+        let bytes = bits[..lane_count]
+            .iter()
+            .map(|&lane| lane.div_ceil(8))
+            .sum::<u64>();
+        if bytes < best_bytes {
+            best_parameter = parameter;
+            best_bytes = bytes;
+        }
+        if quotient_sum == 0 {
+            break;
+        }
+    }
+    best_parameter
 }
 
 fn encode_intra_tile_pairs(
@@ -3993,6 +4011,42 @@ mod tests {
             }
         }
         (best_parameter, best_bits)
+    }
+
+    fn best_parallel_rice_parameter_full_scan(folded: &[u32]) -> u8 {
+        let lane_count = PARALLEL_RICE_LANES.min(folded.len());
+        (0..=MAX_RICE_PARAMETER)
+            .min_by_key(|&parameter| {
+                let mut bits = [0u64; PARALLEL_RICE_LANES];
+                for (index, &value) in folded.iter().enumerate() {
+                    bits[index % lane_count] +=
+                        u64::from(value >> parameter) + 1 + u64::from(parameter);
+                }
+                bits[..lane_count]
+                    .iter()
+                    .map(|&lane| lane.div_ceil(8))
+                    .sum::<u64>()
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn parallel_rice_early_termination_matches_full_scan() {
+        for value in 0..=131_070 {
+            assert_eq!(
+                best_parallel_rice_parameter(&[value]),
+                best_parallel_rice_parameter_full_scan(&[value])
+            );
+        }
+        for length in [2, 3, 4, 5, 127, 128, 4095, 4096] {
+            let folded = (0..length)
+                .map(|index| ((index * 4093 + index * index * 17 + 131) % 131_071) as u32)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                best_parallel_rice_parameter(&folded),
+                best_parallel_rice_parameter_full_scan(&folded)
+            );
+        }
     }
 
     #[test]

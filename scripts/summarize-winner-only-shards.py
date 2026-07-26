@@ -17,6 +17,7 @@ def geometric_mean(values: list[float]) -> float:
 
 
 def main() -> None:
+    minimum_encode_ratio = float(sys.argv[3]) if len(sys.argv) > 3 else 1.75
     reference_rows = [
         row
         for row in load(sys.argv[1])
@@ -45,7 +46,11 @@ def main() -> None:
         )
     geometric_encode = geometric_mean(encode_ratios)
     geometric_decode = geometric_mean(decode_ratios)
-    passed = exact_bytes and geometric_encode >= 1.75 and geometric_decode >= 0.95
+    passed = (
+        exact_bytes
+        and geometric_encode >= minimum_encode_ratio
+        and geometric_decode >= 0.95
+    )
     print(
         f"geometric ratios: encode={geometric_encode:.4f}x "
         f"decode={geometric_decode:.4f}x exact_bytes={exact_bytes}"

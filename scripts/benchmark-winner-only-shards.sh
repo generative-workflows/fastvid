@@ -8,6 +8,8 @@ output="${1:-$repo_dir/artifacts/exp0111-winner-only-shards.tsv}"
 corpus_dir="${2:-$repo_dir/artifacts/corpus-v2}"
 trials="${3:-2}"
 reference="${4:-$repo_dir/artifacts/exp0110-full-tile-shards-ab.tsv}"
+minimum_encode_ratio="${5:-1.75}"
+variant="${6:-winner-only}"
 manifest="$repo_dir/corpus/high-bit-manifest.json"
 binary="$repo_dir/target/release/fastvid"
 temporary="$(mktemp /tmp/fastvid-winner-only-shards.XXXXXX)"
@@ -28,7 +30,7 @@ for trial in $(seq 1 "$trials"); do
       } > "$output"
       first=0
     fi
-    printf 'winner-only\t%s\t%s\t' "$trial" "$id" >> "$output"
+    printf '%s\t%s\t%s\t' "$variant" "$trial" "$id" >> "$output"
     tail -n 1 "$temporary" >> "$output"
   done < <(jq -r '
     .samples[]
@@ -46,4 +48,5 @@ for trial in $(seq 1 "$trials"); do
 done
 
 echo "results: $output"
-python3 "$script_dir/summarize-winner-only-shards.py" "$reference" "$output"
+python3 "$script_dir/summarize-winner-only-shards.py" \
+  "$reference" "$output" "$minimum_encode_ratio"
