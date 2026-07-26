@@ -69,3 +69,4 @@ bottleneck.
 - [EXP-0118](../experiments/EXP-0118-post-paired-rice-profile.md)
 - [EXP-0121](../experiments/EXP-0121-emission-binary-frontend-counters.md)
 - [EXP-0124](../experiments/EXP-0124-post-direct-emission-profile.md)
+- [EXP-0127](../experiments/EXP-0127-post-zero-cost-profile.md)
