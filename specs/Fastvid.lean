@@ -228,4 +228,11 @@ theorem parallel_block_body_fits_u16 :
     maximumParallelBlockBodyBytes < 2 ^ 16 := by
   decide
 
+/-- Increasing a Rice parameter cannot increase its unary quotient. -/
+theorem rice_quotient_succ_le (value parameter : Nat) :
+    riceQuotient value (parameter + 1) ≤ riceQuotient value parameter := by
+  unfold riceQuotient riceDivisor
+  rw [Nat.pow_succ, ← Nat.div_div_eq_div_mul]
+  exact Nat.div_le_self _ _
+
 end Fastvid

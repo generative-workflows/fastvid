@@ -79,3 +79,4 @@ causal adaptive Rice is a separate future format experiment.
 - [EXP-0062: speed-tier entropy profile](../experiments/EXP-0062-speed-tier-entropy-profile.md)
 - [EXP-0063: sampled streaming Rice](../experiments/EXP-0063-sampled-streaming-rice.md)
 - [EXP-0113: parallel Rice early termination](../experiments/EXP-0113-parallel-rice-early-termination.md)
+- [EXP-0115: convex Rice search bound](../experiments/EXP-0115-convex-rice-search-bound.md)

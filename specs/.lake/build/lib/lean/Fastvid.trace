@@ -1,7 +1,7 @@
 {"synthetic": false,
  "outputs":
- {"o": ["16103683044380577253"],
-  "i": "14566388521195912011",
+ {"o": ["5895746240950758190"],
+  "i": "8355093505681352076",
   "c": "6120909055175605564"},
  "log":
  [{"message":
@@ -20,7 +20,7 @@
       ["module plugins", "1723"]]]]],
   ["Lean 4.22.0, commit ba2cbbf09d4978f416e0ebd1fceeebc2c4138c05",
    "8739116525927611134"],
-  ["/home/robert/projects/fastvid/specs/Fastvid.lean", "16691895132437849187"],
+  ["/home/robert/projects/fastvid/specs/Fastvid.lean", "7185157760806187724"],
   ["options", "1723"],
   ["Module.leanArgs: #[]", "1723"]],
- "depHash": "4542973220602544341"}
+ "depHash": "17303408192598716868"}

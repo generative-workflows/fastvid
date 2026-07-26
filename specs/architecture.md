@@ -67,9 +67,12 @@ clamp-gradient prediction preserves version 2's residual field, while
 because fixed block bounds every selected body below 64 KiB. On the native
 q90 screen this costs 0.801% aggregate bytes, improves scalar full decode
 26.1% geometrically, and improves independent-tile access 33.1%. Its current
-scalar encoder constructs all candidate bodies and is diagnostic rather than
-speed-competitive. The format maps to a two-pass classify/scan/disjoint-write
-CUDA pipeline without shared append serialization.
+scalar encoder constructs all candidate bodies but exact Rice search
+termination has raised it from roughly 12 MP/s to 24–38 MP/s on the native
+screen without changing bytes. It remains diagnostic rather than
+speed-competitive. The format maps to a two-pass
+classify/scan/disjoint-write CUDA pipeline without shared append
+serialization.
 
 Research and quantitative gates are in
 [`research/0037-parallel-hardware-friendly-codecs.md`](../research/0037-parallel-hardware-friendly-codecs.md)

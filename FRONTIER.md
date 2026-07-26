@@ -39,8 +39,9 @@ residuals but splits entropy into 4,096-symbol zero-run, four-lane Rice, or
 fixed-block shards. EXP-0110 measures +0.801% aggregate q90 bytes, +26.1%
 geometric scalar decode throughput, and +33.1% independent-tile throughput;
 exact Rice early termination raises its diagnostic encoder to about 0.301x
-the version-2 speed path. It remains non-promoted until encoder engineering
-closes that gap.
+the version-2 speed path, and the exact convex Rice bound raises it further to
+about 0.407x. It remains non-promoted until encoder engineering closes that
+gap.
 
 The former balanced snapshot (`156054c`, binary `06ef3278…6ab8`) remains a
 reproducible historical reference under EXP-0045. EXP-0061 retired it from
