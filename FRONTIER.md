@@ -47,8 +47,9 @@ retaining identical format decisions. Charging zero-run bytes inside the
 existing parameter-zero traversal avoids most losing zero-run construction
 and reaches about 0.581x. Interleaving two independent full-tile predictor
 chains raises it again to about 0.659x while retaining identical residuals and
-stream bytes. It remains non-promoted until encoder engineering closes that
-gap.
+stream bytes. Computing four adjacent exact Rice costs per residual traversal
+raises it to about 0.694x. It remains non-promoted until encoder engineering
+closes that gap.
 
 The former balanced snapshot (`156054c`, binary `06ef3278…6ab8`) remains a
 reproducible historical reference under EXP-0045. EXP-0061 retired it from

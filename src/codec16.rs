@@ -551,6 +551,8 @@ struct ParallelRiceSelection {
 
 #[cfg_attr(feature = "profile-stages", inline(never))]
 fn best_parallel_rice_parameter(folded: &[u32]) -> ParallelRiceSelection {
+    // Adjacent exact costs share a quotient shift chain; see
+    // research/0027-streaming-rice-parameter-selection.md and EXP-0130.
     let lane_count = PARALLEL_RICE_LANES.min(folded.len());
     let mut best_parameter = 0;
     let mut best_bytes = u64::MAX;
@@ -560,19 +562,17 @@ fn best_parallel_rice_parameter(folded: &[u32]) -> ParallelRiceSelection {
     let mut zero_run = 0u32;
     let mut parameter = 0;
     while parameter <= MAX_RICE_PARAMETER {
-        let next_parameter = parameter + 1;
-        let has_next = next_parameter <= MAX_RICE_PARAMETER;
-        let mut bits = [[0u64; PARALLEL_RICE_LANES]; 2];
-        let mut quotient_sums = [0u64; 2];
+        let remaining = MAX_RICE_PARAMETER - parameter;
+        let candidate_count = usize::from(remaining.min(3) + 1);
+        let mut bits = [[0u64; PARALLEL_RICE_LANES]; 4];
+        let mut quotient_sums = [0u64; 4];
         for (index, &value) in folded.iter().enumerate() {
-            let quotient = u64::from(value >> parameter);
             let lane = index % lane_count;
-            quotient_sums[0] += quotient;
-            bits[0][lane] += quotient + 1 + u64::from(parameter);
-            if has_next {
-                let next_quotient = quotient >> 1;
-                quotient_sums[1] += next_quotient;
-                bits[1][lane] += next_quotient + 1 + u64::from(next_parameter);
+            let mut quotient = u64::from(value >> parameter);
+            for candidate in 0..candidate_count {
+                quotient_sums[candidate] += quotient;
+                bits[candidate][lane] += quotient + 1 + u64::from(parameter) + candidate as u64;
+                quotient >>= 1;
             }
             if parameter == 0 {
                 if value == 0 {
@@ -586,31 +586,25 @@ fn best_parallel_rice_parameter(folded: &[u32]) -> ParallelRiceSelection {
         if parameter == 0 {
             count_zero_run(&mut zero_run_bytes, &mut zero_run);
         }
-        if update_best_parallel_rice_parameter(
-            parameter,
-            &bits[0][..lane_count],
-            quotient_sums[0],
-            &mut best_parameter,
-            &mut best_bytes,
-            &mut best_lane_bytes,
-            &mut previous_total_bits,
-        ) {
-            break;
-        }
-        if has_next
-            && update_best_parallel_rice_parameter(
-                next_parameter,
-                &bits[1][..lane_count],
-                quotient_sums[1],
+        let mut stop = false;
+        for candidate in 0..candidate_count {
+            if update_best_parallel_rice_parameter(
+                parameter + candidate as u8,
+                &bits[candidate][..lane_count],
+                quotient_sums[candidate],
                 &mut best_parameter,
                 &mut best_bytes,
                 &mut best_lane_bytes,
                 &mut previous_total_bits,
-            )
-        {
+            ) {
+                stop = true;
+                break;
+            }
+        }
+        if stop {
             break;
         }
-        parameter += 2;
+        parameter += 4;
     }
     ParallelRiceSelection {
         parameter: best_parameter,
