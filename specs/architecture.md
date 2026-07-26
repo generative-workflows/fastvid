@@ -60,6 +60,13 @@ four byte-aligned Rice lanes where Rice wins. It bounds predictor units to
 modeled high-bit q90 bytes. This is accepted design evidence, not yet
 normative syntax or an implemented stream version.
 
+EXP-0108 implemented that model as diagnostic high-bit version 4. It improved
+scalar decode and independent-tile access, but was rejected as a frontier
+format because its actual block-pack-relative q90 rate regressed 3.846% and
+its exhaustive scalar encoder reached only about 10–11 MP/s. The next branch
+retains bounded raster entropy shards but removes predictor-band restarts by
+using the full-tile wavefront dependency graph.
+
 Research and quantitative gates are in
 [`research/0037-parallel-hardware-friendly-codecs.md`](../research/0037-parallel-hardware-friendly-codecs.md)
 and [`EVALUATION_METHODOLOGY.md`](../EVALUATION_METHODOLOGY.md).

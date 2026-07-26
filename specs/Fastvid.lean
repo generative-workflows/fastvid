@@ -162,4 +162,54 @@ theorem rans_slot_offset_nonnegative
       ransSlot state tableLog := by
   omega
 
+/-- Version-four rows per independently reconstructed predictor band. -/
+def parallelBandRows : Nat := 64
+
+/-- Version-four folded residuals per independently delimited entropy shard. -/
+def parallelShardSymbols : Nat := 4096
+
+/-- Maximum number of byte-aligned Rice lanes in one entropy shard. -/
+def parallelRiceLanes : Nat := 4
+
+/-- Implicit predictor-band index for a tile-local row. -/
+def predictorBandIndex (row : Nat) : Nat := row / parallelBandRows
+
+/-- Row position inside its implicit predictor band. -/
+def predictorBandRow (row : Nat) : Nat := row % parallelBandRows
+
+/-- The implicit band index and row position reconstruct the tile row. -/
+theorem predictor_band_recompose (row : Nat) :
+    predictorBandIndex row * parallelBandRows + predictorBandRow row = row := by
+  unfold predictorBandIndex predictorBandRow parallelBandRows
+  rw [Nat.mul_comm]
+  exact Nat.div_add_mod row 64
+
+/-- Every implicit predictor-band row lies inside the 64-row bound. -/
+theorem predictor_band_row_bound (row : Nat) :
+    predictorBandRow row < parallelBandRows := by
+  simpa [predictorBandRow, parallelBandRows] using
+    Nat.mod_lt row (by decide : 0 < 64)
+
+/-- Round-robin assignment of a shard-local symbol to a Rice lane. -/
+def riceLaneIndex (symbol laneCount : Nat) : Nat := symbol % laneCount
+
+/-- Every Rice symbol selects an existing lane. -/
+theorem rice_lane_index_bound (symbol laneCount : Nat) (h : 0 < laneCount) :
+    riceLaneIndex symbol laneCount < laneCount := by
+  simp [riceLaneIndex]
+  exact Nat.mod_lt symbol h
+
+/-- A default-width version-four band contains at most 16,384 samples. -/
+theorem default_predictor_band_sample_bound
+    (width rows : Nat) (hw : width ≤ 256) (hr : rows ≤ parallelBandRows) :
+    width * rows ≤ 16384 := by
+  calc
+    width * rows ≤ 256 * 64 := Nat.mul_le_mul hw (by simpa [parallelBandRows] using hr)
+    _ = 16384 := by decide
+
+/-- Four lanes bound a full 4,096-symbol shard to 1,024 symbols per lane. -/
+theorem full_shard_lane_span :
+    parallelShardSymbols / parallelRiceLanes = 1024 := by
+  decide
+
 end Fastvid
