@@ -66,3 +66,4 @@ bottleneck.
 - [EXP-0034](../experiments/EXP-0034-perf-samply-cache-profile.md)
 - [EXP-0112](../experiments/EXP-0112-version5-encode-profile.md)
 - [EXP-0116](../experiments/EXP-0116-version5-stage-decomposition.md)
+- [EXP-0118](../experiments/EXP-0118-post-paired-rice-profile.md)
