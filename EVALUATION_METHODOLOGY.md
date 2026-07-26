@@ -228,6 +228,17 @@ one-thread corpus median regresses by more than 5% without a documented,
 accepted rate/quality tradeoff. Four-thread measurements are required but are
 advisory on noisy shared VMs.
 
+When a candidate changes only one timed phase but another source-identical
+phase moves by more than 5%, the balanced whole-codec result remains
+authoritative for promotion, and an isolated-process diagnostic is required
+before attempting another implementation of the same technique. Load and
+validate fixed inputs outside the timed region, warm both preserved binaries,
+time repeated encode-only or decode-only work in separate processes, and
+alternate binary order. Report the isolated result alongside—not instead
+of—the ordinary end-to-end row. EXP-0121 motivates this rule: aggregate
+frontend counters could not explain a repeated unchanged-decoder movement
+after byte-identical Rice-writer changes.
+
 MP/s counts full-resolution luma pixels, independent of chroma subsampling.
 For the canonical planar 8-bit YUV 4:2:2 input, an even-width frame contains
 2 raw bytes per luma pixel, so 1 MP/s equals 2 decimal MB/s (approximately
