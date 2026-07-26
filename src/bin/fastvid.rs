@@ -6,6 +6,8 @@ use fastvid::{
 };
 use std::env;
 use std::fs;
+use std::hint::black_box;
+use std::mem::size_of;
 use std::process::ExitCode;
 use std::time::Instant;
 
@@ -43,6 +45,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Some("benchmark-access-yuv422p16le") => benchmark_access_yuv422p16le(&arguments[2..]),
         Some("decode") => decode_file(&arguments[2..]),
         Some("decode16") => decode16_file(&arguments[2..]),
+        Some("benchmark-decode16") => benchmark_decode16(&arguments[2..]),
         Some("inspect") => inspect_file(&arguments[2..]),
         Some("-h" | "--help" | "help") | None => {
             print_help();
@@ -1086,6 +1089,46 @@ fn decode16_file(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
+fn benchmark_decode16(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    if arguments.len() != 3 {
+        return Err("benchmark-decode16 needs INPUT THREADS REPETITIONS".into());
+    }
+    let encoded = fs::read(&arguments[0])?;
+    let threads: usize = arguments[1].parse()?;
+    let repetitions: usize = arguments[2].parse()?;
+    if repetitions == 0 {
+        return Err("repetitions must be nonzero".into());
+    }
+    let warm = decode16(&encoded, threads)?;
+    let bit_depth = warm.bit_depth();
+    let luma_pixels = u64::from(warm.width) * u64::from(warm.height);
+    let raw_bytes = warm
+        .planes
+        .iter()
+        .map(|plane| plane.data.len() * size_of::<u16>())
+        .sum::<usize>();
+    black_box(warm);
+
+    let start = Instant::now();
+    for _ in 0..repetitions {
+        let decoded = decode16(black_box(&encoded), threads)?;
+        black_box(decoded);
+    }
+    let decode_ms = start.elapsed().as_secs_f64() * 1_000.0;
+    let decode_seconds = decode_ms / 1_000.0;
+    let decode_mpps = luma_pixels as f64 * repetitions as f64 / decode_seconds / 1_000_000.0;
+    let decode_raw_mb_s = raw_bytes as f64 * repetitions as f64 / decode_seconds / 1_000_000.0;
+    println!(
+        "input\tencoded_bytes\tthreads\trepetitions\tbit_depth\tluma_pixels\tdecode_ms\tdecode_mpps\tdecode_raw_mb_s"
+    );
+    println!(
+        "{}\t{}\t{threads}\t{repetitions}\t{bit_depth}\t{luma_pixels}\t{decode_ms:.3}\t{decode_mpps:.3}\t{decode_raw_mb_s:.3}",
+        arguments[0],
+        encoded.len()
+    );
+    Ok(())
+}
+
 fn inspect_file(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     if arguments.len() != 1 {
         return Err("inspect needs INPUT".into());
@@ -1169,6 +1212,7 @@ USAGE:
   fastvid benchmark-access-yuv422p16le INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES BIT_DEPTH QUALITY THREADS GOP TARGETS [TILE_WIDTH TILE_HEIGHT]
   fastvid decode INPUT OUTPUT THREADS
   fastvid decode16 INPUT OUTPUT THREADS
+  fastvid benchmark-decode16 INPUT THREADS REPETITIONS
   fastvid inspect INPUT
 
 Raw high-bit input/output is planar Y, Cb, Cr in tightly packed little-endian
