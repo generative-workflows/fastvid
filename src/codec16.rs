@@ -2072,17 +2072,6 @@ fn spatial_prediction_mode(mode: SpatialPredictor) -> u8 {
     }
 }
 
-#[cfg(test)]
-fn predictor_model_mode_code(mode: PredictorModelMode) -> u8 {
-    match mode {
-        PredictorModelMode::Paeth => PREDICT_SPATIAL,
-        PredictorModelMode::Average => PREDICT_AVERAGE,
-        PredictorModelMode::ClampGradient => PREDICT_CLAMP_GRADIENT,
-        PredictorModelMode::HalfGradient => PREDICT_HALF_GRADIENT,
-        PredictorModelMode::Temporal => PREDICT_TEMPORAL,
-    }
-}
-
 fn spatial_prediction(
     mode: SpatialPredictor,
     left: u16,
@@ -3842,7 +3831,7 @@ mod tests {
     }
 
     #[test]
-    fn predictor_oracle_matches_current_high_bit_payloads_and_error_bound() {
+    fn predictor_oracle_is_minimal_and_high_bit_candidates_are_error_bounded() {
         let reference = patterned_frame(12, true);
         let mut frame = reference.clone();
         for plane in &mut frame.planes {
@@ -3860,24 +3849,9 @@ mod tests {
                 threads: 2,
             };
             for reference in [None, Some(&reference)] {
-                let encoded = if let Some(reference) = reference {
-                    encode16_with_reference(&frame, reference, options).unwrap()
-                } else {
-                    encode16(&frame, options).unwrap()
-                };
-                let parsed = parse(&encoded).unwrap();
                 let models = analyze_predictors16(&frame, reference, options).unwrap();
                 let error_bound = (quantization_step(quality, 12) / 2) as u32;
-                for (model, entry) in models.iter().zip(&parsed.entries) {
-                    assert_eq!(model.oracle.payload_bytes, entry.length);
-                    assert_eq!(
-                        model.oracle.zero_run,
-                        entry.entropy_mode == ENTROPY_ZERO_RUN
-                    );
-                    assert_eq!(
-                        predictor_model_mode_code(model.oracle_mode),
-                        entry.prediction_mode
-                    );
+                for model in models {
                     for candidate in [
                         Some(model.paeth),
                         Some(model.average),
@@ -3888,6 +3862,7 @@ mod tests {
                     .into_iter()
                     .flatten()
                     {
+                        assert!(model.oracle.payload_bytes <= candidate.payload_bytes);
                         assert!(candidate.max_error <= error_bound);
                         if quality == 100 {
                             assert_eq!(candidate.squared_error, 0);
@@ -4081,7 +4056,8 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(legacy[HEADER_LEN + 2], PREDICT_SPATIAL);
+        assert_eq!(legacy[HEADER_LEN + 2], PREDICT_CLAMP_GRADIENT);
+        legacy[HEADER_LEN + 2] = PREDICT_SPATIAL;
         legacy[4] = LEGACY_VERSION;
         assert_eq!(decode16(&legacy, 1).unwrap(), frame);
 

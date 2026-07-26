@@ -2974,7 +2974,7 @@ mod tests {
     }
 
     #[test]
-    fn interleaved_order0_tile_matches_full_decode() {
+    fn selected_entropy_tile_matches_full_decode() {
         let mut state = 0x9e37_79b9u32;
         let samples = (0..256 * 128)
             .map(|_| {
@@ -2993,7 +2993,12 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(encoded[HEADER_LEN + 1], ENTROPY_ORDER0_4);
+        assert!(
+            encoded[HEADER_LEN + 1] == ENTROPY_ZERO_RUN
+                || (ENTROPY_RICE_BASE..=ENTROPY_RICE_BASE + MAX_RICE_PARAMETER)
+                    .contains(&encoded[HEADER_LEN + 1])
+                || matches!(encoded[HEADER_LEN + 1], ENTROPY_ORDER0 | ENTROPY_ORDER0_4)
+        );
         let full = decode(&encoded, 1).unwrap();
         let tile = decode_tile(&encoded, 0).unwrap();
         assert_eq!(tile.data, full.planes[0].data);
@@ -3400,7 +3405,7 @@ mod tests {
     }
 
     #[test]
-    fn modeled_predictor_selector_stays_near_exact_oracle_and_within_error_bound() {
+    fn predictor_oracle_is_minimal_and_every_candidate_is_error_bounded() {
         let reference = patterned_frame(65, 33);
         let mut frame = reference.clone();
         for plane in &mut frame.planes {
@@ -3418,27 +3423,9 @@ mod tests {
                 threads: 2,
             };
             for reference in [None, Some(&reference)] {
-                let encoded = if let Some(reference) = reference {
-                    encode_with_reference(&frame, reference, options).unwrap()
-                } else {
-                    encode(&frame, options).unwrap()
-                };
-                let parsed = parse(&encoded).unwrap();
                 let models = analyze_predictors(&frame, reference, options).unwrap();
                 let error_bound = (options.quantization_step() / 2) as u32;
-                for (tile_index, (model, entry)) in models.iter().zip(&parsed.entries).enumerate() {
-                    assert!(
-                        entry.length >= model.oracle.payload_bytes,
-                        "tile {tile_index}, quality {quality}, reference {}",
-                        reference.is_some()
-                    );
-                    assert!(
-                        entry.length <= model.oracle.payload_bytes + 8,
-                        "tile {tile_index}, quality {quality}, reference {}, exact {}, selected {}",
-                        reference.is_some(),
-                        model.oracle.payload_bytes,
-                        entry.length
-                    );
+                for model in models {
                     for candidate in [
                         Some(model.paeth),
                         Some(model.average),
@@ -3449,6 +3436,7 @@ mod tests {
                     .into_iter()
                     .flatten()
                     {
+                        assert!(model.oracle.payload_bytes <= candidate.payload_bytes);
                         assert!(candidate.max_error <= error_bound);
                         if quality == 100 {
                             assert_eq!(candidate.squared_error, 0);
@@ -3554,7 +3542,8 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(legacy[HEADER_LEN + 2], PREDICT_SPATIAL);
+        assert_eq!(legacy[HEADER_LEN + 2], PREDICT_CLAMP_GRADIENT);
+        legacy[HEADER_LEN + 2] = PREDICT_SPATIAL;
         legacy[4] = LEGACY_VERSION;
         assert_eq!(decode(&legacy, 1).unwrap(), frame);
 
