@@ -18,25 +18,38 @@ def geometric_mean(values: list[float]) -> float:
 
 def main() -> None:
     minimum_encode_ratio = float(sys.argv[3]) if len(sys.argv) > 3 else 1.75
+    reference_variant = sys.argv[4] if len(sys.argv) > 4 else "bounded-full-tile"
+    candidate_variant = sys.argv[5] if len(sys.argv) > 5 else None
     reference_rows = [
         row
         for row in load(sys.argv[1])
-        if row["variant"] == "bounded-full-tile" and row["quality"] == "90"
+        if row["variant"] == reference_variant and row["quality"] == "90"
     ]
-    candidate_rows = load(sys.argv[2])
+    candidate_rows = [
+        row
+        for row in load(sys.argv[2])
+        if candidate_variant is None or row["variant"] == candidate_variant
+    ]
     samples = sorted({row["sample"] for row in candidate_rows})
     encode_ratios = []
     decode_ratios = []
     exact_bytes = True
     for sample in samples:
-        reference = next(row for row in reference_rows if row["sample"] == sample)
+        references = [row for row in reference_rows if row["sample"] == sample]
         candidates = [row for row in candidate_rows if row["sample"] == sample]
         encoded_bytes = {int(row["encoded_bytes"]) for row in candidates}
-        exact_bytes &= encoded_bytes == {int(reference["encoded_bytes"])}
+        reference_bytes = {int(row["encoded_bytes"]) for row in references}
+        exact_bytes &= encoded_bytes == reference_bytes
         encode = statistics.median(float(row["encode_mpps"]) for row in candidates)
         decode = statistics.median(float(row["decode_mpps"]) for row in candidates)
-        encode_ratio = encode / float(reference["encode_mpps"])
-        decode_ratio = decode / float(reference["decode_mpps"])
+        reference_encode = statistics.median(
+            float(row["encode_mpps"]) for row in references
+        )
+        reference_decode = statistics.median(
+            float(row["decode_mpps"]) for row in references
+        )
+        encode_ratio = encode / reference_encode
+        decode_ratio = decode / reference_decode
         encode_ratios.append(encode_ratio)
         decode_ratios.append(decode_ratio)
         print(

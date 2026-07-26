@@ -10,6 +10,7 @@ trials="${3:-2}"
 reference="${4:-$repo_dir/artifacts/exp0110-full-tile-shards-ab.tsv}"
 minimum_encode_ratio="${5:-1.75}"
 variant="${6:-winner-only}"
+reference_variant="${7:-bounded-full-tile}"
 manifest="$repo_dir/corpus/high-bit-manifest.json"
 binary="$repo_dir/target/release/fastvid"
 temporary="$(mktemp /tmp/fastvid-winner-only-shards.XXXXXX)"
@@ -49,4 +50,4 @@ done
 
 echo "results: $output"
 python3 "$script_dir/summarize-winner-only-shards.py" \
-  "$reference" "$output" "$minimum_encode_ratio"
+  "$reference" "$output" "$minimum_encode_ratio" "$reference_variant"

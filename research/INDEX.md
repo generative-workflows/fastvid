@@ -43,3 +43,4 @@ before entering the format.
 | [0036](0036-independent-chain-software-pipelining.md) | AMD/Intel optimization manuals, LLVM pipeliner, Cimple | Interleave independent causal tile chains for scalar ILP | Reviewed |
 | [0037](0037-parallel-hardware-friendly-codecs.md) | HTJ2K, JPEG XL/XS, GDeflate, CUDA scan | Independent work units, bounded serial span, entropy lanes, and two-pass output | Reviewed |
 | [0038](0038-lossless-wavefront-scheduling.md) | Recent lossless wavefront codecs, PILC, DietGPU | Exact causal scheduling, raster staging, and parallel entropy handoff | Reviewed |
+| [0039](0039-parallel-rice-bitstream-hardware.md) | 2024 parallel Bayer FPGA codec and OMLS license audit | Fixed-width parallel Rice packing, bounded unary output, and incompatible source boundary | Reviewed |
