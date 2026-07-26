@@ -1,8 +1,8 @@
 use fastvid::{
     CodecOptions, Frame, Frame16, FrameRate, PixelFormat, compare_plane, compare_plane16, decode,
     decode_tile16, decode_with_reference, decode16, decode16_with_reference, encode,
-    encode_with_reference, encode16, encode16_parallel, encode16_with_reference, inspect,
-    inspect16, ssim_plane, ssim_plane16,
+    encode_with_reference, encode16, encode16_parallel, encode16_parallel_full_tile,
+    encode16_with_reference, inspect, inspect16, ssim_plane, ssim_plane16,
 };
 use std::env;
 use std::fs;
@@ -26,9 +26,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Some("encode-yuv422") => encode_yuv422(&arguments[2..]),
         Some("encode-yuv422p16le") => encode_yuv422p16le(&arguments[2..]),
         Some("encode-yuv422p16le-parallel") => encode_yuv422p16le_parallel(&arguments[2..]),
+        Some("encode-yuv422p16le-parallel-full-tile") => {
+            encode_yuv422p16le_parallel_full_tile(&arguments[2..])
+        }
         Some("benchmark-yuv422") => benchmark_yuv422(&arguments[2..]),
         Some("benchmark-yuv422p16le") => benchmark_yuv422p16le(&arguments[2..]),
         Some("benchmark-yuv422p16le-parallel") => benchmark_yuv422p16le_parallel(&arguments[2..]),
+        Some("benchmark-yuv422p16le-parallel-full-tile") => {
+            benchmark_yuv422p16le_parallel_full_tile(&arguments[2..])
+        }
         Some("benchmark-tile-access-yuv422p16le") => {
             benchmark_tile_access_yuv422p16le(&arguments[2..])
         }
@@ -47,20 +53,33 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn encode_yuv422p16le(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    encode_yuv422p16le_mode(arguments, false)
+    encode_yuv422p16le_mode(arguments, HighBitFormat::Baseline)
 }
 
 fn encode_yuv422p16le_parallel(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    encode_yuv422p16le_mode(arguments, true)
+    encode_yuv422p16le_mode(arguments, HighBitFormat::BoundedBands)
+}
+
+fn encode_yuv422p16le_parallel_full_tile(
+    arguments: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
+    encode_yuv422p16le_mode(arguments, HighBitFormat::BoundedFullTile)
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum HighBitFormat {
+    Baseline,
+    BoundedBands,
+    BoundedFullTile,
 }
 
 fn encode_yuv422p16le_mode(
     arguments: &[String],
-    parallel_format: bool,
+    format: HighBitFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if arguments.len() != 9 {
+    if !matches!(arguments.len(), 9 | 10) {
         return Err(
-            "encode-yuv422p16le needs INPUT OUTPUT WIDTH HEIGHT FPS_NUM/FPS_DEN BIT_DEPTH QUALITY THREADS TILE_SIZE"
+            "encode-yuv422p16le needs INPUT OUTPUT WIDTH HEIGHT FPS_NUM/FPS_DEN BIT_DEPTH QUALITY THREADS TILE_WIDTH [TILE_HEIGHT]"
                 .into(),
         );
     }
@@ -70,7 +89,10 @@ fn encode_yuv422p16le_mode(
     let bit_depth = arguments[5].parse()?;
     let quality = arguments[6].parse()?;
     let threads = arguments[7].parse()?;
-    let tile_size = arguments[8].parse()?;
+    let tile_width = arguments[8].parse()?;
+    let tile_height = arguments
+        .get(9)
+        .map_or(Ok(tile_width), |value| value.parse())?;
     let frame = frame16_from_yuv422le(
         &fs::read(&arguments[0])?,
         width,
@@ -80,14 +102,14 @@ fn encode_yuv422p16le_mode(
     )?;
     let options = CodecOptions {
         quality,
-        tile_width: tile_size,
-        tile_height: tile_size,
+        tile_width,
+        tile_height,
         threads,
     };
-    let encoded = if parallel_format {
-        encode16_parallel(&frame, options)?
-    } else {
-        encode16(&frame, options)?
+    let encoded = match format {
+        HighBitFormat::Baseline => encode16(&frame, options)?,
+        HighBitFormat::BoundedBands => encode16_parallel(&frame, options)?,
+        HighBitFormat::BoundedFullTile => encode16_parallel_full_tile(&frame, options)?,
     };
     fs::write(&arguments[1], encoded)?;
     Ok(())
@@ -357,16 +379,22 @@ fn benchmark_yuv422(arguments: &[String]) -> Result<(), Box<dyn std::error::Erro
 }
 
 fn benchmark_yuv422p16le(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    benchmark_yuv422p16le_mode(arguments, false)
+    benchmark_yuv422p16le_mode(arguments, HighBitFormat::Baseline)
 }
 
 fn benchmark_yuv422p16le_parallel(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    benchmark_yuv422p16le_mode(arguments, true)
+    benchmark_yuv422p16le_mode(arguments, HighBitFormat::BoundedBands)
+}
+
+fn benchmark_yuv422p16le_parallel_full_tile(
+    arguments: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
+    benchmark_yuv422p16le_mode(arguments, HighBitFormat::BoundedFullTile)
 }
 
 fn benchmark_yuv422p16le_mode(
     arguments: &[String],
-    parallel_format: bool,
+    format: HighBitFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if !matches!(arguments.len(), 8 | 9 | 11) {
         return Err(
@@ -386,7 +414,7 @@ fn benchmark_yuv422p16le_mode(
     if frame_count == 0 || gop == 0 {
         return Err("frame count and GOP must be nonzero".into());
     }
-    if parallel_format && gop != 1 {
+    if format != HighBitFormat::Baseline && gop != 1 {
         return Err("bounded-shard prototype is all-intra and requires GOP 1".into());
     }
     let raw = fs::read(input)?;
@@ -423,18 +451,17 @@ fn benchmark_yuv422p16le_mode(
         let frame = frame16_from_yuv422le(bytes, width, height, bit_depth, frame_rate)?;
         let predicted = !frame_index.is_multiple_of(gop);
         let start = Instant::now();
-        let encoded = if parallel_format {
-            encode16_parallel(&frame, options)?
-        } else if predicted {
-            encode16_with_reference(
+        let encoded = match format {
+            HighBitFormat::BoundedBands => encode16_parallel(&frame, options)?,
+            HighBitFormat::BoundedFullTile => encode16_parallel_full_tile(&frame, options)?,
+            HighBitFormat::Baseline if predicted => encode16_with_reference(
                 &frame,
                 previous
                     .as_ref()
                     .expect("non-key frame has a preceding decoded frame"),
                 options,
-            )?
-        } else {
-            encode16(&frame, options)?
+            )?,
+            HighBitFormat::Baseline => encode16(&frame, options)?,
         };
         encode_time += start.elapsed();
         encoded_bytes = encoded_bytes
@@ -552,7 +579,10 @@ fn benchmark_tile_access_yuv422p16le(
     let encoded = match variant.as_str() {
         "baseline" => encode16(&frame, options)?,
         "bounded-shard" => encode16_parallel(&frame, options)?,
-        _ => return Err("variant must be baseline or bounded-shard".into()),
+        "bounded-full-tile" => encode16_parallel_full_tile(&frame, options)?,
+        _ => {
+            return Err("variant must be baseline, bounded-shard, or bounded-full-tile".into());
+        }
     };
     let info = inspect16(&encoded)?;
     let full = decode16(&encoded, 1)?;
@@ -1126,11 +1156,13 @@ fn print_help() {
 USAGE:
   fastvid demo [WIDTH HEIGHT QUALITY THREADS OUTPUT]
   fastvid encode-yuv422 INPUT OUTPUT WIDTH HEIGHT FPS_NUM/FPS_DEN QUALITY THREADS TILE_SIZE
-  fastvid encode-yuv422p16le INPUT OUTPUT WIDTH HEIGHT FPS_NUM/FPS_DEN BIT_DEPTH QUALITY THREADS TILE_SIZE
-  fastvid encode-yuv422p16le-parallel INPUT OUTPUT WIDTH HEIGHT FPS_NUM/FPS_DEN BIT_DEPTH QUALITY THREADS TILE_SIZE
+  fastvid encode-yuv422p16le INPUT OUTPUT WIDTH HEIGHT FPS_NUM/FPS_DEN BIT_DEPTH QUALITY THREADS TILE_WIDTH [TILE_HEIGHT]
+  fastvid encode-yuv422p16le-parallel INPUT OUTPUT WIDTH HEIGHT FPS_NUM/FPS_DEN BIT_DEPTH QUALITY THREADS TILE_WIDTH [TILE_HEIGHT]
+  fastvid encode-yuv422p16le-parallel-full-tile INPUT OUTPUT WIDTH HEIGHT FPS_NUM/FPS_DEN BIT_DEPTH QUALITY THREADS TILE_WIDTH [TILE_HEIGHT]
   fastvid benchmark-yuv422 INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES QUALITY THREADS [GOP [TILE_WIDTH TILE_HEIGHT]]
   fastvid benchmark-yuv422p16le INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES BIT_DEPTH QUALITY THREADS [GOP [TILE_WIDTH TILE_HEIGHT]]
   fastvid benchmark-yuv422p16le-parallel INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES BIT_DEPTH QUALITY THREADS [GOP [TILE_WIDTH TILE_HEIGHT]]
+  fastvid benchmark-yuv422p16le-parallel-full-tile INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES BIT_DEPTH QUALITY THREADS [GOP [TILE_WIDTH TILE_HEIGHT]]
   fastvid benchmark-tile-access-yuv422p16le INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN BIT_DEPTH QUALITY ITERATIONS VARIANT
   fastvid metrics-yuv422p16le REFERENCE DECODED WIDTH HEIGHT FRAMES BIT_DEPTH
   fastvid benchmark-access-yuv422 INPUT WIDTH HEIGHT FPS_NUM/FPS_DEN FRAMES QUALITY THREADS GOP TARGETS [TILE_WIDTH TILE_HEIGHT]

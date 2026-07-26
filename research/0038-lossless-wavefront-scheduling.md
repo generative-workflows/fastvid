@@ -97,3 +97,4 @@ throughput.
 - [EXP-0106](../experiments/EXP-0106-diagonal-residual-order-model.md)
 - [EXP-0107](../experiments/EXP-0107-combined-wavefront-entropy-model.md)
 - [EXP-0108](../experiments/EXP-0108-bounded-shard-stream-prototype.md)
+- [EXP-0110](../experiments/EXP-0110-full-tile-bounded-shards.md)

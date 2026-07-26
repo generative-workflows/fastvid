@@ -19,7 +19,7 @@ pub use codec::{
 pub use codec16::{
     DecodedTile16, analyze_entropy16, analyze_predictor_frame16, analyze_predictors16,
     analyze_residual_mapping16, decode_tile16, decode16, decode16_with_reference, encode16,
-    encode16_parallel, encode16_with_reference, inspect16,
+    encode16_parallel, encode16_parallel_full_tile, encode16_with_reference, inspect16,
 };
 pub use metrics::{
     QualityMetrics, QualityMetrics16, compare_plane, compare_plane16, ssim_plane,

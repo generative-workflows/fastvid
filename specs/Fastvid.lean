@@ -212,4 +212,20 @@ theorem full_shard_lane_span :
     parallelShardSymbols / parallelRiceLanes = 1024 := by
   decide
 
+/-- Version-five full-tile clamp-gradient wavefronts at default geometry. -/
+def defaultTileWavefrontRounds : Nat := 256 + 128 - 1
+
+theorem default_tile_wavefront_rounds :
+    defaultTileWavefrontRounds = 383 := by
+  decide
+
+/-- Maximum version-five fixed-block body: 32 controls plus 17-bit symbols. -/
+def maximumParallelBlockBodyBytes : Nat :=
+  parallelShardSymbols / 128 + parallelShardSymbols * 17 / 8
+
+/-- A `u16` canonically represents every selected version-five shard body. -/
+theorem parallel_block_body_fits_u16 :
+    maximumParallelBlockBodyBytes < 2 ^ 16 := by
+  decide
+
 end Fastvid

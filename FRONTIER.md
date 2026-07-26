@@ -33,6 +33,14 @@ of the modeled scalar payload. This keeps tiny UI/cut streams byte-identical
 while exposing instruction-level parallelism on larger camera and graphics
 tiles.
 
+Experimental version 5 is the leading low-serialization branch, not a
+preserved CPU slot. It keeps the speed tier's full-tile clamp-gradient
+residuals but splits entropy into 4,096-symbol zero-run, four-lane Rice, or
+fixed-block shards. EXP-0110 measures +0.801% aggregate q90 bytes, +26.1%
+geometric scalar decode throughput, and +33.1% independent-tile throughput;
+its allocation-heavy diagnostic encoder is only 0.174x the version-2 speed
+path. It remains non-promoted until encoder engineering closes that gap.
+
 The former balanced snapshot (`156054c`, binary `06ef3278…6ab8`) remains a
 reproducible historical reference under EXP-0045. EXP-0061 retired it from
 routine active measurement because speed gains 26.07% encode and 41.23%
@@ -94,8 +102,9 @@ provenance and controls are in
        compatible predictor oracle              fixed-gradient speed tier
                 |                              direct intra/temporal paths
                 |                                block pack / Rice-4
-                |                                       |
-                |                                paired Rice chains
+                |                              /                     \
+                |                    paired Rice chains      full-tile wavefront
+                |                                           bounded entropy v5
         version-2 tile modes
           /             \
 practical guard     maximum compression

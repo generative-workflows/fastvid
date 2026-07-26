@@ -119,7 +119,9 @@ corpus.
   [version 2](specs/format-v2.md) adds tile-local predictor modes and the
   high-bit fixed-block entropy mode. The current 8-bit
   [version 3](specs/format-v3.md) adds tile-local scalar and four-state
-  interleaved order-0 byte-rANS.
+  interleaved order-0 byte-rANS. Experimental high-bit
+  [version 5](specs/format-v5.md) specifies the full-tile
+  wavefront/bounded-entropy candidate.
 - [Research index](research/INDEX.md) records openly usable technical sources.
 - [`experiments/`](experiments) contains immutable accepted/rejected
   experimental design records and detailed performance history.

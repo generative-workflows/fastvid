@@ -11,6 +11,7 @@ const MAGIC: &[u8; 4] = b"FVID";
 const LEGACY_VERSION: u8 = 1;
 const VERSION: u8 = 2;
 const PARALLEL_VERSION: u8 = 4;
+const FULL_TILE_PARALLEL_VERSION: u8 = 5;
 const HEADER_LEN: usize = 32;
 const DIRECTORY_ENTRY_LEN: usize = 32;
 const MAX_TILES: usize = 1 << 20;
@@ -27,6 +28,7 @@ const PREDICT_CLAMP_GRADIENT: u8 = 3;
 const PREDICT_HALF_GRADIENT: u8 = 4;
 const MAX_PREDICTION_MODE: u8 = PREDICT_HALF_GRADIENT;
 const PREDICT_BAND64_CLAMP_GRADIENT: u8 = MAX_PREDICTION_MODE + 1;
+const PREDICT_FULL_TILE_CLAMP_GRADIENT: u8 = PREDICT_BAND64_CLAMP_GRADIENT + 1;
 const PARALLEL_BAND_ROWS: usize = 64;
 const PARALLEL_SHARD_SYMBOLS: usize = 4096;
 const PARALLEL_RICE_LANES: usize = 4;
@@ -102,6 +104,31 @@ pub fn encode16_parallel(frame: &Frame16, options: CodecOptions) -> Result<Vec<u
         encode_parallel_tile(&frame.planes[tile.plane], tile, &quantizer)
     });
     serialize_encoded_tiles(frame, options, &tiles, payloads, PARALLEL_VERSION)
+}
+
+/// Encode the experimental version-5 full-tile predictor with bounded entropy shards.
+pub fn encode16_parallel_full_tile(
+    frame: &Frame16,
+    options: CodecOptions,
+) -> Result<Vec<u8>, CodecError> {
+    frame.validate()?;
+    options.validate()?;
+    let tiles = expected_tiles(
+        frame.width,
+        frame.height,
+        frame.format,
+        options.tile_width,
+        options.tile_height,
+    )?;
+    let quantizer = Quantizer16::new(
+        quantization_step(options.quality, frame.bit_depth()),
+        frame.bit_depth(),
+    );
+    let payloads = parallel_map(tiles.len(), options.threads, |index| {
+        let tile = tiles[index];
+        encode_parallel_full_tile(&frame.planes[tile.plane], tile, &quantizer)
+    });
+    serialize_encoded_tiles(frame, options, &tiles, payloads, FULL_TILE_PARALLEL_VERSION)
 }
 
 pub fn encode16_with_reference(
@@ -266,6 +293,45 @@ fn encode_parallel_tile(plane: &Plane16, tile: Tile, quantizer: &Quantizer16) ->
     }
 }
 
+fn encode_parallel_full_tile(plane: &Plane16, tile: Tile, quantizer: &Quantizer16) -> EncodedTile {
+    let width = tile.width as usize;
+    let height = tile.height as usize;
+    let plane_width = plane.width as usize;
+    let origin_x = tile.x as usize;
+    let origin_y = tile.y as usize;
+    let mut reconstructed_row = vec![0u16; width];
+    let mut folded = Vec::with_capacity(width * height);
+    for y in 0..height {
+        let row_start = (origin_y + y) * plane_width + origin_x;
+        let mut left = 0u16;
+        let mut upper_left = 0u16;
+        for (&sample, reconstructed_slot) in plane.data[row_start..row_start + width]
+            .iter()
+            .zip(&mut reconstructed_row)
+        {
+            let above = *reconstructed_slot;
+            let prediction = (i32::from(left) + i32::from(above) - i32::from(upper_left))
+                .clamp(0, quantizer.max_sample);
+            let quantized = quantizer.quantize(i32::from(sample) - prediction);
+            let reconstructed =
+                (prediction + quantized * quantizer.step).clamp(0, quantizer.max_sample) as u16;
+            folded.push(zigzag(quantized));
+            *reconstructed_slot = reconstructed;
+            upper_left = above;
+            left = reconstructed;
+        }
+    }
+    let mut payload = Vec::new();
+    for shard in folded.chunks(PARALLEL_SHARD_SYMBOLS) {
+        encode_parallel_shard_with_block_pack(shard, &mut payload);
+    }
+    EncodedTile {
+        entropy_mode: ENTROPY_PARALLEL_SHARDS,
+        prediction_mode: PREDICT_FULL_TILE_CLAMP_GRADIENT,
+        payload,
+    }
+}
+
 fn encode_parallel_shard(folded: &[u32], output: &mut Vec<u8>) {
     let zero_run = encode_zero_run_folded(folded);
     let (rice_parameter, rice_body) = encode_parallel_rice(folded);
@@ -278,6 +344,29 @@ fn encode_parallel_shard(folded: &[u32], output: &mut Vec<u8>) {
     put_u32(
         output,
         u32::try_from(body.len()).expect("bounded entropy shard body fits u32"),
+    );
+    output.extend_from_slice(&body);
+}
+
+fn encode_parallel_shard_with_block_pack(folded: &[u32], output: &mut Vec<u8>) {
+    let zero_run = encode_zero_run_folded(folded);
+    let (rice_parameter, rice_body) = encode_parallel_rice(folded);
+    let mut block_pack = Vec::with_capacity(modeled_block_pack_cost(folded));
+    for block in folded.chunks(BLOCK_PACK_SYMBOLS) {
+        put_fixed_block(&mut block_pack, block);
+    }
+    let (mode, body) = [
+        (ENTROPY_ZERO_RUN, zero_run),
+        (ENTROPY_RICE_BASE + rice_parameter, rice_body),
+        (ENTROPY_BLOCK_PACK, block_pack),
+    ]
+    .into_iter()
+    .min_by_key(|(_, body)| body.len())
+    .expect("entropy shards are nonempty");
+    output.push(mode);
+    put_u16(
+        output,
+        u16::try_from(body.len()).expect("bounded entropy shard body fits u16"),
     );
     output.extend_from_slice(&body);
 }
@@ -496,6 +585,7 @@ pub fn analyze_entropy16(bytes: &[u8]) -> Result<Vec<TileEntropyModel>, CodecErr
                 entry.tile.height as usize,
                 sample_count,
                 entry.entropy_mode,
+                entry.prediction_mode,
                 max_folded,
             )?;
             let order0 = model.order0_size();
@@ -795,7 +885,11 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, CodecError> {
         return Err(CodecError::Malformed("bad magic"));
     }
     let version = bytes[4];
-    if version != LEGACY_VERSION && version != VERSION && version != PARALLEL_VERSION {
+    if version != LEGACY_VERSION
+        && version != VERSION
+        && version != PARALLEL_VERSION
+        && version != FULL_TILE_PARALLEL_VERSION
+    {
         return Err(CodecError::Malformed(
             "unsupported high-bit Fastvid version",
         ));
@@ -868,8 +962,8 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, CodecError> {
         let ordinary_entropy = entropy_mode == ENTROPY_ZERO_RUN
             || (ENTROPY_RICE_BASE..=ENTROPY_RICE_BASE + MAX_RICE_PARAMETER).contains(&entropy_mode)
             || (version == VERSION && entropy_mode == ENTROPY_BLOCK_PACK);
-        let parallel_entropy =
-            version == PARALLEL_VERSION && entropy_mode == ENTROPY_PARALLEL_SHARDS;
+        let parallel_entropy = matches!(version, PARALLEL_VERSION | FULL_TILE_PARALLEL_VERSION)
+            && entropy_mode == ENTROPY_PARALLEL_SHARDS;
         if !(ordinary_entropy || parallel_entropy) {
             return Err(CodecError::Malformed("unknown tile entropy mode"));
         }
@@ -878,6 +972,7 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, CodecError> {
             LEGACY_VERSION => prediction_mode <= PREDICT_TEMPORAL,
             VERSION => prediction_mode <= MAX_PREDICTION_MODE,
             PARALLEL_VERSION => prediction_mode == PREDICT_BAND64_CLAMP_GRADIENT,
+            FULL_TILE_PARALLEL_VERSION => prediction_mode == PREDICT_FULL_TILE_CLAMP_GRADIENT,
             _ => false,
         };
         if !prediction_valid {
@@ -886,6 +981,11 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>, CodecError> {
         if version == PARALLEL_VERSION && !parallel_entropy {
             return Err(CodecError::Malformed(
                 "version-4 tile requires bounded-shard entropy",
+            ));
+        }
+        if version == FULL_TILE_PARALLEL_VERSION && !parallel_entropy {
+            return Err(CodecError::Malformed(
+                "version-5 tile requires bounded-shard entropy",
             ));
         }
         let tile = Tile {
@@ -2234,11 +2334,14 @@ fn model_folded_payload(
     height: usize,
     sample_count: usize,
     entropy_mode: u8,
+    prediction_mode: u8,
     max_folded: u32,
 ) -> Result<ByteFormatModel, CodecError> {
     let mut model = ByteFormatModel::default();
     if entropy_mode == ENTROPY_PARALLEL_SHARDS {
-        for value in decode_parallel_folded_payload(payload, width, height, max_folded)? {
+        for value in
+            decode_parallel_folded_payload(payload, width, height, prediction_mode, max_folded)?
+        {
             model.push(value);
         }
         return Ok(model);
@@ -2330,28 +2433,42 @@ fn decode_tile_payload(
     let count = checked_high_area(tile.width, tile.height)?;
     let width = tile.width as usize;
     if entropy_mode == ENTROPY_PARALLEL_SHARDS {
-        if prediction_mode != PREDICT_BAND64_CLAMP_GRADIENT || reference.is_some() {
+        if !matches!(
+            prediction_mode,
+            PREDICT_BAND64_CLAMP_GRADIENT | PREDICT_FULL_TILE_CLAMP_GRADIENT
+        ) || reference.is_some()
+        {
             return Err(CodecError::Malformed(
-                "bounded shards require all-intra 64-row prediction",
+                "bounded shards require a supported all-intra predictor",
             ));
         }
         let folded = decode_parallel_folded_payload(
             payload,
             width,
             tile.height as usize,
+            prediction_mode,
             u32::from(max_sample) * 2,
         )?;
-        return Ok(reconstruct_parallel_bands(
+        let band_rows = if prediction_mode == PREDICT_BAND64_CLAMP_GRADIENT {
+            PARALLEL_BAND_ROWS
+        } else {
+            tile.height as usize
+        };
+        return Ok(reconstruct_clamp_gradient_bands(
             &folded,
             width,
             tile.height as usize,
+            band_rows,
             step,
             max_sample,
         ));
     }
-    if prediction_mode == PREDICT_BAND64_CLAMP_GRADIENT {
+    if matches!(
+        prediction_mode,
+        PREDICT_BAND64_CLAMP_GRADIENT | PREDICT_FULL_TILE_CLAMP_GRADIENT
+    ) {
         return Err(CodecError::Malformed(
-            "64-row prediction requires bounded-shard entropy",
+            "parallel prediction requires bounded-shard entropy",
         ));
     }
     let context = PredictionContext {
@@ -2380,6 +2497,7 @@ fn decode_parallel_folded_payload(
     payload: &[u8],
     width: usize,
     height: usize,
+    prediction_mode: u8,
     max_folded: u32,
 ) -> Result<Vec<u32>, CodecError> {
     let sample_count = width
@@ -2387,8 +2505,18 @@ fn decode_parallel_folded_payload(
         .ok_or(CodecError::LimitExceeded("tile is too large"))?;
     let mut output = Vec::with_capacity(sample_count);
     let mut cursor = 0usize;
-    for band_y in (0..height).step_by(PARALLEL_BAND_ROWS) {
-        let band_height = PARALLEL_BAND_ROWS.min(height - band_y);
+    let band_rows = if prediction_mode == PREDICT_BAND64_CLAMP_GRADIENT {
+        PARALLEL_BAND_ROWS
+    } else if prediction_mode == PREDICT_FULL_TILE_CLAMP_GRADIENT {
+        height
+    } else {
+        return Err(CodecError::Malformed(
+            "bounded shards require a supported predictor",
+        ));
+    };
+    let allow_block_pack = prediction_mode == PREDICT_FULL_TILE_CLAMP_GRADIENT;
+    for band_y in (0..height).step_by(band_rows) {
+        let band_height = band_rows.min(height - band_y);
         let band_samples = width
             .checked_mul(band_height)
             .ok_or(CodecError::LimitExceeded("predictor band is too large"))?;
@@ -2397,8 +2525,13 @@ fn decode_parallel_folded_payload(
             let mode = *payload
                 .get(cursor)
                 .ok_or(CodecError::Malformed("truncated entropy shard header"))?;
-            let body_length = get_u32(payload, cursor + 1)? as usize;
-            cursor += 5;
+            let short_header = prediction_mode == PREDICT_FULL_TILE_CLAMP_GRADIENT;
+            let body_length = if short_header {
+                get_u16(payload, cursor + 1)? as usize
+            } else {
+                get_u32(payload, cursor + 1)? as usize
+            };
+            cursor += if short_header { 3 } else { 5 };
             let end = cursor
                 .checked_add(body_length)
                 .filter(|&end| end <= payload.len())
@@ -2409,6 +2542,8 @@ fn decode_parallel_folded_payload(
                 decode_zero_run_folded(body, count, max_folded)?
             } else if (ENTROPY_RICE_BASE..=ENTROPY_RICE_BASE + MAX_RICE_PARAMETER).contains(&mode) {
                 decode_parallel_rice_folded(body, count, mode - ENTROPY_RICE_BASE, max_folded)?
+            } else if allow_block_pack && mode == ENTROPY_BLOCK_PACK {
+                decode_block_pack_folded(body, count, max_folded)?
             } else {
                 return Err(CodecError::Malformed("unknown entropy shard mode"));
             };
@@ -2492,17 +2627,57 @@ fn decode_parallel_rice_folded(
     Ok(output)
 }
 
-fn reconstruct_parallel_bands(
+fn decode_block_pack_folded(
+    payload: &[u8],
+    sample_count: usize,
+    max_folded: u32,
+) -> Result<Vec<u32>, CodecError> {
+    let max_width = (u32::BITS - max_folded.leading_zeros()) as u8;
+    let mut output = Vec::with_capacity(sample_count);
+    let mut cursor = 0usize;
+    while output.len() < sample_count {
+        let width = *payload
+            .get(cursor)
+            .ok_or(CodecError::Malformed("truncated block-pack control"))?;
+        cursor += 1;
+        if width > max_width {
+            return Err(CodecError::Malformed("block-pack width is out of range"));
+        }
+        let count = BLOCK_PACK_SYMBOLS.min(sample_count - output.len());
+        let bytes = (count * usize::from(width)).div_ceil(8);
+        let end = cursor
+            .checked_add(bytes)
+            .filter(|&end| end <= payload.len())
+            .ok_or(CodecError::Malformed("truncated block-pack payload"))?;
+        let mut reader = BitReader::new(&payload[cursor..end]);
+        for _ in 0..count {
+            let folded = reader.get_bits(width)?;
+            if folded > max_folded {
+                return Err(CodecError::Malformed("residual is out of range"));
+            }
+            output.push(folded);
+        }
+        reader.finish()?;
+        cursor = end;
+    }
+    if cursor != payload.len() {
+        return Err(CodecError::Malformed("trailing block-pack shard bytes"));
+    }
+    Ok(output)
+}
+
+fn reconstruct_clamp_gradient_bands(
     folded: &[u32],
     width: usize,
     height: usize,
+    band_rows: usize,
     step: i32,
     max_sample: u16,
 ) -> Vec<u16> {
     let mut output = Vec::with_capacity(folded.len());
     let mut source = 0usize;
-    for band_y in (0..height).step_by(PARALLEL_BAND_ROWS) {
-        let band_height = PARALLEL_BAND_ROWS.min(height - band_y);
+    for band_y in (0..height).step_by(band_rows) {
+        let band_height = band_rows.min(height - band_y);
         let mut reconstructed_row = vec![0u16; width];
         for _ in 0..band_height {
             let mut left = 0u16;
@@ -3401,6 +3576,58 @@ mod tests {
     }
 
     #[test]
+    fn full_tile_bounded_shards_round_trip_and_select_block_pack() {
+        for bit_depth in [10, 12, 16] {
+            let frame = patterned_frame(bit_depth, false);
+            for quality in [90, 100] {
+                let encoded = encode16_parallel_full_tile(&frame, options(quality)).unwrap();
+                assert_eq!(encoded[4], FULL_TILE_PARALLEL_VERSION);
+                let info = inspect16(&encoded).unwrap();
+                assert_eq!(info.parallel_shard_tiles, info.tile_count);
+                assert_eq!(
+                    analyze_entropy16(&encoded)
+                        .unwrap()
+                        .iter()
+                        .map(|model| model.sample_count)
+                        .sum::<usize>(),
+                    frame.planes.iter().map(|plane| plane.data.len()).sum()
+                );
+                let decoded = decode16(&encoded, 2).unwrap();
+                let bound = (quantization_step(quality, bit_depth) / 2) as u16;
+                for (expected, actual) in frame.planes.iter().zip(&decoded.planes) {
+                    assert!(
+                        expected
+                            .data
+                            .iter()
+                            .zip(&actual.data)
+                            .all(|(&expected, &actual)| expected.abs_diff(actual) <= bound)
+                    );
+                }
+                if quality == 100 {
+                    assert_eq!(decoded, frame);
+                }
+                for tile_index in 0..info.tile_count {
+                    let tile = decode_tile16(&encoded, tile_index).unwrap();
+                    assert_eq!(tile.data.len(), (tile.width * tile.height) as usize);
+                }
+            }
+        }
+
+        let folded = (0..PARALLEL_SHARD_SYMBOLS)
+            .map(|index| ((index * 977 + index * index * 17 + 131) % 2048) as u32)
+            .collect::<Vec<_>>();
+        let mut encoded = Vec::new();
+        encode_parallel_shard_with_block_pack(&folded, &mut encoded);
+        assert_eq!(encoded[0], ENTROPY_BLOCK_PACK);
+        let body_len = get_u16(&encoded, 1).unwrap() as usize;
+        assert_eq!(body_len + 3, encoded.len());
+        assert_eq!(
+            decode_block_pack_folded(&encoded[3..], folded.len(), 2047).unwrap(),
+            folded
+        );
+    }
+
+    #[test]
     fn bounded_shard_stream_rejects_noncanonical_controls_and_payloads() {
         let frame = patterned_frame(10, true);
         let encoded = encode16_parallel(&frame, options(100)).unwrap();
@@ -3438,6 +3665,23 @@ mod tests {
         let mut excessive_run = Vec::new();
         put_varint(&mut excessive_run, 2);
         assert!(decode_zero_run_folded(&excessive_run, 1, 1023).is_err());
+
+        let full_tile = encode16_parallel_full_tile(&frame, options(100)).unwrap();
+        let payload_offset = parse(&full_tile).unwrap().entries[0].offset;
+        let mut unknown_full_tile_mode = full_tile.clone();
+        unknown_full_tile_mode[payload_offset] = u8::MAX;
+        assert!(decode16(&unknown_full_tile_mode, 1).is_err());
+
+        let mut excessive_short_length = full_tile.clone();
+        excessive_short_length[payload_offset + 1..payload_offset + 3]
+            .copy_from_slice(&u16::MAX.to_le_bytes());
+        assert!(decode16(&excessive_short_length, 1).is_err());
+
+        let mut version_four_block_pack = full_tile;
+        version_four_block_pack[4] = PARALLEL_VERSION;
+        version_four_block_pack[HEADER_LEN + 2] = PREDICT_BAND64_CLAMP_GRADIENT;
+        version_four_block_pack[payload_offset] = ENTROPY_BLOCK_PACK;
+        assert!(decode16(&version_four_block_pack, 1).is_err());
     }
 
     #[test]

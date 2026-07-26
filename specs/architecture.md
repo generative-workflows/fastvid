@@ -53,19 +53,23 @@ indices into homogeneous predictor/entropy queues to avoid SIMD/warp
 divergence. The scalar Rust mapping remains normative and must agree exactly
 with future CPU SIMD and CUDA kernels.
 
-The leading measured format model is EXP-0107: independent 64-row predictor
-bands retain raster residual order, split entropy at 4,096 symbols, and use
-four byte-aligned Rice lanes where Rice wins. It bounds predictor units to
-16,384 samples and entropy states to 4,096 symbols for +1.727% aggregate
-modeled high-bit q90 bytes. This is accepted design evidence, not yet
-normative syntax or an implemented stream version.
-
 EXP-0108 implemented that model as diagnostic high-bit version 4. It improved
 scalar decode and independent-tile access, but was rejected as a frontier
 format because its actual block-pack-relative q90 rate regressed 3.846% and
 its exhaustive scalar encoder reached only about 10–11 MP/s. The next branch
-retains bounded raster entropy shards but removes predictor-band restarts by
+retained bounded raster entropy shards but removed predictor-band restarts by
 using the full-tile wavefront dependency graph.
+
+EXP-0110 implements that branch as experimental high-bit version 5. Full-tile
+clamp-gradient prediction preserves version 2's residual field, while
+4,096-symbol raster shards independently select zero-run, four-lane Rice, or
+128-symbol fixed-block bodies. Compact 16-bit shard lengths are sufficient
+because fixed block bounds every selected body below 64 KiB. On the native
+q90 screen this costs 0.801% aggregate bytes, improves scalar full decode
+26.1% geometrically, and improves independent-tile access 33.1%. Its current
+scalar encoder constructs all candidate bodies and is diagnostic rather than
+speed-competitive. The format maps to a two-pass classify/scan/disjoint-write
+CUDA pipeline without shared append serialization.
 
 Research and quantitative gates are in
 [`research/0037-parallel-hardware-friendly-codecs.md`](../research/0037-parallel-hardware-friendly-codecs.md)
