@@ -293,6 +293,7 @@ fn encode_parallel_tile(plane: &Plane16, tile: Tile, quantizer: &Quantizer16) ->
     }
 }
 
+#[cfg_attr(feature = "profile-stages", inline(never))]
 fn encode_parallel_full_tile(plane: &Plane16, tile: Tile, quantizer: &Quantizer16) -> EncodedTile {
     let width = tile.width as usize;
     let height = tile.height as usize;
@@ -348,6 +349,7 @@ fn encode_parallel_shard(folded: &[u32], output: &mut Vec<u8>) {
     output.extend_from_slice(&body);
 }
 
+#[cfg_attr(feature = "profile-stages", inline(never))]
 fn encode_parallel_shard_with_block_pack(folded: &[u32], output: &mut Vec<u8>) {
     let zero_run = encode_zero_run_folded(folded);
     let (rice_parameter, rice_body) = encode_parallel_rice(folded);
@@ -371,6 +373,7 @@ fn encode_parallel_shard_with_block_pack(folded: &[u32], output: &mut Vec<u8>) {
     output.extend_from_slice(&body);
 }
 
+#[cfg_attr(feature = "profile-stages", inline(never))]
 fn encode_zero_run_folded(folded: &[u32]) -> Vec<u8> {
     let mut output = Vec::new();
     let mut run = 0u32;
@@ -386,6 +389,7 @@ fn encode_zero_run_folded(folded: &[u32]) -> Vec<u8> {
     output
 }
 
+#[cfg_attr(feature = "profile-stages", inline(never))]
 fn encode_parallel_rice(folded: &[u32]) -> (u8, Vec<u8>) {
     let lane_count = PARALLEL_RICE_LANES.min(folded.len());
     let parameter = best_parallel_rice_parameter(folded);
@@ -412,6 +416,7 @@ fn encode_parallel_rice(folded: &[u32]) -> (u8, Vec<u8>) {
     (parameter, body)
 }
 
+#[cfg_attr(feature = "profile-stages", inline(never))]
 fn best_parallel_rice_parameter(folded: &[u32]) -> u8 {
     let lane_count = PARALLEL_RICE_LANES.min(folded.len());
     let mut best_parameter = 0;
@@ -1385,6 +1390,7 @@ fn sample_fixed_gradient_entropy(
     )
 }
 
+#[cfg_attr(feature = "profile-stages", inline(never))]
 fn modeled_block_pack_cost(folded: &[u32]) -> usize {
     folded
         .chunks(BLOCK_PACK_SYMBOLS)
@@ -1451,6 +1457,7 @@ fn encode_fixed_gradient_block_tile(
     }
 }
 
+#[cfg_attr(feature = "profile-stages", inline(never))]
 fn put_fixed_block(output: &mut Vec<u8>, folded: &[u32]) {
     let maximum = folded.iter().copied().max().unwrap_or(0);
     let width = (u32::BITS - maximum.leading_zeros()) as u8;
