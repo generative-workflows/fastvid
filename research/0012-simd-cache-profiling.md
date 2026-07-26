@@ -68,3 +68,4 @@ bottleneck.
 - [EXP-0116](../experiments/EXP-0116-version5-stage-decomposition.md)
 - [EXP-0118](../experiments/EXP-0118-post-paired-rice-profile.md)
 - [EXP-0121](../experiments/EXP-0121-emission-binary-frontend-counters.md)
+- [EXP-0124](../experiments/EXP-0124-post-direct-emission-profile.md)
