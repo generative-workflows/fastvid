@@ -392,35 +392,47 @@ fn encode_zero_run_folded(folded: &[u32]) -> Vec<u8> {
 #[cfg_attr(feature = "profile-stages", inline(never))]
 fn encode_parallel_rice(folded: &[u32]) -> (u8, Vec<u8>) {
     let lane_count = PARALLEL_RICE_LANES.min(folded.len());
-    let parameter = best_parallel_rice_parameter(folded);
-    let mut lanes = vec![Vec::new(); lane_count];
-    for (lane, lane_output) in lanes.iter_mut().enumerate() {
-        let mut writer = BitWriter::new(lane_output);
-        for &value in folded.iter().skip(lane).step_by(lane_count) {
-            writer.put_rice(value, parameter);
-        }
-        writer.finish();
-    }
+    let selection = best_parallel_rice_parameter(folded);
     let length_bytes = lane_count.saturating_sub(1) * size_of::<u32>();
-    let payload_bytes = lanes.iter().map(Vec::len).sum::<usize>();
-    let mut body = Vec::with_capacity(length_bytes + payload_bytes);
-    for lane in lanes.iter().take(lane_count.saturating_sub(1)) {
-        put_u32(
-            &mut body,
-            u32::try_from(lane.len()).expect("bounded Rice lane fits u32"),
+    let payload_bytes = selection.lane_bytes[..lane_count].iter().sum::<usize>();
+    let mut body = vec![0u8; length_bytes + payload_bytes];
+    for (lane, &lane_bytes) in selection.lane_bytes[..lane_count.saturating_sub(1)]
+        .iter()
+        .enumerate()
+    {
+        let start = lane * size_of::<u32>();
+        body[start..start + size_of::<u32>()].copy_from_slice(
+            &u32::try_from(lane_bytes)
+                .expect("bounded Rice lane fits u32")
+                .to_le_bytes(),
         );
     }
-    for lane in lanes {
-        body.extend_from_slice(&lane);
+    let mut payload_offset = length_bytes;
+    for (lane, &lane_bytes) in selection.lane_bytes[..lane_count].iter().enumerate() {
+        let lane_output = &mut body[payload_offset..payload_offset + lane_bytes];
+        let mut writer = SliceBitWriter::new(lane_output);
+        for &value in folded.iter().skip(lane).step_by(lane_count) {
+            writer.put_rice(value, selection.parameter);
+        }
+        writer.finish();
+        payload_offset += lane_bytes;
     }
-    (parameter, body)
+    debug_assert_eq!(payload_offset, body.len());
+    (selection.parameter, body)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ParallelRiceSelection {
+    parameter: u8,
+    lane_bytes: [usize; PARALLEL_RICE_LANES],
 }
 
 #[cfg_attr(feature = "profile-stages", inline(never))]
-fn best_parallel_rice_parameter(folded: &[u32]) -> u8 {
+fn best_parallel_rice_parameter(folded: &[u32]) -> ParallelRiceSelection {
     let lane_count = PARALLEL_RICE_LANES.min(folded.len());
     let mut best_parameter = 0;
     let mut best_bytes = u64::MAX;
+    let mut best_lane_bytes = [0usize; PARALLEL_RICE_LANES];
     let mut previous_total_bits = None;
     let mut parameter = 0;
     while parameter <= MAX_RICE_PARAMETER {
@@ -445,6 +457,7 @@ fn best_parallel_rice_parameter(folded: &[u32]) -> u8 {
             quotient_sums[0],
             &mut best_parameter,
             &mut best_bytes,
+            &mut best_lane_bytes,
             &mut previous_total_bits,
         ) {
             break;
@@ -456,6 +469,7 @@ fn best_parallel_rice_parameter(folded: &[u32]) -> u8 {
                 quotient_sums[1],
                 &mut best_parameter,
                 &mut best_bytes,
+                &mut best_lane_bytes,
                 &mut previous_total_bits,
             )
         {
@@ -463,7 +477,10 @@ fn best_parallel_rice_parameter(folded: &[u32]) -> u8 {
         }
         parameter += 2;
     }
-    best_parameter
+    ParallelRiceSelection {
+        parameter: best_parameter,
+        lane_bytes: best_lane_bytes,
+    }
 }
 
 #[inline(always)]
@@ -473,6 +490,7 @@ fn update_best_parallel_rice_parameter(
     quotient_sum: u64,
     best_parameter: &mut u8,
     best_bytes: &mut u64,
+    best_lane_bytes: &mut [usize; PARALLEL_RICE_LANES],
     previous_total_bits: &mut Option<u64>,
 ) -> bool {
     let bytes = lane_bits.iter().map(|&lane| lane.div_ceil(8)).sum::<u64>();
@@ -480,6 +498,9 @@ fn update_best_parallel_rice_parameter(
     if bytes < *best_bytes {
         *best_parameter = parameter;
         *best_bytes = bytes;
+        for (best, &bits) in best_lane_bytes.iter_mut().zip(lane_bits) {
+            *best = usize::try_from(bits.div_ceil(8)).expect("bounded Rice lane fits usize");
+        }
     }
     // B(p) = n(p + 1) + sum(value >> p) is discrete-convex:
     // B(p + 1) - B(p) increases with p. Once B stops falling,
@@ -3330,6 +3351,79 @@ impl<'a> BitWriter<'a> {
     }
 }
 
+struct SliceBitWriter<'a> {
+    output: &'a mut [u8],
+    cursor: usize,
+    buffer: u64,
+    buffered_bits: u8,
+}
+
+impl<'a> SliceBitWriter<'a> {
+    fn new(output: &'a mut [u8]) -> Self {
+        Self {
+            output,
+            cursor: 0,
+            buffer: 0,
+            buffered_bits: 0,
+        }
+    }
+
+    fn put_rice(&mut self, value: u32, parameter: u8) {
+        let quotient = value >> parameter;
+        let code_bits = quotient + 1 + u32::from(parameter);
+        if code_bits <= u32::from(64 - self.buffered_bits) {
+            let remainder_mask = (1u64 << parameter) - 1;
+            let code = (1u64 << quotient) | ((u64::from(value) & remainder_mask) << (quotient + 1));
+            self.buffer |= code << self.buffered_bits;
+            self.buffered_bits += code_bits as u8;
+            self.flush_bytes();
+            return;
+        }
+        self.put_zeros(quotient);
+        self.put_bits(1, 1);
+        self.put_bits(value, parameter);
+    }
+
+    fn put_zeros(&mut self, mut count: u32) {
+        while count != 0 {
+            let added = count.min(u32::from(64 - self.buffered_bits));
+            self.buffered_bits += added as u8;
+            count -= added;
+            self.flush_bytes();
+        }
+    }
+
+    fn put_bits(&mut self, value: u32, count: u8) {
+        debug_assert!(count <= 17);
+        if count != 0 {
+            self.buffer |= (u64::from(value) & ((1u64 << count) - 1)) << self.buffered_bits;
+            self.buffered_bits += count;
+            self.flush_bytes();
+        }
+    }
+
+    fn flush_bytes(&mut self) {
+        while self.buffered_bits >= 8 {
+            self.output[self.cursor] = self.buffer as u8;
+            self.cursor += 1;
+            self.buffer >>= 8;
+            self.buffered_bits -= 8;
+        }
+    }
+
+    fn finish(mut self) {
+        if self.buffered_bits != 0 {
+            self.output[self.cursor] = self.buffer as u8;
+            self.cursor += 1;
+        }
+        assert_eq!(
+            self.cursor,
+            self.output.len(),
+            "selected Rice lane length must match emission"
+        );
+    }
+}
+
 struct BitReader<'a> {
     input: &'a [u8],
     cursor: usize,
@@ -4086,11 +4180,57 @@ mod tests {
             .unwrap()
     }
 
+    fn encode_parallel_rice_vector_reference(folded: &[u32]) -> (u8, Vec<u8>) {
+        let lane_count = PARALLEL_RICE_LANES.min(folded.len());
+        let parameter = best_parallel_rice_parameter(folded).parameter;
+        let mut lanes = vec![Vec::new(); lane_count];
+        for (lane, lane_output) in lanes.iter_mut().enumerate() {
+            let mut writer = BitWriter::new(lane_output);
+            for &value in folded.iter().skip(lane).step_by(lane_count) {
+                writer.put_rice(value, parameter);
+            }
+            writer.finish();
+        }
+        let mut body = Vec::new();
+        for lane in lanes.iter().take(lane_count.saturating_sub(1)) {
+            put_u32(
+                &mut body,
+                u32::try_from(lane.len()).expect("bounded Rice lane fits u32"),
+            );
+        }
+        for lane in lanes {
+            body.extend_from_slice(&lane);
+        }
+        (parameter, body)
+    }
+
+    #[test]
+    fn direct_parallel_rice_lanes_match_vector_reference() {
+        for length in [1, 2, 3, 4, 5, 127, 128, 4095, 4096] {
+            let folded = (0..length)
+                .map(|index| {
+                    let mixed = index * 4093 + index * index * 17 + 131;
+                    if index % 127 == 0 {
+                        131_070
+                    } else if index % 31 == 0 {
+                        0
+                    } else {
+                        (mixed % 131_071) as u32
+                    }
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                encode_parallel_rice(&folded),
+                encode_parallel_rice_vector_reference(&folded)
+            );
+        }
+    }
+
     #[test]
     fn parallel_rice_early_termination_matches_full_scan() {
         for value in 0..=131_070 {
             assert_eq!(
-                best_parallel_rice_parameter(&[value]),
+                best_parallel_rice_parameter(&[value]).parameter,
                 best_parallel_rice_parameter_full_scan(&[value])
             );
         }
@@ -4099,7 +4239,7 @@ mod tests {
                 .map(|index| ((index * 4093 + index * index * 17 + 131) % 131_071) as u32)
                 .collect::<Vec<_>>();
             assert_eq!(
-                best_parallel_rice_parameter(&folded),
+                best_parallel_rice_parameter(&folded).parameter,
                 best_parallel_rice_parameter_full_scan(&folded)
             );
         }

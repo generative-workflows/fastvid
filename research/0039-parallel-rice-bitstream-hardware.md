@@ -92,3 +92,4 @@ and maximum codeword/lane output in addition to MP/s.
 - [EXP-0112](../experiments/EXP-0112-version5-encode-profile.md)
 - [EXP-0113](../experiments/EXP-0113-parallel-rice-early-termination.md)
 - [EXP-0114](../experiments/EXP-0114-parallel-rice-grouped-emission.md)
+- [EXP-0123](../experiments/EXP-0123-matched-direct-emission-isolation.md)

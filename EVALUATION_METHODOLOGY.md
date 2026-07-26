@@ -237,7 +237,8 @@ time repeated encode-only or decode-only work in separate processes, and
 alternate binary order. Report the isolated result alongside—not instead
 of—the ordinary end-to-end row. EXP-0121 motivates this rule: aggregate
 frontend counters could not explain a repeated unchanged-decoder movement
-after byte-identical Rice-writer changes.
+after byte-identical Rice-writer changes. Preserved complete binaries use
+`scripts/benchmark-decode-binary-ab.sh` for the isolated high-bit diagnostic.
 
 MP/s counts full-resolution luma pixels, independent of chroma subsampling.
 For the canonical planar 8-bit YUV 4:2:2 input, an even-width frame contains
