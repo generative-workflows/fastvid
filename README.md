@@ -1,8 +1,9 @@
 # Fastvid
 
-Fastvid is an experimental CPU-oriented intermediate video codec focused on
-high fidelity, high throughput, compact frames, and inexpensive frame/tile
-access.
+Fastvid is an experimental intermediate video codec focused on high fidelity,
+high throughput, compact frames, and inexpensive frame/tile access. The current
+implementation is a Rust CPU reference; the version-5 format is structured for
+a future CUDA backend.
 
 The current version supports planar 8/10/12/16-bit YUV 4:2:2 and grayscale,
 independently coded tiles, spatial prediction, optional short-GOP temporal
@@ -26,87 +27,67 @@ The demo generates a deterministic frame and reports compression, encode/decode
 throughput, PSNR, and luma block SSIM. Run `cargo run -- --help` for raw-frame
 commands.
 
-## Maximum-compression full-corpus benchmark
+## Current benchmark snapshot
 
-Current maximum-compression snapshot on a 4-vCPU AMD EPYC-Genoa VM with Rust
-1.97.1 in release mode. This is the 18-sample corpus-v2 codec track at GOP 1,
-one thread, after warm-up and two balanced recorded trials per cell.
+The current CPU-to-CUDA handoff baseline is the native high-bit version-5
+all-intra path on the four-sample procedural corpus. It is intentionally small
+enough to rerun during GPU development; the broader corpus remains the
+confirmation suite.
 
-| Quality | Threads | Geo. ratio | Encode | Raw encode | Decode | Raw decode | Mean Y PSNR | Mean SSIM |
+### Rate and quality
+
+| Quality | Total ratio | Geo. ratio | Bits/luma px | Mean bitrate | Mean Y PSNR | Mean SSIM | Mean Y XPSNR | Worst error |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 90 | 1 | 9.191x | 16.43 MP/s | 32.86 MB/s | 49.21 MP/s | 98.42 MB/s | 49.908 dB | 0.996653 |
-| 100 | 1 | 5.983x | 15.95 MP/s | 31.90 MB/s | 47.01 MP/s | 94.02 MB/s | exact | 1.000000 |
+| 60 | 10.273x | 11.328x | 3.654 | 140.32 Mb/s | 40.756 dB | 0.953148 | 38.308 dB | 1024 |
+| 75 | 9.285x | 9.564x | 4.139 | 160.30 Mb/s | 44.762 dB | 0.975260 | 42.261 dB | 640 |
+| 90 | 7.357x | 7.325x | 4.940 | 187.42 Mb/s | 52.406 dB | 0.994336 | 49.808 dB | 256 |
+| 95 | 5.213x | 5.678x | 6.488 | 239.01 Mb/s | 57.965 dB | 0.998358 | 55.277 dB | 128 |
+| 100 | 3.572x | 3.605x | 9.237 | 336.64 Mb/s | exact | 1.000000 | exact | 0 |
 
-Compression is the geometric mean of per-sample raw/encoded ratios. Throughput
-and quality columns are arithmetic means of per-sample results; MP/s counts
-full-resolution luma pixels and raw MB/s uses actual planar byte counts.
-Encoded sizes and reconstruction metrics are thread-invariant.
+Bitrate assumes 24 fps. Cross-depth aggregate ratios are useful for screening,
+but per-sample rows are authoritative because raw storage cost changes with bit
+depth.
 
-This table is a current development snapshot, not the full release protocol.
-Performance decisions use warm-up plus repeated, balanced trials as defined in
-[the evaluation methodology](EVALUATION_METHODOLOGY.md). Per-sample rows must
-be retained because synthetic content compresses much more strongly than
-camera/noisy content.
+### CPU speed and thread scaling
 
-This table is not numerically comparable to the automatic frontier graph.
-That graph compares three preserved Fastvid binaries on four pinned
-fast-feedback cases with mixed q90/q100, GOP 1/12, and one/four-thread
-settings, then geometrically aggregates per-case medians. See
-[the frontier summary](benchmarks/README.md) for its exact scope.
+| Quality | Threads | Encode | Encode scaling | Decode | Decode scaling | Raw encode | Raw decode |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 90 | 1 | 0.0503 GP/s | 1.00x | 0.0723 GP/s | 1.00x | 0.201 GB/s | 0.289 GB/s |
+| 90 | 2 | 0.0558 GP/s | 1.11x | 0.0725 GP/s | 1.00x | 0.223 GB/s | 0.290 GB/s |
+| 90 | 4 | 0.1268 GP/s | 2.52x | 0.1509 GP/s | 2.09x | 0.507 GB/s | 0.603 GB/s |
+| 100 | 1 | 0.0407 GP/s | 1.00x | 0.0590 GP/s | 1.00x | 0.163 GB/s | 0.236 GB/s |
+| 100 | 2 | 0.0482 GP/s | 1.18x | 0.0646 GP/s | 1.09x | 0.193 GB/s | 0.258 GB/s |
+| 100 | 4 | 0.1101 GP/s | 2.70x | 0.1448 GP/s | 2.46x | 0.441 GB/s | 0.579 GB/s |
 
-### Matched OpenAPV reference
+These are geometric means of per-sample medians from five post-warmup trials on
+an AMD EPYC Genoa four-vCPU host. The weak two-thread result is an implementation
+issue in the current CPU path, not a format limit. Full per-sample results,
+environment details, metric definitions, and the frozen binary identity are in
+[the version-5 CPU baseline](benchmarks/v5-cpu-baseline.md).
 
-The external-reference panel uses native 10-bit YUV 4:2:2, the same
-1280x720x24 source bytes, all-intra coding, 256x128 tiles, and one thread.
-OpenAPV controls are selected by measured Y-PSNR distance from practical
-Fastvid q90, not by assuming nominal controls are equivalent.
+### Preserved matched OpenAPV target
 
-| Codec | Control | Ratio | Encode | Decode | Y PSNR |
+OpenAPV is a fixed reference and is not rerun in the fast feedback loop. These
+preserved rows use the same 10-bit `high-precision-motion10` input and host:
+
+| Codec / slot | Setting | Ratio | Encode | Decode | Mean Y PSNR |
 |---|---:|---:|---:|---:|---:|
-| Fastvid speed | q90 | 4.809x | 93.79 MP/s | 68.39 MP/s | 52.002 dB |
-| Fastvid practical | q90 | 5.308x | 16.80 MP/s | 60.33 MP/s | 52.002 dB |
-| Fastvid maximum | q90 | 5.308x | 16.92 MP/s | 60.23 MP/s | 52.002 dB |
-| OpenAPV medium | QP 22 | 4.408x | 17.63 MP/s | 63.47 MP/s | 51.535 dB |
-| OpenAPV fastest | QP 23 | 4.464x | 81.18 MP/s | 63.47 MP/s | 51.736 dB |
+| Fastvid speed | q90, 1 thread | 4.809x | 0.0938 GP/s | 0.0684 GP/s | 52.002 dB |
+| OpenAPV fastest | qp23, 1 thread | 4.464x | 0.0812 GP/s | 0.0635 GP/s | 51.736 dB |
+| Fastvid max-compression | q90, 1 thread | 5.308x | 0.0169 GP/s | 0.0602 GP/s | 52.002 dB |
 
-The Fastvid speed branch is a distinct high-bit point with sampled fixed-block
-coding, specialized four-symbol Rice emission, and interleaved independent
-Rice tile chains. At q90 it uses 7.18% less bitrate and measures 0.266 dB
-higher Y-PSNR than OpenAPV `fastest`; Fastvid is 15.53% faster to encode and
-7.75% faster to decode. At four threads Fastvid is 0.69% faster to encode and
-18.87% faster to decode. At the high-fidelity boundary, Fastvid speed q100 is
-exact at 2.744x and 63.84 MP/s encode;
-OpenAPV `fastest` QP0 has maximum error 2 at 1.965x and 63.20 MP/s. These are
-distinct quality boundaries, not a nominal-control match.
-The [matched graph](benchmarks/openapv-frontier.svg) and
-[exact one/four-thread rows](benchmarks/openapv-frontier-summary.tsv) are a
-procedural diagnostic, not a broad natural-HDR claim.
-
-### Maximum-compression native high-bit smoke snapshot
-
-Four to six balanced trials, one thread, using the checksummed native
-high-bit supplement. Stills use GOP 1 and motion uses GOP 12.
-
-| Depth/sample | Quality | Ratio | Encode | Decode | Quality |
-|---|---:|---:|---:|---:|---:|
-| 10-bit HDR gradient | 90 | 5.309x | 16.69 MP/s | 49.03 MP/s | 52.00 dB Y PSNR |
-| 10-bit HDR gradient | 100 | 2.949x | 17.51 MP/s | 47.58 MP/s | exact |
-| 12-bit precision UI | 90 | 7.697x | 21.12 MP/s | 67.64 MP/s | 53.60 dB Y PSNR |
-| 12-bit precision UI | 100 | 4.604x | 17.51 MP/s | 54.21 MP/s | exact |
-| 10-bit precision motion | 90 | 5.763x | 17.24 MP/s | 55.18 MP/s | 52.00 dB Y PSNR |
-| 10-bit precision motion | 100 | 3.102x | 18.52 MP/s | 53.02 MP/s | exact |
-| 16-bit precision motion | 90 | 20.547x | 85.21 MP/s | 248.29 MP/s | 52.93 dB Y PSNR |
-| 16-bit precision motion | 100 | 2.061x | 53.84 MP/s | 71.21 MP/s | exact |
-
-High-bit planar 4:2:2 storage uses four raw bytes per luma pixel, so its raw
-decimal MB/s is four times the listed MP/s. The procedural supplement is a
-precision and performance smoke set, not a calibrated natural-HDR quality
-corpus.
+The complete fixed-target sweep and caveats are in
+[the OpenAPV frontier summary](benchmarks/openapv-frontier-summary.tsv).
+Broader 8-bit corpus results and historical Pareto points live in the
+[benchmark index](benchmarks/README.md) and [frontier](FRONTIER.md), rather than
+being duplicated here.
 
 ## Project documentation
 
 - [Evaluation methodology](EVALUATION_METHODOLOGY.md) defines corpus, quality,
   throughput, bitrate, random-access, and fast/slow feedback protocols.
+- [Version-5 CPU baseline](benchmarks/v5-cpu-baseline.md) is the current
+  CPU-to-CUDA handoff reference.
 - [Codec frontier](FRONTIER.md) and its
   [automatic Pareto graph](benchmarks/frontier.svg) show the current internal
   speed, practical-compression, and maximum-compression tradeoffs. A separate
