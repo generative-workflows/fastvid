@@ -1,4 +1,4 @@
-Fastvid is an intermediate codec designed for high-resolution video.
+Fastvid is a GPU-accelerated intermediate codec designed for high-resolution video.
 
 It balances three goals simultaneously:
     1. Perceptual Similarity
@@ -12,31 +12,28 @@ Evaluation methodology MUST be clearly defined by research and experiments, so f
 
 ## Implementation
 
-This is a Rust project. Rust is chosen for its exceptional speed, zero-cost abstractions, and memory
-safety.
+This is a fast intermediate video codec consisting of two reference implementations: 
+  1. A CPU reference, written in Rust
+  2. A GPU reference, written as a C++/CUDA custom extension for pytorch.
 
-The project should expose a library and a binary, with configurable multi-threading. It's acceptable to create smaller sub-crates for core routines.
+The python API should be extremely simple. For encoding, accept a 16-bit RGB and YUV tensor and encode as 4:2:2 or 4:4:4. For images, support a shape of [3, H, W] or [3, 1, H, W]. For videos, accept [3, T, H, W].
 
-Avoid unsafe code and C/C++ dependencies.
-Safe code is often faster than unsafe code, because it allows LLVM to optimize around invariants.
+Decoding should allow decoding from either VRAM or DRAM. Decoding yields
+tensors on CUDA. The decode API should support decoding everything, as well as decoding selected frames or a range of frames from a video.
 
-Where unsafe code must be used, it should be kept to the minimum possible module, because unsafe code pollutes the entire module. Unsafe code should be accompanied by a comment proving that no invariants are violated.
-
-It's OK to draw on Rust libraries, but generally for minimal things, like byteorder, system APIs,
-and so on. As a low level project, the standard library should be generally suitable.
+Fastvid supports tiled encoding and decoding for use-cases where tile-wise edits are possible with
+lower resident VRAM.
 
 ### Engineering Requirements
 
 The codec should be largely size and length-independent, supporting arbitrary (rational) framerates.
 It should be possible to relatively cheaply decode or re-encode individual frames and tiles, with some overhead acceptable (e.g. needing to decode a few adjacent frames). This is necessary for downstream usage in video editing tasks.
 
-High parallel CPU throughput is desired.
-
-### Optimization Guidelines
-
-Focus on memory access patterns, CPU caches, and memory allocation. Use a data-driven layout oriented around CPU cache lines, fast pre-fetching, minimizing copies.
-
-Trade off memory for speed where reasonable, but aim for low memory amplification.
+Some concrete goals to reach simultaneously:
+  1. >5 GP/s of decoding for ~real-time 4K.
+  2. >3 GP/s of encoding for ~real-time 4K.
+  3. >50dB XPSNR
+  4. >15x compression ratio.
 
 ### Patent Free / Open Source
 
@@ -79,7 +76,7 @@ Experiments, after completion, are IMMUTABLE RECORDS.
 
 ## Perceptual Similarity
 
-This is an engineering goal rather than a hard metric. However, concrete metrics like PSNR, SSIM, 
+This is an engineering goal rather than a hard metric. However, concrete metrics like XPSNR, SSIM, 
 VMAF, and per-pixel error should be used to measure error rates concretely.
 
 We don't need to use "lossless" compression, but we do need to avoid as much perceptual destruction
@@ -113,12 +110,6 @@ As an intermediate codec, we are aiming to maximize compression only as it trade
 goals. 10x compression is a good initial goal, but we will attempt to go further.
 
 Allow the user a light tuning parameter between quality and compression when encoding.
-
-## Color Spaces
-
-Color is the main goal, not alpha. As a hint, consider 422 YUV for a starting point. Having an alpha mode in the future would be interesting.
-
-Also worth having a greyscale-only mode which we can use for encoding masks and alpha channels separately.
 
 ## System Limits
 

@@ -1,0 +1,411 @@
+#include <torch/extension.h>
+#include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAGuard.h>
+#include <c10/cuda/CUDAException.h>
+
+#include <algorithm>
+#include <cstdint>
+#include <vector>
+
+namespace {
+
+constexpr int kBlockSymbols = 128;
+
+__device__ uint32_t read_u32(const uint8_t* bytes) {
+  return static_cast<uint32_t>(bytes[0]) |
+      (static_cast<uint32_t>(bytes[1]) << 8) |
+      (static_cast<uint32_t>(bytes[2]) << 16) |
+      (static_cast<uint32_t>(bytes[3]) << 24);
+}
+
+__device__ bool read_bits(
+    const uint8_t* bytes,
+    int64_t byte_count,
+    int64_t* bit_position,
+    int count,
+    uint32_t* value) {
+  if (count == 0) {
+    *value = 0;
+    return true;
+  }
+  if (*bit_position < 0 || *bit_position + count > byte_count * 8) {
+    return false;
+  }
+  uint32_t result = 0;
+  for (int bit = 0; bit < count; ++bit) {
+    const int64_t position = *bit_position + bit;
+    result |= static_cast<uint32_t>((bytes[position >> 3] >> (position & 7)) & 1) << bit;
+  }
+  *bit_position += count;
+  *value = result;
+  return true;
+}
+
+__device__ bool read_rice(
+    const uint8_t* bytes,
+    int64_t byte_count,
+    int64_t* bit_position,
+    int parameter,
+    uint32_t max_folded,
+    uint32_t* value) {
+  uint32_t quotient = 0;
+  while (true) {
+    uint32_t bit = 0;
+    if (!read_bits(bytes, byte_count, bit_position, 1, &bit)) {
+      return false;
+    }
+    if (bit != 0) {
+      break;
+    }
+    if (++quotient > max_folded) {
+      return false;
+    }
+  }
+  uint32_t remainder = 0;
+  if (!read_bits(bytes, byte_count, bit_position, parameter, &remainder)) {
+    return false;
+  }
+  const uint64_t result = (static_cast<uint64_t>(quotient) << parameter) + remainder;
+  if (result > max_folded) {
+    return false;
+  }
+  *value = static_cast<uint32_t>(result);
+  return true;
+}
+
+__device__ void set_error(int32_t* status, int32_t code) {
+  atomicCAS(status, 0, code);
+}
+
+__global__ void decode_shards_kernel(
+    const uint8_t* encoded,
+    const int64_t* metadata,
+    int64_t shard_count,
+    uint32_t max_folded,
+    uint32_t* folded,
+    int32_t* status) {
+  const int64_t shard = blockIdx.x;
+  if (shard >= shard_count) {
+    return;
+  }
+  const int64_t mode = metadata[shard * 5 + 0];
+  const int64_t body_offset = metadata[shard * 5 + 1];
+  const int64_t body_length = metadata[shard * 5 + 2];
+  const int64_t sample_count = metadata[shard * 5 + 3];
+  const int64_t output_offset = metadata[shard * 5 + 4];
+  const uint8_t* body = encoded + body_offset;
+  uint32_t* output = folded + output_offset;
+
+  if (mode == 0) {
+    if (threadIdx.x != 0) {
+      return;
+    }
+    int64_t cursor = 0;
+    int64_t produced = 0;
+    while (produced < sample_count) {
+      uint32_t token = 0;
+      int shift = 0;
+      int bytes_used = 0;
+      while (true) {
+        if (cursor >= body_length || bytes_used == 5) {
+          set_error(status, 1);
+          return;
+        }
+        const uint8_t byte = body[cursor++];
+        if (bytes_used == 4 && byte > 0x0f) {
+          set_error(status, 1);
+          return;
+        }
+        token |= static_cast<uint32_t>(byte & 0x7f) << shift;
+        ++bytes_used;
+        if ((byte & 0x80) == 0) {
+          break;
+        }
+        shift += 7;
+      }
+      const int canonical_bytes = token < (1u << 7) ? 1
+          : token < (1u << 14) ? 2
+          : token < (1u << 21) ? 3
+          : token < (1u << 28) ? 4
+          : 5;
+      if (bytes_used != canonical_bytes) {
+        set_error(status, 1);
+        return;
+      }
+      if ((token & 1) == 0) {
+        const int64_t run = token / 2 + 1;
+        if (run > sample_count - produced) {
+          set_error(status, 1);
+          return;
+        }
+        for (int64_t i = 0; i < run; ++i) {
+          output[produced++] = 0;
+        }
+      } else {
+        const uint32_t value = (token + 1) / 2;
+        if (value == 0 || value > max_folded) {
+          set_error(status, 1);
+          return;
+        }
+        output[produced++] = value;
+      }
+    }
+    if (cursor != body_length) {
+      set_error(status, 1);
+    }
+    return;
+  }
+
+  if (mode >= 1 && mode <= 17) {
+    const int lane_count = static_cast<int>(sample_count < 4 ? sample_count : 4);
+    const int lane = threadIdx.x;
+    if (lane >= lane_count) {
+      return;
+    }
+    const int64_t table_bytes = (lane_count - 1) * 4;
+    if (table_bytes > body_length) {
+      set_error(status, 2);
+      return;
+    }
+    int64_t lane_offset = table_bytes;
+    for (int i = 0; i < lane; ++i) {
+      lane_offset += read_u32(body + i * 4);
+    }
+    const int64_t lane_length = lane + 1 < lane_count
+        ? read_u32(body + lane * 4)
+        : body_length - lane_offset;
+    if (lane_offset > body_length || lane_length < 0 || lane_length > body_length - lane_offset) {
+      set_error(status, 2);
+      return;
+    }
+    int64_t bit_position = 0;
+    for (int64_t index = lane; index < sample_count; index += lane_count) {
+      uint32_t value = 0;
+      if (!read_rice(body + lane_offset, lane_length, &bit_position,
+                     static_cast<int>(mode - 1), max_folded, &value)) {
+        set_error(status, 2);
+        return;
+      }
+      output[index] = value;
+    }
+    const int64_t used_bytes = (bit_position + 7) / 8;
+    if (used_bytes != lane_length) {
+      set_error(status, 2);
+      return;
+    }
+    if ((bit_position & 7) != 0) {
+      const uint8_t mask = static_cast<uint8_t>(~((1u << (bit_position & 7)) - 1));
+      if ((body[lane_offset + used_bytes - 1] & mask) != 0) {
+        set_error(status, 2);
+      }
+    }
+    return;
+  }
+
+  if (mode == 18) {
+    const int64_t block_count = (sample_count + kBlockSymbols - 1) / kBlockSymbols;
+    const int64_t block = threadIdx.x;
+    if (block >= block_count) {
+      return;
+    }
+    int64_t cursor = 0;
+    for (int64_t prior = 0; prior < block; ++prior) {
+      if (cursor >= body_length) {
+        set_error(status, 3);
+        return;
+      }
+      const int width = body[cursor++];
+      const int64_t prior_remaining = sample_count - prior * kBlockSymbols;
+      const int64_t prior_count = prior_remaining < kBlockSymbols ? prior_remaining : kBlockSymbols;
+      cursor += (prior_count * width + 7) / 8;
+    }
+    if (cursor >= body_length) {
+      set_error(status, 3);
+      return;
+    }
+    const int bit_width = body[cursor++];
+    const int max_width = 32 - __clz(max_folded);
+    if (bit_width > max_width) {
+      set_error(status, 3);
+      return;
+    }
+    const int64_t remaining = sample_count - block * kBlockSymbols;
+    const int64_t count = remaining < kBlockSymbols ? remaining : kBlockSymbols;
+    const int64_t payload_bytes = (count * bit_width + 7) / 8;
+    if (payload_bytes > body_length - cursor) {
+      set_error(status, 3);
+      return;
+    }
+    int64_t bit_position = 0;
+    for (int64_t i = 0; i < count; ++i) {
+      uint32_t value = 0;
+      if (!read_bits(body + cursor, payload_bytes, &bit_position, bit_width, &value) ||
+          value > max_folded) {
+        set_error(status, 3);
+        return;
+      }
+      output[block * kBlockSymbols + i] = value;
+    }
+    if (block + 1 == block_count && cursor + payload_bytes != body_length) {
+      set_error(status, 3);
+    }
+    if ((bit_position & 7) != 0) {
+      const uint8_t mask = static_cast<uint8_t>(~((1u << (bit_position & 7)) - 1));
+      if ((body[cursor + payload_bytes - 1] & mask) != 0) {
+        set_error(status, 3);
+      }
+    }
+    return;
+  }
+
+  set_error(status, 4);
+}
+
+__device__ int32_t unzigzag(uint32_t value) {
+  return (value & 1) == 0
+      ? static_cast<int32_t>(value / 2)
+      : -static_cast<int32_t>(value / 2) - 1;
+}
+
+__global__ void reconstruct_tiles_kernel(
+    const uint32_t* folded,
+    const int64_t* metadata,
+    int64_t tile_count,
+    int32_t step,
+    int32_t max_sample,
+    uint16_t* output) {
+  const int64_t tile = blockIdx.x;
+  if (tile >= tile_count) {
+    return;
+  }
+  const int64_t plane_base = metadata[tile * 7 + 0];
+  const int64_t plane_width = metadata[tile * 7 + 1];
+  const int64_t origin_x = metadata[tile * 7 + 2];
+  const int64_t origin_y = metadata[tile * 7 + 3];
+  const int64_t width = metadata[tile * 7 + 4];
+  const int64_t height = metadata[tile * 7 + 5];
+  const int64_t folded_base = metadata[tile * 7 + 6];
+
+  for (int64_t diagonal = 0; diagonal < width + height - 1; ++diagonal) {
+    const int64_t diagonal_begin = diagonal - width + 1;
+    const int64_t y_begin = diagonal_begin > 0 ? diagonal_begin : 0;
+    const int64_t y_end = diagonal < height - 1 ? diagonal : height - 1;
+    const int64_t count = y_end - y_begin + 1;
+    for (int64_t item = threadIdx.x; item < count; item += blockDim.x) {
+      const int64_t y = y_begin + item;
+      const int64_t x = diagonal - y;
+      const int64_t destination = plane_base + (origin_y + y) * plane_width + origin_x + x;
+      const uint16_t left = x > 0 ? output[destination - 1] : 0;
+      const uint16_t above = y > 0 ? output[destination - plane_width] : 0;
+      const uint16_t upper_left = x > 0 && y > 0 ? output[destination - plane_width - 1] : 0;
+      int32_t prediction = static_cast<int32_t>(left) + static_cast<int32_t>(above) -
+          static_cast<int32_t>(upper_left);
+      prediction = max(0, min(max_sample, prediction));
+      int32_t reconstructed = prediction +
+          unzigzag(folded[folded_base + y * width + x]) * step;
+      reconstructed = max(0, min(max_sample, reconstructed));
+      output[destination] = static_cast<uint16_t>(reconstructed);
+    }
+    __syncthreads();
+  }
+}
+
+__global__ void reconstruct_tiles_serial_kernel(
+    const uint32_t* folded,
+    const int64_t* metadata,
+    int64_t tile_count,
+    int32_t step,
+    int32_t max_sample,
+    uint16_t* output) {
+  const int64_t tile = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (tile >= tile_count) {
+    return;
+  }
+  const int64_t plane_base = metadata[tile * 7 + 0];
+  const int64_t plane_width = metadata[tile * 7 + 1];
+  const int64_t origin_x = metadata[tile * 7 + 2];
+  const int64_t origin_y = metadata[tile * 7 + 3];
+  const int64_t width = metadata[tile * 7 + 4];
+  const int64_t height = metadata[tile * 7 + 5];
+  const int64_t folded_base = metadata[tile * 7 + 6];
+  for (int64_t y = 0; y < height; ++y) {
+    uint16_t left = 0;
+    uint16_t upper_left = 0;
+    for (int64_t x = 0; x < width; ++x) {
+      const int64_t destination = plane_base + (origin_y + y) * plane_width + origin_x + x;
+      const uint16_t above = y > 0 ? output[destination - plane_width] : 0;
+      int32_t prediction = static_cast<int32_t>(left) + static_cast<int32_t>(above) -
+          static_cast<int32_t>(upper_left);
+      prediction = max(0, min(max_sample, prediction));
+      int32_t reconstructed = prediction +
+          unzigzag(folded[folded_base + y * width + x]) * step;
+      reconstructed = max(0, min(max_sample, reconstructed));
+      output[destination] = static_cast<uint16_t>(reconstructed);
+      upper_left = above;
+      left = static_cast<uint16_t>(reconstructed);
+    }
+  }
+}
+
+}  // namespace
+
+std::vector<torch::Tensor> fastvid_decode_v5_cuda(
+    const torch::Tensor& encoded,
+    const torch::Tensor& shard_meta,
+    const torch::Tensor& tile_meta,
+    int64_t total_samples,
+    int64_t y_samples,
+    int64_t chroma_samples,
+    int64_t width,
+    int64_t height,
+    int64_t step,
+    int64_t max_sample,
+    bool grayscale,
+    bool wavefront) {
+  c10::cuda::CUDAGuard guard(encoded.device());
+  auto folded = torch::zeros({total_samples}, encoded.options().dtype(torch::kUInt32));
+  auto output = torch::zeros({total_samples}, encoded.options().dtype(torch::kUInt16));
+  auto status = torch::zeros({1}, encoded.options().dtype(torch::kInt32));
+  const auto stream = at::cuda::getCurrentCUDAStream(encoded.device().index());
+
+  decode_shards_kernel<<<shard_meta.size(0), 32, 0, stream>>>(
+      encoded.data_ptr<uint8_t>(),
+      shard_meta.data_ptr<int64_t>(),
+      shard_meta.size(0),
+      static_cast<uint32_t>(max_sample * 2),
+      folded.data_ptr<uint32_t>(),
+      status.data_ptr<int32_t>());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  if (wavefront) {
+    reconstruct_tiles_kernel<<<tile_meta.size(0), 256, 0, stream>>>(
+        folded.data_ptr<uint32_t>(),
+        tile_meta.data_ptr<int64_t>(),
+        tile_meta.size(0),
+        static_cast<int32_t>(step),
+        static_cast<int32_t>(max_sample),
+        output.data_ptr<uint16_t>());
+  } else {
+    constexpr int threads = 256;
+    const int blocks = static_cast<int>((tile_meta.size(0) + threads - 1) / threads);
+    reconstruct_tiles_serial_kernel<<<blocks, threads, 0, stream>>>(
+        folded.data_ptr<uint32_t>(),
+        tile_meta.data_ptr<int64_t>(),
+        tile_meta.size(0),
+        static_cast<int32_t>(step),
+        static_cast<int32_t>(max_sample),
+        output.data_ptr<uint16_t>());
+  }
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+
+  const int32_t host_status = status.cpu().item<int32_t>();
+  TORCH_CHECK(host_status == 0, "malformed v5 entropy payload (CUDA status ", host_status, ")");
+  std::vector<torch::Tensor> planes;
+  planes.push_back(output.narrow(0, 0, y_samples).view({height, width}));
+  if (!grayscale) {
+    const int64_t chroma_width = (width + 1) / 2;
+    planes.push_back(output.narrow(0, y_samples, chroma_samples).view({height, chroma_width}));
+    planes.push_back(output.narrow(0, y_samples + chroma_samples, chroma_samples)
+                         .view({height, chroma_width}));
+  }
+  return planes;
+}

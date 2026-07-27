@@ -1,0 +1,5 @@
+sample	quality	placement	predictor	median_ms	decode_gpps	raw_gb_s
+calotes-versicolor-4k10	90	dram	wavefront	1.465822	5.658533457	22.634134
+calotes-versicolor-4k10	90	dram	serial	15.318689	0.541456239	2.165825
+calotes-versicolor-4k10	90	vram	wavefront	3.158129	2.626365167	10.505461
+calotes-versicolor-4k10	90	vram	serial	15.523680	0.534306316	2.137225

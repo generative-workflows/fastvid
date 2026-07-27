@@ -48,3 +48,4 @@ before entering the format.
 | [0041](0041-adaptive-med-block-predictor.md) | Hsu, Ding, and Lu, adaptive MED block predictor | Low-cost residual feedback with independent square predictor blocks | Reviewed |
 | [0042](0042-gpu-variable-output-assembly.md) | CUB/CCCL, CUDA scans, VGC | Count/scan/disjoint-write assembly and CUDA handoff contract | Reviewed |
 | [0043](0043-xpsnr-quality-metric.md) | Helmrich et al., XPSNR; FFmpeg implementation | Low-complexity perceptually weighted quality baseline | Reviewed |
+| [0044](0044-open-high-resolution-corpus.md) | Wikimedia Commons and Blender open media | Licensed native-2K/4K rendered and real-world corpus sources | Reviewed |

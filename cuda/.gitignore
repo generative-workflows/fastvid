@@ -1,0 +1,4 @@
+build/
+*.egg-info/
+fastvid_cuda/_C*.so
+__pycache__/

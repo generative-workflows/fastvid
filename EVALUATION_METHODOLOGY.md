@@ -1,6 +1,6 @@
 # Fastvid evaluation methodology
 
-Version: 14 (2026-07-27)
+Version: 15 (2026-07-27)
 
 This document defines the standard target used to evaluate Fastvid changes.
 Experiments may add diagnostics or deliberately diverge, but an optimization
@@ -35,16 +35,16 @@ There are two coding tracks:
 ## Standard core corpus
 
 The versioned, machine-readable definition is
-[`corpus/manifest.json`](corpus/manifest.json). Corpus v2 is a strict superset
+[`corpus/manifest.json`](corpus/manifest.json). Corpus v3 is a strict superset
 of the archived v1 manifest and checksums. Its codec track contains:
 
-- twelve still frames spanning camera photography, AI-generated detail,
+- fourteen still frames spanning camera photography, AI-generated detail,
   chroma-only edges, synthetic grids, fine organic detail, text, dark sparse
   content, high-frequency lines, and dense geometry;
-- six 24-frame clips spanning natural/rendered motion, deliberately noisy
-  camera footage, synthetic UI scrolling, temporally independent grain, and
-  hard scene cuts;
-- 640x360, 1280x720, 1920x1080, and 3840x2160 dimensions;
+- ten 24-frame clips spanning real people and animal footage,
+  natural/rendered motion, deliberately noisy camera footage, synthetic UI
+  scrolling, temporally independent grain, and hard scene cuts;
+- 640x360, 1280x720, 1920x1080, 2048x858, and 3840x2160 dimensions;
 - lossless Blender PNGs and CC0 TIFF camera sources, one explicitly
   public-domain camera clip, and a project-owned AI PNG with its exact prompt;
 - deterministic procedural source code for graphics, UI-like animation,
@@ -80,8 +80,9 @@ media may be used only in a separately reported diagnostic suite.
 
 ## Development corpus, holdouts, and tuned constants
 
-Corpus v2 has been measured repeatedly while designing Fastvid. It is the
-standard **development and regression corpus**, not an unseen holdout.
+Corpus v3 inherits the repeatedly measured v2 samples and adds reviewed
+high-resolution inputs. It is the standard **development and regression
+corpus**, not an unseen holdout.
 Sweeping a global constant such as tile geometry, block size, threshold,
 search radius, or default GOP against v2 turns that constant into a fitted
 hyperparameter. A winner on v2 alone is not evidence for changing the codec
@@ -342,6 +343,24 @@ satisfy an end-to-end floor. Numeric floors must be selected from per-sample
 evidence rather than only a cross-depth or cross-category aggregate.
 
 ## Feedback tiers
+
+The GPU handoff has a dedicated joint feedback harness,
+`scripts/benchmark-cuda-feedback.sh`. Its `quick` scope uses eight first-frame
+cases spanning lossless-source 1080p TIFF/PNG material, procedural 1080p,
+rendered 2K/4K controls, and real-world 4K footage. Its `full` scope uses the
+first frame of every codec-track corpus-v3 sample. It measures q90 and the
+exact q100 control, repeated Rust encode at one/four threads, and complete-call
+CUDA decode from DRAM/VRAM. `scripts/summarize-cuda-feedback.py` reports
+aggregate, worst-case, pass-count, and a separate 1080p slice against the
+INSTRUCTIONS targets: >3 GP/s encode, >5 GP/s decode, >50 dB XPSNR, and >15x
+compression. The four targets are conjunctive.
+
+This spatial feedback panel does not replace whole-sequence confirmation.
+Corpus-v3 codec derivatives are 8-bit; conversion to 10-bit preserves their
+values without manufacturing precision. WebM-derived real-world clips test
+decoded scene structure but are not pristine camera-source evidence, so
+lossless TIFF/PNG, procedural, and rendered controls remain in both the
+selection rationale and reported results.
 
 Benchmark cost is proportional to confidence required:
 

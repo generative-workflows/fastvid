@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "canonical_format": {
     "width": 1920,
     "height": 1080,
@@ -66,6 +66,50 @@
       "license": "MIT",
       "frame_rate": "24/1",
       "generator": "src/bin/corpusgen.rs"
+    },
+    {
+      "id": "spring",
+      "title": "Spring - Blender Open Movie",
+      "license": "CC-BY-4.0",
+      "author": "Blender Foundation",
+      "frame_rate": "24/1",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/a/a5/Spring_-_Blender_Open_Movie.webm",
+      "license_url": "https://commons.wikimedia.org/wiki/File:Spring_-_Blender_Open_Movie.webm",
+      "sha256": "d691a199035cc7d295210b286f8f6734893c7d4358d228081af6f0da98a56343"
+    },
+    {
+      "id": "glass-half",
+      "title": "Glass Half - Blender Open Movie",
+      "license": "CC-BY-4.0",
+      "author": "Blender Foundation",
+      "frame_rate": "24/1",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/0/02/Glass_Half_-_Blender_Open_Movie-full_movie.webm",
+      "license_url": "https://commons.wikimedia.org/wiki/File:Glass_Half_-_Blender_Open_Movie-full_movie.webm",
+      "sha256": "d11b4cc23a973e758ff7c45cce6fef0c287eab4ba248f9080cbd22a07014626b"
+    },
+    {
+      "id": "people-vote-march",
+      "title": "2019 People's Vote March - Put It to the People",
+      "license": "CC-BY-SA-4.0",
+      "author": "C.Suthorn",
+      "frame_rate": "25/1",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/2/27/2019-03-23_People%27s_Vote_March_-_Put_It_to_the_People.webm",
+      "license_url": "https://commons.wikimedia.org/wiki/File:2019-03-23_People%27s_Vote_March_-_Put_It_to_the_People.webm",
+      "license_terms_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+      "sha256": "3bb0ea3f13d856d04ddabfc6f50a40ef43d7fd61a6091126c16939fe6aa8eed8",
+      "color_metadata": "limited range; primaries, transfer, and matrix unspecified; converted as BT.709"
+    },
+    {
+      "id": "calotes-versicolor",
+      "title": "Calotes versicolor",
+      "license": "CC-BY-SA-4.0",
+      "author": "Aris riyanto",
+      "frame_rate": "20/1",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/3/38/Calotes_versicolor.webm",
+      "license_url": "https://commons.wikimedia.org/wiki/File:Calotes_versicolor.webm",
+      "license_terms_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+      "sha256": "7712d15746b415be04feb58471ebe59bf29766b76a275958ed4468d0c4813cf5",
+      "color_metadata": "primaries, transfer, matrix, and range unspecified; converted as limited-range BT.709"
     }
   ],
   "samples": [
@@ -87,6 +131,12 @@
     {"id": "procedural-chroma-edges", "kind": "image", "track": "codec", "source": "procedural", "width": 1920, "height": 1080, "frames": 1, "frame_rate": "24/1", "path": "stills/procedural-chroma-edges-1920x1080.yuv"},
     {"id": "resolution-grid-360p", "kind": "image", "track": "codec", "source": "procedural", "width": 640, "height": 360, "frames": 1, "frame_rate": "24/1", "path": "stills/resolution-grid-640x360.yuv"},
     {"id": "resolution-grid-4k", "kind": "image", "track": "codec", "source": "procedural", "width": 3840, "height": 2160, "frames": 1, "frame_rate": "24/1", "path": "stills/resolution-grid-3840x2160.yuv"},
+    {"id": "spring-native-2k", "kind": "image", "track": "codec", "source": "spring", "source_timestamp_seconds": 180, "width": 2048, "height": 858, "frames": 1, "frame_rate": "24/1", "path": "stills/spring-2048x858.yuv"},
+    {"id": "glass-half-native-4k", "kind": "image", "track": "codec", "source": "glass-half", "source_timestamp_seconds": 60, "width": 3840, "height": 2160, "frames": 1, "frame_rate": "24/1", "path": "stills/glass-half-3840x2160.yuv"},
+    {"id": "spring-native-2k-motion", "kind": "video", "track": "codec", "source": "spring", "source_timestamp_seconds": 240, "width": 2048, "height": 858, "frames": 24, "frame_rate": "24/1", "path": "videos/spring-2048x858-24f.yuv"},
+    {"id": "glass-half-native-4k-motion", "kind": "video", "track": "codec", "source": "glass-half", "source_timestamp_seconds": 120, "width": 3840, "height": 2160, "frames": 24, "frame_rate": "24/1", "path": "videos/glass-half-3840x2160-24f.yuv"},
+    {"id": "people-vote-march-native-4k", "kind": "video", "track": "codec", "source": "people-vote-march", "source_timestamp_seconds": 8, "width": 3840, "height": 2160, "frames": 24, "frame_rate": "24/1", "path": "videos/people-vote-march-3840x2160-24f.yuv"},
+    {"id": "calotes-versicolor-native-4k", "kind": "video", "track": "codec", "source": "calotes-versicolor", "source_timestamp_seconds": 5, "width": 3840, "height": 2160, "frames": 24, "frame_rate": "24/1", "path": "videos/calotes-versicolor-3840x2160-24f.yuv"},
     {"id": "hdr-pq-gradient-4k", "kind": "diagnostic", "track": "future-hdr", "benchmark": false, "source": "procedural", "width": 3840, "height": 2160, "frames": 1, "frame_rate": "24/1", "pixel_format": "yuv444p10le", "color_primaries": "bt2020", "transfer": "smpte2084", "range": "limited", "path": "native/hdr-pq-gradient-3840x2160-yuv444p10le.raw"},
     {"id": "alpha-overlays", "kind": "diagnostic", "track": "future-alpha", "benchmark": false, "source": "procedural", "width": 1024, "height": 1024, "frames": 1, "frame_rate": "24/1", "pixel_format": "rgba8", "path": "native/alpha-overlays-1024x1024-rgba.raw"}
   ]

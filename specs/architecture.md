@@ -120,6 +120,12 @@ write remain separate kernels in the first correct prototype. Fusion is
 considered only after stage timings expose launch or memory traffic as a
 material cost.
 
+EXP-0138 measured the corresponding decoder reconstruction schedules on an
+NVIDIA L40. Both were byte-exact, but the one-thread-per-tile scalar chains
+were 10.45x slower than antidiagonal wavefront on the real-world 4K q90 row.
+Wavefront is therefore the default CUDA reconstruction schedule; scalar tile
+chains remain a diagnostic control rather than a performance candidate.
+
 GPU evaluation records transfers, predictor, candidate selection, scan,
 emission, directory, and end-to-end time independently; it also records peak
 device memory, achieved bandwidth, active warps, warp/branch efficiency,

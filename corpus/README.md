@@ -1,6 +1,6 @@
 # Fastvid standard corpus
 
-Corpus v2 is a reproducible, multi-resolution set used for standard
+Corpus v3 is a reproducible, multi-resolution set used for standard
 evaluation. Large media is generated or fetched rather than stored in Git.
 Run:
 
@@ -10,17 +10,19 @@ scripts/benchmark-corpus.sh
 scripts/benchmark-access-corpus.sh
 ```
 
-`manifest.json` defines twelve codec-track stills and six 24-frame videos
-across 360p, 720p, 1080p, and 4K. Content includes:
+`manifest.json` defines fourteen codec-track stills and ten 24-frame videos
+across 360p, 720p, 1080p, native 2K, and native 4K. Content includes:
 
 - Blender Open Movie animation and naturalistic rendered detail;
 - CC0 lossless TIFF camera photography;
 - explicitly public-domain camera video with deterministic added sensor noise;
+- real-world native-4K crowd and animal footage with explicit attribution;
+- native-2K and native-4K rendered controls for GPU scaling measurements;
 - synthetic graphics, UI-style scrolling, chroma edges, grain, and cuts;
 - a project-owned AI-generated image with committed prompt provenance;
 - source-native HDR PQ and RGBA alpha capability diagnostics.
 
-The generated corpus lives in `artifacts/corpus-v2/`. Codec-track derivatives
+The generated corpus lives in `artifacts/corpus-v3/`. Codec-track derivatives
 are planar BT.709 limited-range YUV422p8 and are verified against
 `derived-checksums.sha256`. HDR and alpha assets retain native YUV444p10/PQ and
 RGBA representations and are intentionally excluded from current headline
@@ -40,6 +42,11 @@ Balanced baseline/candidate measurements for this supplement use
 its binary, matrix, and output parameters.
 
 Corpus v1 remains reproducible through `manifest-v1.json` and
-`derived-checksums-v1.sha256`; v2 does not mutate its samples. Source URLs,
+`derived-checksums-v1.sha256`; v3 does not mutate its samples. Source URLs,
 licenses, hashes, dimensions, frame rates, generation code, and the AI prompt
 are recorded alongside the manifest.
+
+The CC-BY-SA real-world source files and derivatives retain their media
+license; they are downloaded into ignored artifacts and are not relicensed by
+the repository's software license. See `manifest.json` for author and source
+page attribution.

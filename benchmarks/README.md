@@ -65,3 +65,45 @@ Durable per-sample and aggregate data:
 The raw measurements and host record remain under `artifacts/` with hashes in
 [EXP-0135](../experiments/EXP-0135-cpu-gpu-baseline.md). This baseline is
 separate from the preserved CPU frontier and does not alter the root README.
+
+## CUDA decoder baseline
+
+[`v5-cuda-decode-baseline.md`](v5-cuda-decode-baseline.md) records the first
+byte-exact PyTorch C++/CUDA v5 decoder on a real-world 4K frame. Machine-
+readable rows are in [`v5-cuda-decode-baseline.tsv`](v5-cuda-decode-baseline.tsv).
+
+## CUDA feedback loop
+
+Before optimizing GPU encoding, collect a joint real-footage baseline with:
+
+```sh
+scripts/benchmark-cuda-feedback.sh \
+  target/release/fastvid artifacts/corpus-v3 artifacts/cuda-feedback 5 quick
+```
+
+The quick scope converts eight pinned first frames to 10-bit 4:2:2. It spans
+lossless-source 1080p animation and TIFF camera material, a procedural 1080p
+edge control, rendered 2K/4K controls, and real-world crowd/animal 4K footage.
+Use `full` instead of `quick` to cover the first frame of every codec-track
+sample in `corpus/manifest.json`. Both scopes record repeated Rust encode
+timing, complete rate/quality/XPSNR controls, CUDA DRAM/VRAM decode timing,
+environment data, and hashes. Q90 is the practical point and q100 is the
+exactness control.
+
+The standard v3 derivatives are 8-bit, so conversion to 10-bit preserves
+their values but does not create missing source precision. WebM-derived rows
+are representative of decoded real-world structure, not pristine camera
+acquisition. The TIFF/PNG-derived, procedural, and rendered rows prevent those
+clips from being the only evidence.
+
+Generate the aggregate target-gap report without discarding raw rows:
+
+```sh
+scripts/summarize-cuda-feedback.py \
+  artifacts/cuda-feedback \
+  benchmarks/v5-cuda-feedback.md \
+  benchmarks/v5-cuda-feedback-summary.tsv
+```
+CPU encode and CUDA decode remain explicitly separate until a CUDA encoder
+exists; kernel-only timing cannot be substituted for either complete-call
+measurement.

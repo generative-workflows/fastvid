@@ -4,7 +4,7 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd -- "$script_dir/.." && pwd)"
-destination="${1:-$repo_dir/artifacts/corpus-v2}"
+destination="${1:-$repo_dir/artifacts/corpus-v3}"
 sources="$destination/sources"
 licenses="$destination/licenses"
 review_cache="$repo_dir/artifacts/corpus-source-review"
@@ -117,6 +117,22 @@ download_verified \
   "https://media.xiph.org/video/derf/webm/FourPeople_1280x720_60.webm" \
   "1e4a5df7e67ae985370321cc2c91b8595f7e3433ad8ee1e84da7a26ff5254deb" \
   "FourPeople_1280x720_60.webm"
+download_verified \
+  "https://upload.wikimedia.org/wikipedia/commons/a/a5/Spring_-_Blender_Open_Movie.webm" \
+  "d691a199035cc7d295210b286f8f6734893c7d4358d228081af6f0da98a56343" \
+  "spring-2048x858.webm"
+download_verified \
+  "https://upload.wikimedia.org/wikipedia/commons/0/02/Glass_Half_-_Blender_Open_Movie-full_movie.webm" \
+  "d11b4cc23a973e758ff7c45cce6fef0c287eab4ba248f9080cbd22a07014626b" \
+  "glass-half-3840x2160.webm"
+download_verified \
+  "https://upload.wikimedia.org/wikipedia/commons/2/27/2019-03-23_People%27s_Vote_March_-_Put_It_to_the_People.webm" \
+  "3bb0ea3f13d856d04ddabfc6f50a40ef43d7fd61a6091126c16939fe6aa8eed8" \
+  "people-vote-march-3840x2160.webm"
+download_verified \
+  "https://upload.wikimedia.org/wikipedia/commons/3/38/Calotes_versicolor.webm" \
+  "7712d15746b415be04feb58471ebe59bf29766b76a275958ed4468d0c4813cf5" \
+  "calotes-versicolor-3840x2160.webm"
 
 convert_still() {
   local input="$1"
@@ -146,6 +162,17 @@ convert_external_still() {
     -pix_fmt yuv422p -frames:v 1 -f rawvideo "$output"
 }
 
+convert_native_video() {
+  local input="$1"
+  local timestamp="$2"
+  local frames="$3"
+  local output="$4"
+  ffmpeg -v error -y -sws_flags lanczos+accurate_rnd+full_chroma_int \
+    -ss "$timestamp" -i "$input" \
+    -vf "fps=24,scale=iw:ih:in_range=tv:out_range=tv:in_color_matrix=bt709:out_color_matrix=bt709,format=yuv422p" \
+    -frames:v "$frames" -f rawvideo "$output"
+}
+
 convert_still "$sources/bbb/big_buck_bunny_03000.png" "$destination/stills/bbb-grass-fur-03000.yuv"
 convert_still "$sources/bbb/big_buck_bunny_09000.png" "$destination/stills/bbb-foliage-sky-09000.yuv"
 convert_still "$sources/bbb/big_buck_bunny_12000.png" "$destination/stills/bbb-credits-text-12000.yuv"
@@ -172,6 +199,22 @@ ffmpeg -v error -y -sws_flags lanczos+accurate_rnd+full_chroma_int \
   -vf "fps=24,scale=1920:1080:in_range=tv:out_range=tv:out_color_matrix=bt709,format=yuv422p,noise=alls=8:allf=t+u:all_seed=424242" \
   -pix_fmt yuv422p -frames:v 24 -f rawvideo \
   "$destination/videos/noisy-camera-fourpeople-1920x1080-24f.yuv"
+
+# Native-size v3 controls. The two real-world sources omit color primaries in
+# their WebM stream metadata; the deterministic conversion therefore records
+# and applies the corpus BT.709 limited-range assumption explicitly.
+convert_native_video "$sources/external/spring-2048x858.webm" 180 1 \
+  "$destination/stills/spring-2048x858.yuv"
+convert_native_video "$sources/external/glass-half-3840x2160.webm" 60 1 \
+  "$destination/stills/glass-half-3840x2160.yuv"
+convert_native_video "$sources/external/spring-2048x858.webm" 240 24 \
+  "$destination/videos/spring-2048x858-24f.yuv"
+convert_native_video "$sources/external/glass-half-3840x2160.webm" 120 24 \
+  "$destination/videos/glass-half-3840x2160-24f.yuv"
+convert_native_video "$sources/external/people-vote-march-3840x2160.webm" 8 24 \
+  "$destination/videos/people-vote-march-3840x2160-24f.yuv"
+convert_native_video "$sources/external/calotes-versicolor-3840x2160.webm" 5 24 \
+  "$destination/videos/calotes-versicolor-3840x2160-24f.yuv"
 
 cargo build --release --manifest-path "$repo_dir/Cargo.toml" --bin corpusgen
 "$repo_dir/target/release/corpusgen" "$destination"

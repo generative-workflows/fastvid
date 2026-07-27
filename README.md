@@ -2,8 +2,8 @@
 
 Fastvid is an experimental intermediate video codec focused on high fidelity,
 high throughput, compact frames, and inexpensive frame/tile access. The current
-implementation is a Rust CPU reference; the version-5 format is structured for
-a future CUDA backend.
+implementation has a Rust CPU reference and an experimental PyTorch C++/CUDA
+version-5 decoder.
 
 The current version supports planar 8/10/12/16-bit YUV 4:2:2 and grayscale,
 independently coded tiles, spatial prediction, optional short-GOP temporal
@@ -33,6 +33,27 @@ The current CPU-to-CUDA handoff baseline is the native high-bit version-5
 all-intra path on the four-sample procedural corpus. It is intentionally small
 enough to rerun during GPU development; the broader corpus remains the
 confirmation suite.
+
+### CUDA 4K decoder baseline
+
+The first complete-call CUDA result uses a real-world 3840x2160 10-bit frame
+on an NVIDIA L40. Q90 reaches 5.681 GP/s from DRAM and 4.906 GP/s from VRAM at
+11.227x compression, 57.986 dB luma XPSNR, and 0.995780 block SSIM. Q100 is
+exact and reaches 4.444/3.044 GP/s. This is one-sample evidence; the full
+corpus, encoder, and public video/tile APIs remain in progress. See the
+[CUDA decoder baseline](benchmarks/v5-cuda-decode-baseline.md).
+
+### Full spatial feedback baseline
+
+The broader confirmation run covers the first frame of all 24 corpus-v3
+codec samples from 360p through 4K. At q90, all 24 exceed 50 dB luma XPSNR,
+but total compression is 11.688x and only 8/24 exceed 15x. CUDA complete-call
+decode has a 3.029 GP/s DRAM geometric mean and exceeds 5 GP/s on 5/24 cases.
+The 15-sample 1080p slice reaches 2.922 GP/s from DRAM and 2.373 GP/s from
+VRAM, exposing fixed overhead hidden by the earlier 4K-only result. The Rust
+reference encoder reaches 0.086 GP/s at q90/four threads; CUDA encoding is not
+yet implemented. Q100 is exact on all 24 samples. See the
+[joint feedback report](benchmarks/v5-cuda-feedback.md).
 
 ### Rate and quality
 
