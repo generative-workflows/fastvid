@@ -20,7 +20,7 @@ Fastvid uses the
 implementation is authored by Fraunhofer HHI contributors and supports
 planar YUV 4:2:2 at the relevant high bit depths. The benchmark records the
 complete FFmpeg version/configuration, pixel format, frame size, frame rate,
-per-plane sequence averages, and minimum plane average. Source and decoded
+per-frame plane values, per-plane sequence averages, and minimum plane average. Source and decoded
 raw videos are passed without rescaling, color conversion, or chroma
 resampling.
 
@@ -34,6 +34,8 @@ XPSNR is an additional focused/release axis:
 - retain native-code-value PSNR, maximum error, and exact q100 equality;
 - retain the specified full luma block-SSIM score;
 - report Y, U, V, and minimum-plane XPSNR separately;
+- retain each frame score; a sequence average must not hide a low-quality
+  frame when evaluating the minimum-per-frame target;
 - preserve per-sample values before aggregating;
 - never tune or accept a codec solely against XPSNR;
 - do not label XPSNR as VMAF, MS-SSIM, DISTS, or ColorVideoVDP.

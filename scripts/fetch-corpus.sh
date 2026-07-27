@@ -4,7 +4,7 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd -- "$script_dir/.." && pwd)"
-destination="${1:-$repo_dir/artifacts/corpus-v3}"
+destination="${1:-$repo_dir/artifacts/corpus-v4}"
 sources="$destination/sources"
 licenses="$destination/licenses"
 review_cache="$repo_dir/artifacts/corpus-source-review"
@@ -90,6 +90,34 @@ download_verified() {
   mv "$output.part" "$output"
 }
 
+download_range_verified() {
+  local url="$1"
+  local byte_range="$2"
+  local expected="$3"
+  local filename="$4"
+  local output="$sources/external/$filename"
+  local actual
+  for candidate in "$output" "$review_cache/$filename"; do
+    if [[ -f "$candidate" ]]; then
+      actual="$(sha256sum "$candidate" | awk '{ print $1 }')"
+      if [[ "$actual" == "$expected" ]]; then
+        if [[ "$candidate" != "$output" ]]; then
+          cp "$candidate" "$output"
+        fi
+        return
+      fi
+    fi
+  done
+  curl --fail --location --silent --show-error --range "$byte_range" \
+    "$url" --output "$output.part"
+  actual="$(sha256sum "$output.part" | awk '{ print $1 }')"
+  if [[ "$actual" != "$expected" ]]; then
+    echo "checksum mismatch for ranged source $filename" >&2
+    return 1
+  fi
+  mv "$output.part" "$output"
+}
+
 for number in 03000 09000 12000; do
   download_frame bbb "big_buck_bunny_${number}.png"
 done
@@ -133,6 +161,36 @@ download_verified \
   "https://upload.wikimedia.org/wikipedia/commons/3/38/Calotes_versicolor.webm" \
   "7712d15746b415be04feb58471ebe59bf29766b76a275958ed4468d0c4813cf5" \
   "calotes-versicolor-3840x2160.webm"
+download_range_verified \
+  "https://ultravideo.fi/UVG-VCM/HighwayView/HighwayView_3840x2160_60fps_yuv444_16bits_600.yuv" \
+  "5971968000-7166361599" \
+  "076415adb4e8c4599b19c97af5b69ed58dede17a820dfdf07dbb16765ec8da1a" \
+  "uvg-vcm-highway-view-f120-143.yuv"
+download_range_verified \
+  "https://ultravideo.fi/UVG-VCM/FloorballTrain/FloorballTrain_3840x2160_60fps_yuv444_16bits_600.yuv" \
+  "14929920000-16124313599" \
+  "8a657cfdfc2eb6a790d627a3fb2bf37512bf2ad007c2884005a253fce3e50447" \
+  "uvg-vcm-floorball-train-f300-323.yuv"
+download_range_verified \
+  "https://media.xiph.org/video/derf/y4m/park_joy_2160p50.y4m" \
+  "0-298598579" \
+  "7a2fc73b86e9d9e28d511dc9e0fc47674aadcb53c3ec0529974499adf8ddd2b9" \
+  "xiph-park-joy-f000-023-partial.y4m"
+download_range_verified \
+  "https://media.xiph.org/video/derf/y4m/in_to_tree_2160p50.y4m" \
+  "0-298598579" \
+  "1676283d9f060dab0d99cc8df0867c1f4d60d9a77541b81eff9a98c7758edad5" \
+  "xiph-into-tree-f000-023-partial.y4m"
+download_verified \
+  "https://media.xiph.org/video/derf/vqeg.its.bldrdoc.gov/HDTV/SVT_MultiFormat/SVT_MultiFormat_v10.pdf" \
+  "9fd39b9db02375a086f8e65129177d4db37f275712cc3ace56fb71d007f9f13f" \
+  "SVT_MultiFormat_v10.pdf"
+download_verified \
+  "https://creativecommons.org/licenses/by/4.0/legalcode.txt" \
+  "9ba9550ad48438d0836ddab3da480b3b69ffa0aac7b7878b5a0039e7ab429411" \
+  "CC-BY-4.0-legalcode.txt"
+cp "$sources/external/SVT_MultiFormat_v10.pdf" "$licenses/SVT_MultiFormat_v10.pdf"
+cp "$sources/external/CC-BY-4.0-legalcode.txt" "$licenses/CC-BY-4.0-legalcode.txt"
 
 convert_still() {
   local input="$1"
@@ -171,6 +229,25 @@ convert_native_video() {
     -ss "$timestamp" -i "$input" \
     -vf "fps=24,scale=iw:ih:in_range=tv:out_range=tv:in_color_matrix=bt709:out_color_matrix=bt709,format=yuv422p" \
     -frames:v "$frames" -f rawvideo "$output"
+}
+
+convert_uvg_vcm_video() {
+  local input="$1"
+  local output="$2"
+  ffmpeg -v error -y -sws_flags lanczos+accurate_rnd+full_chroma_int \
+    -f rawvideo -pixel_format yuv444p16le -video_size 3840x2160 \
+    -framerate 60 -i "$input" \
+    -vf "scale=in_range=pc:out_range=tv:in_color_matrix=bt709:out_color_matrix=bt709,format=yuv422p" \
+    -frames:v 24 -f rawvideo "$output"
+}
+
+convert_xiph_svt_video() {
+  local input="$1"
+  local output="$2"
+  ffmpeg -v error -y -sws_flags lanczos+accurate_rnd+full_chroma_int \
+    -i "$input" \
+    -vf "scale=in_range=tv:out_range=tv:in_color_matrix=bt709:out_color_matrix=bt709,format=yuv422p" \
+    -frames:v 24 -f rawvideo "$output"
 }
 
 convert_still "$sources/bbb/big_buck_bunny_03000.png" "$destination/stills/bbb-grass-fur-03000.yuv"
@@ -215,6 +292,18 @@ convert_native_video "$sources/external/people-vote-march-3840x2160.webm" 8 24 \
   "$destination/videos/people-vote-march-3840x2160-24f.yuv"
 convert_native_video "$sources/external/calotes-versicolor-3840x2160.webm" 5 24 \
   "$destination/videos/calotes-versicolor-3840x2160-24f.yuv"
+convert_uvg_vcm_video \
+  "$sources/external/uvg-vcm-highway-view-f120-143.yuv" \
+  "$destination/videos/uvg-vcm-highway-view-3840x2160-f120-143.yuv"
+convert_uvg_vcm_video \
+  "$sources/external/uvg-vcm-floorball-train-f300-323.yuv" \
+  "$destination/videos/uvg-vcm-floorball-train-3840x2160-f300-323.yuv"
+convert_xiph_svt_video \
+  "$sources/external/xiph-park-joy-f000-023-partial.y4m" \
+  "$destination/videos/xiph-park-joy-3840x2160-f000-023.yuv"
+convert_xiph_svt_video \
+  "$sources/external/xiph-into-tree-f000-023-partial.y4m" \
+  "$destination/videos/xiph-into-tree-3840x2160-f000-023.yuv"
 
 cargo build --release --manifest-path "$repo_dir/Cargo.toml" --bin corpusgen
 "$repo_dir/target/release/corpusgen" "$destination"

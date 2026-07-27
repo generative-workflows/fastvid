@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "canonical_format": {
     "width": 1920,
     "height": 1080,
@@ -110,6 +110,30 @@
       "license_terms_url": "https://creativecommons.org/licenses/by-sa/4.0/",
       "sha256": "7712d15746b415be04feb58471ebe59bf29766b76a275958ed4468d0c4813cf5",
       "color_metadata": "primaries, transfer, matrix, and range unspecified; converted as limited-range BT.709"
+    },
+    {
+      "id": "uvg-vcm",
+      "title": "UVG-VCM: Benchmarking Dataset for Machine-Oriented Visual Data Compression",
+      "license": "CC-BY-4.0",
+      "author": "Ultra Video Group, Tampere University",
+      "frame_rate": "60/1",
+      "url": "https://ultravideo.fi/UVG-VCM/index.html",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "citation": "T. Partanen et al., UVG-VCM, QoMEX 2026",
+      "source_format": "3840x2160 yuv444p16le, full-range assumption",
+      "color_metadata": "source page does not signal primaries, transfer, matrix, or range; converted with explicit full-range BT.709 assumption"
+    },
+    {
+      "id": "xiph-svt-multiformat",
+      "title": "SVT High Definition Multi Format Test Set",
+      "license": "SVT test-material terms",
+      "author": "Sveriges Television AB",
+      "frame_rate": "50/1",
+      "url": "https://media.xiph.org/video/derf/",
+      "license_url": "https://media.xiph.org/video/derf/vqeg.its.bldrdoc.gov/HDTV/SVT_MultiFormat/SVT_MultiFormat_v10.pdf",
+      "license_scope": "development, testing, and presentation of technology standards; no redistribution fee; notice must accompany redistributed excerpts",
+      "source_format": "3840x2160 yuv420p8 YUV4MPEG",
+      "color_metadata": "BT.709 documented by the source notice; converted as limited-range BT.709"
     }
   ],
   "samples": [
@@ -137,6 +161,10 @@
     {"id": "glass-half-native-4k-motion", "kind": "video", "track": "codec", "source": "glass-half", "source_timestamp_seconds": 120, "width": 3840, "height": 2160, "frames": 24, "frame_rate": "24/1", "path": "videos/glass-half-3840x2160-24f.yuv"},
     {"id": "people-vote-march-native-4k", "kind": "video", "track": "codec", "source": "people-vote-march", "source_timestamp_seconds": 8, "width": 3840, "height": 2160, "frames": 24, "frame_rate": "24/1", "path": "videos/people-vote-march-3840x2160-24f.yuv"},
     {"id": "calotes-versicolor-native-4k", "kind": "video", "track": "codec", "source": "calotes-versicolor", "source_timestamp_seconds": 5, "width": 3840, "height": 2160, "frames": 24, "frame_rate": "24/1", "path": "videos/calotes-versicolor-3840x2160-24f.yuv"},
+    {"id": "uvg-vcm-highway-view-4k", "kind": "video", "track": "codec", "source": "uvg-vcm", "source_frame": 120, "source_frames": 24, "source_byte_range": "5971968000-7166361599", "source_sha256": "076415adb4e8c4599b19c97af5b69ed58dede17a820dfdf07dbb16765ec8da1a", "width": 3840, "height": 2160, "frames": 24, "frame_rate": "60/1", "path": "videos/uvg-vcm-highway-view-3840x2160-f120-143.yuv"},
+    {"id": "uvg-vcm-floorball-train-4k", "kind": "video", "track": "codec", "source": "uvg-vcm", "source_frame": 300, "source_frames": 24, "source_byte_range": "14929920000-16124313599", "source_sha256": "8a657cfdfc2eb6a790d627a3fb2bf37512bf2ad007c2884005a253fce3e50447", "width": 3840, "height": 2160, "frames": 24, "frame_rate": "60/1", "path": "videos/uvg-vcm-floorball-train-3840x2160-f300-323.yuv"},
+    {"id": "xiph-park-joy-4k", "kind": "video", "track": "codec", "source": "xiph-svt-multiformat", "source_frame": 0, "source_frames": 24, "source_byte_range": "0-298598579", "source_sha256": "7a2fc73b86e9d9e28d511dc9e0fc47674aadcb53c3ec0529974499adf8ddd2b9", "width": 3840, "height": 2160, "frames": 24, "frame_rate": "50/1", "path": "videos/xiph-park-joy-3840x2160-f000-023.yuv"},
+    {"id": "xiph-into-tree-4k", "kind": "video", "track": "codec", "source": "xiph-svt-multiformat", "source_frame": 0, "source_frames": 24, "source_byte_range": "0-298598579", "source_sha256": "1676283d9f060dab0d99cc8df0867c1f4d60d9a77541b81eff9a98c7758edad5", "width": 3840, "height": 2160, "frames": 24, "frame_rate": "50/1", "path": "videos/xiph-into-tree-3840x2160-f000-023.yuv"},
     {"id": "hdr-pq-gradient-4k", "kind": "diagnostic", "track": "future-hdr", "benchmark": false, "source": "procedural", "width": 3840, "height": 2160, "frames": 1, "frame_rate": "24/1", "pixel_format": "yuv444p10le", "color_primaries": "bt2020", "transfer": "smpte2084", "range": "limited", "path": "native/hdr-pq-gradient-3840x2160-yuv444p10le.raw"},
     {"id": "alpha-overlays", "kind": "diagnostic", "track": "future-alpha", "benchmark": false, "source": "procedural", "width": 1024, "height": 1024, "frames": 1, "frame_rate": "24/1", "pixel_format": "rgba8", "path": "native/alpha-overlays-1024x1024-rgba.raw"}
   ]

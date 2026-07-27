@@ -49,3 +49,4 @@ before entering the format.
 | [0042](0042-gpu-variable-output-assembly.md) | CUB/CCCL, CUDA scans, VGC | Count/scan/disjoint-write assembly and CUDA handoff contract | Reviewed |
 | [0043](0043-xpsnr-quality-metric.md) | Helmrich et al., XPSNR; FFmpeg implementation | Low-complexity perceptually weighted quality baseline | Reviewed |
 | [0044](0044-open-high-resolution-corpus.md) | Wikimedia Commons and Blender open media | Licensed native-2K/4K rendered and real-world corpus sources | Reviewed |
+| [0045](0045-open-4k-video-subsections.md) | UVG-VCM and Xiph/SVT 4K masters | Short, checksummed raw/native-master 4K video windows and license boundaries | Reviewed |

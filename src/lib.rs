@@ -27,7 +27,7 @@ pub use metrics::{
     ssim_plane_sampled, ssim_plane16, ssim_plane16_sampled,
 };
 pub use model::{
-    CodecError, CodecOptions, Frame, Frame16, FrameRate, PixelFormat, Plane, Plane16,
-    ParallelShardEntropyModel, PredictorBandModel, PredictorCandidateModel, PredictorModelMode,
+    CodecError, CodecOptions, Frame, Frame16, FrameRate, ParallelShardEntropyModel, PixelFormat,
+    Plane, Plane16, PredictorBandModel, PredictorCandidateModel, PredictorModelMode,
     TileEntropyModel, TilePredictorModel, TileResidualMappingModel,
 };

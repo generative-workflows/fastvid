@@ -1,7 +1,7 @@
 use crate::codec::StreamInfo;
 use crate::model::{
-    ByteFormatModel, CodecError, CodecOptions, Frame16, FrameRate, MAX_FRAME_BYTES, PixelFormat,
-    ParallelShardEntropyModel, Plane16, PredictorBandModel, PredictorCandidateModel,
+    ByteFormatModel, CodecError, CodecOptions, Frame16, FrameRate, MAX_FRAME_BYTES,
+    ParallelShardEntropyModel, PixelFormat, Plane16, PredictorBandModel, PredictorCandidateModel,
     PredictorModelMode, TileEntropyModel, TilePredictorModel, TileResidualMappingModel,
     checked_area, fold_bounded_residual, sample_max,
 };
@@ -903,9 +903,7 @@ pub fn analyze_parallel_shards16(
             let body = &payload[cursor..end];
             let folded = if mode == ENTROPY_ZERO_RUN {
                 decode_zero_run_folded(body, count, max_folded)?
-            } else if (ENTROPY_RICE_BASE..=ENTROPY_RICE_BASE + MAX_RICE_PARAMETER)
-                .contains(&mode)
-            {
+            } else if (ENTROPY_RICE_BASE..=ENTROPY_RICE_BASE + MAX_RICE_PARAMETER).contains(&mode) {
                 decode_parallel_rice_folded(body, count, mode - ENTROPY_RICE_BASE, max_folded)?
             } else if mode == ENTROPY_BLOCK_PACK {
                 decode_block_pack_folded(body, count, max_folded)?
@@ -3969,6 +3967,25 @@ mod tests {
                 assert_eq!(encoded[4], FULL_TILE_PARALLEL_VERSION);
                 let info = inspect16(&encoded).unwrap();
                 assert_eq!(info.parallel_shard_tiles, info.tile_count);
+                let shard_models = analyze_parallel_shards16(&encoded).unwrap();
+                assert_eq!(
+                    shard_models
+                        .iter()
+                        .map(|model| model.sample_count)
+                        .sum::<usize>(),
+                    frame.planes.iter().map(|plane| plane.data.len()).sum()
+                );
+                assert_eq!(
+                    shard_models
+                        .iter()
+                        .map(|model| model.current_complete_bytes)
+                        .sum::<usize>(),
+                    encoded.len() - HEADER_LEN - info.tile_count * DIRECTORY_ENTRY_LEN
+                );
+                assert!(shard_models.iter().all(|model| {
+                    model.oracle_complete_bytes <= model.current_complete_bytes as u64
+                        && model.current_complete_bytes == model.current_body_bytes + 3
+                }));
                 assert_eq!(
                     analyze_entropy16(&encoded)
                         .unwrap()

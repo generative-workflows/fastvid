@@ -32,7 +32,7 @@ It should be possible to relatively cheaply decode or re-encode individual frame
 Some concrete goals to reach simultaneously:
   1. >5 GP/s of decoding for ~real-time 4K.
   2. >3 GP/s of encoding for ~real-time 4K.
-  3. >50dB XPSNR
+  3. >50dB minimum per-frame XPSNR
   4. >15x compression ratio.
 
 ### Patent Free / Open Source

@@ -1,6 +1,6 @@
 # Fastvid evaluation methodology
 
-Version: 15 (2026-07-27)
+Version: 16 (2026-07-27)
 
 This document defines the standard target used to evaluate Fastvid changes.
 Experiments may add diagnostics or deliberately diverge, but an optimization
@@ -35,13 +35,13 @@ There are two coding tracks:
 ## Standard core corpus
 
 The versioned, machine-readable definition is
-[`corpus/manifest.json`](corpus/manifest.json). Corpus v3 is a strict superset
+[`corpus/manifest.json`](corpus/manifest.json). Corpus v4 is a strict superset
 of the archived v1 manifest and checksums. Its codec track contains:
 
 - fourteen still frames spanning camera photography, AI-generated detail,
   chroma-only edges, synthetic grids, fine organic detail, text, dark sparse
   content, high-frequency lines, and dense geometry;
-- ten 24-frame clips spanning real people and animal footage,
+- fourteen 24-frame clips spanning real people and animal footage,
   natural/rendered motion, deliberately noisy camera footage, synthetic UI
   scrolling, temporally independent grain, and hard scene cuts;
 - 640x360, 1280x720, 1920x1080, 2048x858, and 3840x2160 dimensions;
@@ -80,7 +80,7 @@ media may be used only in a separately reported diagnostic suite.
 
 ## Development corpus, holdouts, and tuned constants
 
-Corpus v3 inherits the repeatedly measured v2 samples and adds reviewed
+Corpus v4 inherits the repeatedly measured v3 samples and adds reviewed
 high-resolution inputs. It is the standard **development and regression
 corpus**, not an unseen holdout.
 Sweeping a global constant such as tile geometry, block size, threshold,
@@ -186,6 +186,14 @@ or a content group materially regresses.
 The fully evaluated luma 8x8 block SSIM (block stride one) remains the
 acceptance and release score. Any candidate that survives fast screening must
 be rescored exactly before its experiment can be accepted.
+
+The headline XPSNR target is **greater than 50 dB minimum per-frame luma
+XPSNR**. FFmpeg's sequence-average line cannot qualify this target: reports
+must retain every frame's Y, U, and V values and take the minimum Y value over
+all decoded core-corpus frames. Minimum per-frame U/V and minimum-across-plane
+values remain mandatory diagnostics. Stills contribute one frame; every frame
+of each core video contributes independently. Rate and quality therefore use
+the same complete frame population.
 
 ## Compression measurements
 
@@ -348,12 +356,12 @@ The GPU handoff has a dedicated joint feedback harness,
 `scripts/benchmark-cuda-feedback.sh`. Its `quick` scope uses eight first-frame
 cases spanning lossless-source 1080p TIFF/PNG material, procedural 1080p,
 rendered 2K/4K controls, and real-world 4K footage. Its `full` scope uses the
-first frame of every codec-track corpus-v3 sample. It measures q90 and the
+first frame of every codec-track corpus-v4 sample. It measures q90 and the
 exact q100 control, repeated Rust encode at one/four threads, and complete-call
 CUDA decode from DRAM/VRAM. `scripts/summarize-cuda-feedback.py` reports
 aggregate, worst-case, pass-count, and a separate 1080p slice against the
-INSTRUCTIONS targets: >3 GP/s encode, >5 GP/s decode, >50 dB XPSNR, and >15x
-compression. The four targets are conjunctive.
+INSTRUCTIONS targets: >3 GP/s encode, >5 GP/s decode, >50 dB minimum per-frame
+luma XPSNR, and >15x compression. The four targets are conjunctive.
 
 This spatial feedback panel does not replace whole-sequence confirmation.
 Corpus-v3 codec derivatives are 8-bit; conversion to 10-bit preserves their

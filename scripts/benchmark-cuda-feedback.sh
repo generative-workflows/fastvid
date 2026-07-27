@@ -76,7 +76,7 @@ fi
 while IFS=$'\t' read -r sample relative_path width height frame_rate source_id; do
   source="$corpus_dir/$relative_path"
   if [[ ! -f "$source" ]]; then
-    echo "missing corpus-v3 sample: $source" >&2
+    echo "missing corpus sample: $source" >&2
     exit 1
   fi
   input="$temporary_dir/${sample}-yuv422p10le.yuv"

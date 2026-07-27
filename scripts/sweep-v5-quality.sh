@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deterministic first-frame v5 rate-distortion sweep over corpus-v3.
+# Deterministic first-frame v5 rate-distortion sweep over the current corpus.
 set -euo pipefail
 
 if [[ "$#" -lt 3 ]]; then
@@ -32,7 +32,7 @@ printf 'sample\tsource\twidth\theight\tquality\tquant_step\traw_bytes\tencoded_b
 
 while IFS=$'\t' read -r sample relative_path width height frame_rate source_id; do
   source="$corpus_dir/$relative_path"
-  [[ -f "$source" ]] || { echo "missing corpus-v3 sample: $source" >&2; exit 1; }
+  [[ -f "$source" ]] || { echo "missing corpus sample: $source" >&2; exit 1; }
   input="$temporary_dir/${sample}-yuv422p10le.yuv"
   ffmpeg -nostdin -hide_banner -loglevel error -y \
     -f rawvideo -pixel_format yuv422p -video_size "${width}x${height}" -framerate "$frame_rate" -i "$source" \

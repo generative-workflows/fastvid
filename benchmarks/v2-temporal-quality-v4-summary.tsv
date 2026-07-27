@@ -1,0 +1,10 @@
+scope	quality	frames	ratio	minimum_y_xpsnr	minimum_plane_xpsnr	passing_frames	exact_frames	keyframes	simultaneous_pass
+corpus	95	350	6.632469369	45.409800	42.390100	270	0	42	false
+1080p	95	130	6.601838840	45.409800	42.390100	99	0	20	false
+4k	95	170	6.452604867	49.096600	48.665600	144	0	16	false
+corpus	100	350	3.982846692	inf	inf	350	350	42	false
+1080p	100	130	3.994766457	inf	inf	130	130	20	false
+4k	100	170	3.875598121	inf	inf	170	170	16	false
+corpus-sample-adaptive	adaptive	350	5.890771114	51.794800	50.132800	350	144	42	false
+1080p-sample-adaptive	adaptive	130	5.242252005	51.794800	51.542100	130	72	20	false
+4k-sample-adaptive	adaptive	170	5.922916875	52.624000	52.624000	170	48	16	false
