@@ -468,19 +468,20 @@ fn encode_parallel_shard(folded: &[u32], output: &mut Vec<u8>) {
 fn encode_parallel_shard_with_block_pack(folded: &[u32], output: &mut Vec<u8>) {
     let rice_selection = best_parallel_rice_parameter(folded);
     let rice_body = encode_parallel_rice_selected(folded, rice_selection);
-    let mut block_pack = Vec::with_capacity(modeled_block_pack_cost(folded));
-    for block in folded.chunks(BLOCK_PACK_SYMBOLS) {
-        put_fixed_block(&mut block_pack, block);
-    }
-    let (mode, body) = if rice_selection.zero_run_bytes <= rice_body.len()
-        && rice_selection.zero_run_bytes <= block_pack.len()
-    {
-        (ENTROPY_ZERO_RUN, encode_zero_run_folded(folded))
-    } else if rice_body.len() <= block_pack.len() {
-        (ENTROPY_RICE_BASE + rice_selection.parameter, rice_body)
-    } else {
-        (ENTROPY_BLOCK_PACK, block_pack)
-    };
+    let block_pack_bytes = modeled_block_pack_cost(folded);
+    let (mode, body) =
+        if block_pack_bytes < rice_selection.zero_run_bytes && block_pack_bytes < rice_body.len() {
+            let mut block_pack = Vec::with_capacity(block_pack_bytes);
+            for block in folded.chunks(BLOCK_PACK_SYMBOLS) {
+                put_fixed_block(&mut block_pack, block);
+            }
+            debug_assert_eq!(block_pack.len(), block_pack_bytes);
+            (ENTROPY_BLOCK_PACK, block_pack)
+        } else if rice_selection.zero_run_bytes <= rice_body.len() {
+            (ENTROPY_ZERO_RUN, encode_zero_run_folded(folded))
+        } else {
+            (ENTROPY_RICE_BASE + rice_selection.parameter, rice_body)
+        };
     output.push(mode);
     put_u16(
         output,
