@@ -300,6 +300,9 @@ record:
   CUDA toolkit, compiler flags, and kernel/binary commit;
 - kernel-only and end-to-end encode/decode time, with host/device transfers
   and launch overhead reported separately;
+- predictor/reconstruction, candidate count/selection, size scan/reduction,
+  selected-body emission, and directory/header time as separate stages before
+  evaluating fusion;
 - luma MP/s, raw GB/s, compressed GB/s, and playback bitrate;
 - achieved occupancy, active warps, branch/warp divergence, global-memory
   load/store efficiency, and effective memory bandwidth;
@@ -309,6 +312,11 @@ record:
 
 CPU and GPU frontier points remain separate panels. GPU kernel-only throughput
 must never be presented as end-to-end codec throughput.
+Every GPU candidate must first reproduce the scalar encoder byte-for-byte on
+the standard corpus; a faster non-canonical stream is a new format experiment,
+not an implementation optimization. The initial version-5 CUDA work follows
+the count/scan/disjoint-write contract in
+[research 0042](research/0042-gpu-variable-output-assembly.md).
 
 ## Feedback tiers
 

@@ -67,12 +67,68 @@ clamp-gradient prediction preserves version 2's residual field, while
 because fixed block bounds every selected body below 64 KiB. On the native
 q90 screen this costs 0.801% aggregate bytes, improves scalar full decode
 26.1% geometrically, and improves independent-tile access 33.1%. Its current
-scalar encoder constructs all candidate bodies but exact Rice search
-termination has raised it from roughly 12 MP/s to 24–38 MP/s on the native
-screen without changing bytes. It remains diagnostic rather than
+scalar encoder uses exact candidate costs to construct only the selected
+zero-run/fixed-block body and one pre-sized Rice body. Exact Rice search and
+CPU scheduling work has raised it from roughly 12 MP/s to 42–67 MP/s on the
+native screen without changing bytes. It remains diagnostic rather than
 speed-competitive. The format maps to a two-pass
 classify/scan/disjoint-write CUDA pipeline without shared append
 serialization.
+
+## CUDA version-5 handoff
+
+The first CUDA implementation keeps the version-5 stream unchanged. It uses
+the following device-visible arrays:
+
+- planar source and reconstruction samples (`u16`);
+- canonical raster folded residuals (`u32`);
+- one exact selection record per 4,096-symbol shard containing mode, selected
+  body size, Rice parameter/lane sizes, and fixed-block metadata;
+- 64-bit shard record sizes and exclusive offsets;
+- 64-bit per-tile payload sizes/offsets before checked narrowing; and
+- one pre-sized output byte buffer.
+
+For shard `i`, `record_size[i] = 3 + body_size[i]`, accounting for the mode
+byte and `u16` body length. Flatten shards in canonical plane/tile/raster
+order and apply an exclusive integer scan:
+
+```text
+record_offset[i] = exclusive_sum(record_size)[i]
+absolute_offset  = payload_start + record_offset[i]
+```
+
+A per-tile reduction supplies the directory length; the first shard offset
+supplies the directory payload offset. The final scan value plus final record
+size supplies the allocation length. Selected-mode kernels write directly to
+these disjoint intervals. A fixed-stride kernel writes directory entries.
+Header emission is constant work. No kernel appends through an atomic cursor
+or mutex, and no concatenation pass copies partial bodies.
+
+Prediction has a separate scheduling choice. A 256x128 full-tile raster chain
+contains 32,768 dependent samples. Antidiagonal execution reduces its graph
+depth to 383 synchronized steps, with at most 128 samples on one diagonal.
+The initial implementation compares:
+
+1. one block per tile advancing antidiagonals and scattering folded residuals
+   to raster locations; and
+2. independent scalar tile chains assigned across lanes/warps, analogous to
+   EXP-0129's CPU interleaving.
+
+Both schedules must reproduce the scalar Rust residual field exactly before
+entropy counting. Entropy candidate counting, scan, emission, and directory
+write remain separate kernels in the first correct prototype. Fusion is
+considered only after stage timings expose launch or memory traffic as a
+material cost.
+
+GPU evaluation records transfers, predictor, candidate selection, scan,
+emission, directory, and end-to-end time independently; it also records peak
+device memory, achieved bandwidth, active warps, warp/branch efficiency,
+predictor steps, and maximum selected lane/codeword output. The complete
+stream must match the Rust oracle byte-for-byte over the standard corpus.
+
+Research and rationale are in
+[`research/0042-gpu-variable-output-assembly.md`](../research/0042-gpu-variable-output-assembly.md)
+and [EXP-0134](../experiments/EXP-0134-cuda-handoff-contract.md).
 
 Research and quantitative gates are in
 [`research/0037-parallel-hardware-friendly-codecs.md`](../research/0037-parallel-hardware-friendly-codecs.md)
