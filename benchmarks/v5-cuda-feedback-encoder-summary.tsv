@@ -1,0 +1,19 @@
+axis	quality	setting	samples	geometric_gpps	minimum_gpps	target_gpps	speed_pass_samples	total_ratio	ratio_pass_samples	minimum_xpsnr_db	xpsnr_pass_samples	exact_samples
+rust_encode	90	1 threads	24	0.032975542	0.020551000	3.000000000	0					
+rust_encode	90	4 threads	24	0.089013749	0.056606000	3.000000000	0					
+rust_encode	100	1 threads	24	0.027932018	0.021730000	3.000000000	0					
+rust_encode	100	4 threads	24	0.075758469	0.056287000	3.000000000	0					
+cuda_decode	90	dram	24	2.931514003	0.443144247	5.000000000	6					
+cuda_decode	90	vram	24	3.523120586	0.441945712	5.000000000	6					
+cuda_decode	100	dram	24	2.342619334	0.466650869	5.000000000	2					
+cuda_decode	100	vram	24	3.297352379	0.470135960	5.000000000	7					
+cuda_encode	90	vram	24	2.121994470	0.293499072	3.000000000	7					
+cuda_encode	100	vram	24	2.091596552	0.291763383	3.000000000	7					
+quality_rate	90	corpus	24					11.687517089	8	51.958900000	24	0
+quality_rate	100	corpus	24					5.950055957	4	inf	24	24
+rust_encode_1080p	90	1 threads	15	0.032873911	0.027222000	3.000000000	0					
+rust_encode_1080p	90	4 threads	15	0.088870206	0.073617000	3.000000000	0					
+cuda_decode_1080p	90	dram	15	2.713830998	1.700617228	5.000000000	1					
+cuda_decode_1080p	90	vram	15	3.395191084	2.741834395	5.000000000	1					
+cuda_encode_1080p	90	vram	15	2.245503958	1.924736992	3.000000000	2					
+quality_rate_1080p	90	1920x1080	15					8.366149774	3	51.958900000	15	0

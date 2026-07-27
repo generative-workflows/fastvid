@@ -10,12 +10,27 @@
 namespace {
 
 constexpr int kBlockSymbols = 128;
+constexpr int64_t kHeaderBytes = 32;
+constexpr int64_t kDirectoryEntryBytes = 32;
+constexpr int64_t kShardSymbols = 4096;
+constexpr uint8_t kEntropyParallelShards = 19;
+constexpr uint8_t kPredictFullTileClampGradient = 6;
+
+__device__ uint16_t read_u16(const uint8_t* bytes) {
+  return static_cast<uint16_t>(bytes[0]) |
+      (static_cast<uint16_t>(bytes[1]) << 8);
+}
 
 __device__ uint32_t read_u32(const uint8_t* bytes) {
   return static_cast<uint32_t>(bytes[0]) |
       (static_cast<uint32_t>(bytes[1]) << 8) |
       (static_cast<uint32_t>(bytes[2]) << 16) |
       (static_cast<uint32_t>(bytes[3]) << 24);
+}
+
+__device__ uint64_t read_u64(const uint8_t* bytes) {
+  return static_cast<uint64_t>(read_u32(bytes)) |
+      (static_cast<uint64_t>(read_u32(bytes + 4)) << 32);
 }
 
 __device__ bool read_bits(
@@ -75,6 +90,97 @@ __device__ bool read_rice(
 
 __device__ void set_error(int32_t* status, int32_t code) {
   atomicCAS(status, 0, code);
+}
+
+__global__ void parse_v5_metadata_kernel(
+    const uint8_t* encoded,
+    int64_t encoded_size,
+    const int64_t* tile_metadata,
+    const int64_t* tile_parse_metadata,
+    int64_t tile_count,
+    int64_t* shard_metadata,
+    int32_t* status) {
+  const int64_t tile = blockIdx.x;
+  if (tile >= tile_count || threadIdx.x != 0) {
+    return;
+  }
+  const int64_t directory_end = kHeaderBytes + tile_count * kDirectoryEntryBytes;
+  const int64_t entry_offset = kHeaderBytes + tile * kDirectoryEntryBytes;
+  const uint8_t* entry = encoded + entry_offset;
+  const int64_t expected_plane = tile_parse_metadata[tile * 2 + 1];
+  if (entry[0] != expected_plane || entry[1] != kEntropyParallelShards ||
+      entry[2] != kPredictFullTileClampGradient || entry[3] != 0 ||
+      read_u32(entry + 4) != tile_metadata[tile * 7 + 2] ||
+      read_u32(entry + 8) != tile_metadata[tile * 7 + 3] ||
+      read_u32(entry + 12) != tile_metadata[tile * 7 + 4] ||
+      read_u32(entry + 16) != tile_metadata[tile * 7 + 5]) {
+    set_error(status, 10);
+    return;
+  }
+  const uint64_t payload_offset_u64 = read_u64(entry + 20);
+  if (payload_offset_u64 > static_cast<uint64_t>(encoded_size)) {
+    set_error(status, 10);
+    return;
+  }
+  const int64_t payload_offset = static_cast<int64_t>(payload_offset_u64);
+  const int64_t payload_length = read_u32(entry + 28);
+  if (payload_length > encoded_size - payload_offset) {
+    set_error(status, 10);
+    return;
+  }
+  if (tile == 0) {
+    if (payload_offset != directory_end) {
+      set_error(status, 10);
+      return;
+    }
+  } else {
+    const uint8_t* previous = entry - kDirectoryEntryBytes;
+    const uint64_t previous_offset = read_u64(previous + 20);
+    const uint64_t previous_length = read_u32(previous + 28);
+    if (previous_offset > static_cast<uint64_t>(encoded_size) ||
+        previous_length > static_cast<uint64_t>(encoded_size) - previous_offset ||
+        payload_offset_u64 != previous_offset + previous_length) {
+      set_error(status, 10);
+      return;
+    }
+  }
+  if (tile + 1 == tile_count && payload_offset + payload_length != encoded_size) {
+    set_error(status, 10);
+    return;
+  }
+
+  const int64_t samples = tile_metadata[tile * 7 + 4] * tile_metadata[tile * 7 + 5];
+  const int64_t folded_base = tile_metadata[tile * 7 + 6];
+  const int64_t first_shard = tile_parse_metadata[tile * 2 + 0];
+  const int64_t shard_count = (samples + kShardSymbols - 1) / kShardSymbols;
+  int64_t cursor = payload_offset;
+  int64_t decoded = 0;
+  const int64_t tile_end = payload_offset + payload_length;
+  for (int64_t local_shard = 0; local_shard < shard_count; ++local_shard) {
+    if (cursor > tile_end - 3) {
+      set_error(status, 11);
+      return;
+    }
+    const int64_t mode = encoded[cursor];
+    const int64_t body_length = read_u16(encoded + cursor + 1);
+    const int64_t body_offset = cursor + 3;
+    if (mode > 18 || body_length > tile_end - body_offset) {
+      set_error(status, 11);
+      return;
+    }
+    const int64_t sample_count = min(kShardSymbols, samples - decoded);
+    const int64_t shard = first_shard + local_shard;
+    shard_metadata[shard * 5 + 0] = mode;
+    shard_metadata[shard * 5 + 1] = body_offset;
+    shard_metadata[shard * 5 + 2] = body_length;
+    shard_metadata[shard * 5 + 3] = sample_count;
+    shard_metadata[shard * 5 + 4] = folded_base + decoded;
+    decoded += sample_count;
+    cursor = body_offset + body_length;
+  }
+  if (decoded != samples || cursor != tile_end) {
+    set_error(status, 11);
+  }
 }
 
 __global__ void decode_shards_kernel(
@@ -351,8 +457,10 @@ __global__ void reconstruct_tiles_serial_kernel(
 
 std::vector<torch::Tensor> fastvid_decode_v5_cuda(
     const torch::Tensor& encoded,
-    const torch::Tensor& shard_meta,
+    torch::Tensor shard_meta,
     const torch::Tensor& tile_meta,
+    const torch::Tensor& tile_parse_meta,
+    bool parse_metadata,
     int64_t total_samples,
     int64_t y_samples,
     int64_t chroma_samples,
@@ -367,6 +475,14 @@ std::vector<torch::Tensor> fastvid_decode_v5_cuda(
   auto output = torch::zeros({total_samples}, encoded.options().dtype(torch::kUInt16));
   auto status = torch::zeros({1}, encoded.options().dtype(torch::kInt32));
   const auto stream = at::cuda::getCurrentCUDAStream(encoded.device().index());
+
+  if (parse_metadata) {
+    parse_v5_metadata_kernel<<<tile_meta.size(0), 1, 0, stream>>>(
+        encoded.data_ptr<uint8_t>(), encoded.numel(), tile_meta.data_ptr<int64_t>(),
+        tile_parse_meta.data_ptr<int64_t>(), tile_meta.size(0),
+        shard_meta.data_ptr<int64_t>(), status.data_ptr<int32_t>());
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+  }
 
   decode_shards_kernel<<<shard_meta.size(0), 32, 0, stream>>>(
       encoded.data_ptr<uint8_t>(),

@@ -16,6 +16,7 @@ setup(
             [
                 str(ROOT / "csrc" / "fastvid_cuda.cpp"),
                 str(ROOT / "csrc" / "decode_v5.cu"),
+                str(ROOT / "csrc" / "encode_v5.cu"),
             ],
             extra_compile_args={
                 "cxx": ["-O3", "-std=c++17"],

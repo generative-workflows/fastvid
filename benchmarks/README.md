@@ -104,6 +104,17 @@ scripts/summarize-cuda-feedback.py \
   benchmarks/v5-cuda-feedback.md \
   benchmarks/v5-cuda-feedback-summary.tsv
 ```
-CPU encode and CUDA decode remain explicitly separate until a CUDA encoder
-exists; kernel-only timing cannot be substituted for either complete-call
-measurement.
+Rust-oracle encode, CUDA encode, and CUDA decode remain explicit separate
+panels; kernel-only timing cannot be substituted for complete-call
+measurement. Every measured CUDA stream is compared byte-for-byte with the
+Rust stream produced in the same case.
+
+The current 24-sample report, including its separate 15-sample 1080p slice, is
+[`v5-cuda-feedback-encoder.md`](v5-cuda-feedback-encoder.md); machine-readable
+aggregates are in
+[`v5-cuda-feedback-encoder-summary.tsv`](v5-cuda-feedback-encoder-summary.tsv).
+
+[`v5-cuda-encode-progress.md`](v5-cuda-encode-progress.md) records the
+byte-identical CUDA encoder baseline and each accepted optimization using the
+same real-world 4K control. Its TSV companion preserves machine-readable stage
+and complete-call measurements.

@@ -9,8 +9,10 @@
 
 std::vector<torch::Tensor> fastvid_decode_v5_cuda(
     const torch::Tensor& encoded,
-    const torch::Tensor& shard_meta,
+    torch::Tensor shard_meta,
     const torch::Tensor& tile_meta,
+    const torch::Tensor& tile_parse_meta,
+    bool parse_metadata,
     int64_t total_samples,
     int64_t y_samples,
     int64_t chroma_samples,
@@ -20,6 +22,15 @@ std::vector<torch::Tensor> fastvid_decode_v5_cuda(
     int64_t max_sample,
     bool grayscale,
     bool wavefront);
+
+torch::Tensor fastvid_encode_v5_cuda(
+    std::vector<torch::Tensor> planes,
+    int64_t bit_depth,
+    int64_t quality,
+    int64_t fps_numerator,
+    int64_t fps_denominator,
+    int64_t tile_width,
+    int64_t tile_height);
 
 namespace {
 
@@ -94,9 +105,11 @@ std::vector<torch::Tensor> decode_v5(torch::Tensor encoded, bool wavefront) {
   TORCH_CHECK(encoded.dim() == 1, "encoded must be one-dimensional");
   TORCH_CHECK(torch::cuda::is_available(), "CUDA is required");
 
-  auto host = encoded.to(torch::kCPU).contiguous();
-  const auto size = host.numel();
+  const auto size = encoded.numel();
   TORCH_CHECK(size >= kHeaderBytes, "truncated Fastvid header");
+  auto host = encoded.is_cuda()
+      ? encoded.narrow(0, 0, kHeaderBytes).to(torch::kCPU).contiguous()
+      : encoded.contiguous();
   const auto* bytes = host.data_ptr<uint8_t>();
   TORCH_CHECK(std::memcmp(bytes, "FVID", 4) == 0, "bad Fastvid magic");
   TORCH_CHECK(bytes[4] == kVersion, "CUDA decoder currently requires Fastvid v5");
@@ -122,6 +135,59 @@ std::vector<torch::Tensor> decode_v5(torch::Tensor encoded, bool wavefront) {
   TORCH_CHECK(tile_count <= (1 << 20), "too many tiles");
   const int64_t directory_end = kHeaderBytes + tile_count * kDirectoryEntryBytes;
   TORCH_CHECK(directory_end <= size, "truncated tile directory");
+
+  if (encoded.is_cuda()) {
+    auto long_cpu = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCPU);
+    auto tile_meta_cpu = torch::empty({tile_count, 7}, long_cpu);
+    auto tile_parse_meta_cpu = torch::empty({tile_count, 2}, long_cpu);
+    auto* tile_meta = tile_meta_cpu.data_ptr<int64_t>();
+    auto* tile_parse_meta = tile_parse_meta_cpu.data_ptr<int64_t>();
+    const int64_t y_samples = width * height;
+    const int64_t chroma_width = (width + 1) / 2;
+    const int64_t chroma_samples = chroma_width * height;
+    const int64_t plane_bases[3] = {0, y_samples, y_samples + chroma_samples};
+    const int64_t plane_widths[3] = {width, chroma_width, chroma_width};
+    int64_t total_samples = 0;
+    int64_t total_shards = 0;
+    for (int64_t i = 0; i < tile_count; ++i) {
+      const auto& tile = tiles[i];
+      tile_meta[i * 7 + 0] = plane_bases[tile.plane];
+      tile_meta[i * 7 + 1] = plane_widths[tile.plane];
+      tile_meta[i * 7 + 2] = tile.x;
+      tile_meta[i * 7 + 3] = tile.y;
+      tile_meta[i * 7 + 4] = tile.width;
+      tile_meta[i * 7 + 5] = tile.height;
+      tile_meta[i * 7 + 6] = total_samples;
+      tile_parse_meta[i * 2 + 0] = total_shards;
+      tile_parse_meta[i * 2 + 1] = tile.plane;
+      const int64_t samples = tile.width * tile.height;
+      total_samples += samples;
+      total_shards += (samples + kShardSymbols - 1) / kShardSymbols;
+    }
+    auto device_encoded = encoded.contiguous();
+    auto tile_meta_cuda = tile_meta_cpu.to(device_encoded.device());
+    auto tile_parse_meta_cuda = tile_parse_meta_cpu.to(device_encoded.device());
+    auto shard_meta_cuda = torch::zeros(
+        {total_shards, 5}, device_encoded.options().dtype(torch::kInt64));
+    const int64_t base = 1 + (100 - quality) / 5;
+    const int64_t step = 1 + ((base - 1) << (bit_depth - 8));
+    const int64_t max_sample = (int64_t{1} << bit_depth) - 1;
+    return fastvid_decode_v5_cuda(
+        device_encoded,
+        shard_meta_cuda,
+        tile_meta_cuda,
+        tile_parse_meta_cuda,
+        true,
+        total_samples,
+        y_samples,
+        chroma_samples,
+        width,
+        height,
+        step,
+        max_sample,
+        grayscale,
+        wavefront);
+  }
 
   int64_t next_payload = directory_end;
   int64_t total_shards = 0;
@@ -213,6 +279,8 @@ std::vector<torch::Tensor> decode_v5(torch::Tensor encoded, bool wavefront) {
       device_encoded,
       shard_meta_cuda,
       tile_meta_cuda,
+      torch::Tensor(),
+      false,
       total_samples,
       y_samples,
       chroma_samples,
@@ -231,4 +299,15 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
       "Decode a Fastvid v5 frame on CUDA",
       pybind11::arg("encoded"),
       pybind11::arg("wavefront") = true);
+  module.def(
+      "encode_v5",
+      &fastvid_encode_v5_cuda,
+      "Encode CUDA uint16 planes to a Rust-compatible Fastvid v5 frame",
+      pybind11::arg("planes"),
+      pybind11::arg("bit_depth"),
+      pybind11::arg("quality"),
+      pybind11::arg("fps_numerator") = 24,
+      pybind11::arg("fps_denominator") = 1,
+      pybind11::arg("tile_width") = 256,
+      pybind11::arg("tile_height") = 128);
 }

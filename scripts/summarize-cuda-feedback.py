@@ -29,6 +29,11 @@ def geometric_mean(values):
 encode_trials = read_rows("encode")
 quality_rows = read_rows("quality")
 decode_rows = read_rows("decode")
+cuda_encode_path = Path(f"{prefix}-cuda-encode.tsv")
+cuda_encode_rows = []
+if cuda_encode_path.exists():
+    with cuda_encode_path.open(newline="") as stream:
+        cuda_encode_rows = list(csv.DictReader(stream, delimiter="\t"))
 summary = []
 resolution_summary = []
 
@@ -65,6 +70,17 @@ for (quality, placement), values in sorted(decode_groups.items()):
         "minimum_gpps": min(values),
         "target_gpps": 5.0,
         "speed_pass_samples": sum(value > 5.0 for value in values),
+    })
+
+cuda_encode_groups = defaultdict(list)
+for row in cuda_encode_rows:
+    cuda_encode_groups[int(row["quality"])].append(float(row["encode_gpps"]))
+for quality, values in sorted(cuda_encode_groups.items()):
+    summary.append({
+        "axis": "cuda_encode", "quality": quality, "setting": "vram",
+        "samples": len(values), "geometric_gpps": geometric_mean(values),
+        "minimum_gpps": min(values), "target_gpps": 3.0,
+        "speed_pass_samples": sum(value > 3.0 for value in values),
     })
 
 quality_groups = defaultdict(list)
@@ -108,6 +124,17 @@ for placement in ("dram", "vram"):
         "samples": len(values), "geometric_gpps": geometric_mean(values),
         "minimum_gpps": min(values), "target_gpps": 5.0,
         "speed_pass_samples": sum(value > 5.0 for value in values),
+    })
+hd_cuda_encode = [
+    float(row["encode_gpps"]) for row in cuda_encode_rows
+    if row["sample"] in hd_samples and int(row["quality"]) == 90
+]
+if hd_cuda_encode:
+    resolution_summary.append({
+        "axis": "cuda_encode_1080p", "quality": 90, "setting": "vram",
+        "samples": len(hd_cuda_encode), "geometric_gpps": geometric_mean(hd_cuda_encode),
+        "minimum_gpps": min(hd_cuda_encode), "target_gpps": 3.0,
+        "speed_pass_samples": sum(value > 3.0 for value in hd_cuda_encode),
     })
 hd_quality = [row for row in quality_rows if row["sample"] in hd_samples and int(row["quality"]) == 90]
 resolution_summary.append({
@@ -170,7 +197,7 @@ lines += [
     "",
     "## 1080p q90 slice",
     "",
-    "Fifteen 1920x1080 samples are reported separately because fixed launch and orchestration costs make the 4K-only result non-representative.",
+    f"{len(hd_samples)} 1920x1080 samples are reported separately because fixed launch and orchestration costs make the 4K-only result non-representative.",
     "",
     "| Axis | Setting | Geo. GP/s | Min GP/s | Passing |",
     "|---|---|---:|---:|---:|",
@@ -186,7 +213,7 @@ lines += [
 ]
 lines += [
     "",
-    "The four INSTRUCTIONS targets are conjunctive. An aggregate pass does not override a failing sample, and the Rust encode rows are a correctness/reference baseline—not a claim about the not-yet-implemented CUDA encoder.",
+    "The four INSTRUCTIONS targets are conjunctive. An aggregate pass does not override a failing sample. Rust encode is the CPU correctness/reference baseline; every reported CUDA encode stream was checked byte-for-byte against it.",
     "",
 ]
 markdown_path.parent.mkdir(parents=True, exist_ok=True)

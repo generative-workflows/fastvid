@@ -126,6 +126,15 @@ were 10.45x slower than antidiagonal wavefront on the real-world 4K q90 row.
 Wavefront is therefore the default CUDA reconstruction schedule; scalar tile
 chains remain a diagnostic control rather than a performance candidate.
 
+The first encoder now implements this pipeline while preserving the Rust v5
+stream byte-for-byte. It performs exact parallel candidate analysis, transfers
+only compact selection records for the canonical host scan and directory, and
+writes pre-sized device output intervals. Four warps emit the four Rice lanes.
+Fixed-block shards are compacted from the already transferred selection data
+and use one warp per 128-symbol block, eliminating serial per-block bit
+packing without changing the format. The host scan remains an intentional
+baseline and a future device-side assembly experiment.
+
 GPU evaluation records transfers, predictor, candidate selection, scan,
 emission, directory, and end-to-end time independently; it also records peak
 device memory, achieved bandwidth, active warps, warp/branch efficiency,

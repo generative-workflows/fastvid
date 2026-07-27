@@ -460,6 +460,26 @@ pub struct TileEntropyModel {
     pub diagonal_best_bytes: u64,
 }
 
+/// Read-only complete-byte model for one version-5 entropy shard.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParallelShardEntropyModel {
+    pub tile: usize,
+    pub plane: usize,
+    pub shard: usize,
+    pub sample_count: usize,
+    pub current_mode: u8,
+    pub current_body_bytes: usize,
+    pub current_complete_bytes: usize,
+    pub distinct_symbols: usize,
+    pub ideal_order0_bytes: u64,
+    pub order0_supported: bool,
+    pub order0_table_log: u8,
+    pub order0_payload_bytes: u64,
+    pub order0_table_bytes: u64,
+    pub order0_complete_bytes: u64,
+    pub oracle_complete_bytes: u64,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct RiceLaneSizeModel {
     pub(crate) payload_bytes: u64,

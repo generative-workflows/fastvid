@@ -1,8 +1,9 @@
 use crate::codec::StreamInfo;
 use crate::model::{
     ByteFormatModel, CodecError, CodecOptions, Frame16, FrameRate, MAX_FRAME_BYTES, PixelFormat,
-    Plane16, PredictorBandModel, PredictorCandidateModel, PredictorModelMode, TileEntropyModel,
-    TilePredictorModel, TileResidualMappingModel, checked_area, fold_bounded_residual, sample_max,
+    ParallelShardEntropyModel, Plane16, PredictorBandModel, PredictorCandidateModel,
+    PredictorModelMode, TileEntropyModel, TilePredictorModel, TileResidualMappingModel,
+    checked_area, fold_bounded_residual, sample_max,
 };
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -867,6 +868,91 @@ pub fn analyze_entropy16(bytes: &[u8]) -> Result<Vec<TileEntropyModel>, CodecErr
             })
         })
         .collect()
+}
+
+/// Model a fully charged tile-local order-0 alternative for every version-5
+/// execution shard without changing or materializing a bitstream.
+pub fn analyze_parallel_shards16(
+    bytes: &[u8],
+) -> Result<Vec<ParallelShardEntropyModel>, CodecError> {
+    let parsed = parse(bytes)?;
+    if bytes[4] != FULL_TILE_PARALLEL_VERSION {
+        return Err(CodecError::InvalidInput(
+            "parallel shard analysis requires a version-5 stream",
+        ));
+    }
+    let max_folded = u32::from(sample_max(parsed.info.format.bit_depth())?) * 2;
+    let mut result = Vec::new();
+    for (tile_index, entry) in parsed.entries.iter().enumerate() {
+        let payload = &parsed.bytes[entry.offset..entry.offset + entry.length];
+        let sample_count = checked_high_area(entry.tile.width, entry.tile.height)?;
+        let mut cursor = 0usize;
+        let mut decoded = 0usize;
+        let mut shard_index = 0usize;
+        while decoded < sample_count {
+            let mode = *payload
+                .get(cursor)
+                .ok_or(CodecError::Malformed("truncated entropy shard header"))?;
+            let body_length = get_u16(payload, cursor + 1)? as usize;
+            cursor += 3;
+            let end = cursor
+                .checked_add(body_length)
+                .filter(|&end| end <= payload.len())
+                .ok_or(CodecError::Malformed("truncated entropy shard body"))?;
+            let count = PARALLEL_SHARD_SYMBOLS.min(sample_count - decoded);
+            let body = &payload[cursor..end];
+            let folded = if mode == ENTROPY_ZERO_RUN {
+                decode_zero_run_folded(body, count, max_folded)?
+            } else if (ENTROPY_RICE_BASE..=ENTROPY_RICE_BASE + MAX_RICE_PARAMETER)
+                .contains(&mode)
+            {
+                decode_parallel_rice_folded(body, count, mode - ENTROPY_RICE_BASE, max_folded)?
+            } else if mode == ENTROPY_BLOCK_PACK {
+                decode_block_pack_folded(body, count, max_folded)?
+            } else {
+                return Err(CodecError::Malformed("unknown entropy shard mode"));
+            };
+            let mut model = ByteFormatModel::default();
+            for value in folded {
+                model.push(value);
+            }
+            let order0 = model.order0_size();
+            let current_complete_bytes = body_length + 3;
+            let order0_complete_bytes = if order0.supported {
+                order0.complete_bytes + 3
+            } else {
+                0
+            };
+            result.push(ParallelShardEntropyModel {
+                tile: tile_index,
+                plane: entry.tile.plane,
+                shard: shard_index,
+                sample_count: count,
+                current_mode: mode,
+                current_body_bytes: body_length,
+                current_complete_bytes,
+                distinct_symbols: order0.distinct_symbols,
+                ideal_order0_bytes: order0.ideal_bytes,
+                order0_supported: order0.supported,
+                order0_table_log: order0.table_log,
+                order0_payload_bytes: order0.payload_bytes,
+                order0_table_bytes: order0.table_bytes,
+                order0_complete_bytes,
+                oracle_complete_bytes: if order0.supported {
+                    order0_complete_bytes.min(current_complete_bytes as u64)
+                } else {
+                    current_complete_bytes as u64
+                },
+            });
+            decoded += count;
+            shard_index += 1;
+            cursor = end;
+        }
+        if cursor != payload.len() {
+            return Err(CodecError::Malformed("trailing bounded-shard tile bytes"));
+        }
+    }
+    Ok(result)
 }
 
 /// High-bit equivalent of [`crate::codec::analyze_residual_mapping`].

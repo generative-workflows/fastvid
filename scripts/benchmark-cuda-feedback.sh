@@ -38,11 +38,13 @@ mkdir -p "$(dirname -- "$output_prefix")"
 speed_output="${output_prefix}-encode.tsv"
 quality_output="${output_prefix}-quality.tsv"
 decode_output="${output_prefix}-decode.tsv"
+cuda_encode_output="${output_prefix}-cuda-encode.tsv"
 environment_output="${output_prefix}-environment.txt"
 
 printf 'sample\ttrial\tinput\tframes\tbit_depth\tquality\tthreads\tgop\ttile_width\ttile_height\traw_bytes\tencoded_bytes\tratio\tencode_ms\tdecode_ms\tencode_mpps\tdecode_mpps\tencode_raw_mb_s\tdecode_raw_mb_s\tencoded_stream_mb_s\tencoded_stream_mbps\ty_psnr\tcb_psnr\tcr_psnr\ty_block_ssim\tmax_error\n' > "$speed_output"
 printf 'sample\tquality\traw_bytes\tencoded_bytes\tratio\ty_psnr_db\tcb_psnr_db\tcr_psnr_db\ty_block_ssim\tmax_error\txpsnr_y_db\txpsnr_u_db\txpsnr_v_db\txpsnr_min_db\tcompression_gt_15x\txpsnr_gt_50db\texact\n' > "$quality_output"
 printf 'sample\tquality\tinput\tplacement\tpredictor\twidth\theight\tencoded_bytes\traw_bytes\tratio\tmedian_ms\tdecode_gpps\traw_gb_s\n' > "$decode_output"
+printf 'sample\tinput\tquality\twidth\theight\tbit_depth\tencoded_bytes\traw_bytes\tratio\tmedian_ms\tencode_gpps\traw_gb_s\n' > "$cuda_encode_output"
 
 field() {
   local key="$1"
@@ -101,6 +103,14 @@ while IFS=$'\t' read -r sample relative_path width height frame_rate source_id; 
     "$binary" encode-yuv422p16le-parallel-full-tile \
       "$input" "$stream" "$width" "$height" "$frame_rate" 10 "$quality" 1 256 128
     "$binary" decode16 "$stream" "$decoded" 1
+
+    cuda_encode_row="$temporary_dir/${sample}-q${quality}-cuda-encode.tsv"
+    python "$repo_dir/cuda/benchmarks/benchmark_encode_v5.py" \
+      "$input" "$width" "$height" 10 "$quality" \
+      --frame-rate "$frame_rate" --warmups 3 --trials "$trials" --oracle "$stream" \
+      > "$cuda_encode_row"
+    printf '%s\t' "$sample" >> "$cuda_encode_output"
+    tail -n 1 "$cuda_encode_row" >> "$cuda_encode_output"
 
     stats="$temporary_dir/${sample}-q${quality}-xpsnr.log"
     ffmpeg -nostdin -hide_banner -loglevel error \
@@ -179,4 +189,5 @@ done < <(jq -r --argjson selection "$selection" '
 echo "encode trials: $speed_output"
 echo "quality gates: $quality_output"
 echo "CUDA decode: $decode_output"
+echo "CUDA encode: $cuda_encode_output"
 echo "environment: $environment_output"
