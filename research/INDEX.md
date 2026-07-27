@@ -45,3 +45,4 @@ before entering the format.
 | [0038](0038-lossless-wavefront-scheduling.md) | Recent lossless wavefront codecs, PILC, DietGPU | Exact causal scheduling, raster staging, and parallel entropy handoff | Reviewed |
 | [0039](0039-parallel-rice-bitstream-hardware.md) | 2024 parallel Bayer FPGA codec and OMLS license audit | Fixed-width parallel Rice packing, bounded unary output, and incompatible source boundary | Reviewed |
 | [0040](0040-edge-gpu-predictive-compression.md) | Ferraz et al., parallel CCSDS-123 on Jetson GPUs | Causal-kernel isolation, heterogeneous entropy selection, and serial-output limits | Reviewed |
+| [0041](0041-adaptive-med-block-predictor.md) | Hsu, Ding, and Lu, adaptive MED block predictor | Low-cost residual feedback with independent square predictor blocks | Reviewed |
