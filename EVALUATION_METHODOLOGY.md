@@ -1,6 +1,6 @@
 # Fastvid evaluation methodology
 
-Version: 13 (2026-07-26)
+Version: 14 (2026-07-27)
 
 This document defines the standard target used to evaluate Fastvid changes.
 Experiments may add diagnostics or deliberately diverge, but an optimization
@@ -14,7 +14,8 @@ finite-block entropy accounting in
 parallel-hardware architecture review in
 [research 0037](research/0037-parallel-hardware-friendly-codecs.md), and the
 lossless wavefront/entropy-handoff review in
-[research 0038](research/0038-lossless-wavefront-scheduling.md).
+[research 0038](research/0038-lossless-wavefront-scheduling.md), and the
+XPSNR review in [research 0043](research/0043-xpsnr-quality-metric.md).
 
 ## Goals and tracks
 
@@ -165,9 +166,11 @@ The metric feedback tiers are:
    operating-point reversals, and 3.44x median metric speedup on the complete
    corpus. It is a rejection/screening diagnostic only. Every-fifth-block
    sampling failed its error gate and is not a standard metric.
-2. **Focused:** MS-SSIM/VMAF and a texture-aware diagnostic such as DISTS are
-   run on affected samples and rate points. Generated/fine-texture assets and
-   UI/text assets remain separate groups because their failure modes conflict.
+2. **Focused:** native-format FFmpeg XPSNR is the low-complexity
+   perceptually weighted axis. MS-SSIM/VMAF and a texture-aware diagnostic
+   such as DISTS are run when their pinned implementations are available.
+   Generated/fine-texture assets and UI/text assets remain separate groups
+   because their failure modes conflict.
 3. **Release/capability:** a temporal, color- and HDR-aware metric such as
    ColorVideoVDP is run for supported native HDR/video rows with its display
    model, transfer function, color space, frame rate, temporal padding,
@@ -317,6 +320,26 @@ the standard corpus; a faster non-canonical stream is a new format experiment,
 not an implementation optimization. The initial version-5 CUDA work follows
 the count/scan/disjoint-write contract in
 [research 0042](research/0042-gpu-variable-output-assembly.md).
+
+### Constrained GPU optimization
+
+A GPU compression objective must predeclare constraints before comparing
+candidates:
+
+- per-sample and aggregate PSNR, full block-SSIM, XPSNR, and maximum-error
+  floors at named rate points;
+- end-to-end encode and decode GP/s floors on a named GPU, with transfer and
+  orchestration included;
+- exact quality-100 reconstruction and byte agreement with the scalar oracle
+  for implementation-only changes;
+- memory, access, and serial-span ceilings where relevant.
+
+Among candidates satisfying every constraint, maximize complete-stream
+compression ratio (equivalently minimize encoded bytes). A candidate missing
+one quality, speed, correctness, memory, or access constraint is infeasible;
+its smaller stream is not a win. Kernel-only GP/s is diagnostic and cannot
+satisfy an end-to-end floor. Numeric floors must be selected from per-sample
+evidence rather than only a cross-depth or cross-category aggregate.
 
 ## Feedback tiers
 

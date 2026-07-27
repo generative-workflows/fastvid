@@ -47,3 +47,21 @@ reuses the checksummed six-trial OpenAPV rows named in `frontier.json`, then
 remeasures only the current Fastvid slots. Pass `--refresh` as the sixth
 argument only when the OpenAPV binary, corpus, controls, or benchmark machine
 changes. This keeps routine promotion feedback focused on code that changed.
+
+## CPU baseline for CUDA
+
+[`v5-cpu-baseline.md`](v5-cpu-baseline.md) is the durable version-5
+rate/quality/thread-scaling reference collected before CUDA migration. It
+uses the checksummed native high-bit supplement and keeps deterministic
+rate/quality rows separate from five-trial timing rows.
+
+Durable per-sample and aggregate data:
+
+- [`v5-cpu-baseline-quality.tsv`](v5-cpu-baseline-quality.tsv);
+- [`v5-cpu-baseline-quality-summary.tsv`](v5-cpu-baseline-quality-summary.tsv);
+- [`v5-cpu-baseline-speed.tsv`](v5-cpu-baseline-speed.tsv);
+- [`v5-cpu-baseline-speed-summary.tsv`](v5-cpu-baseline-speed-summary.tsv).
+
+The raw measurements and host record remain under `artifacts/` with hashes in
+[EXP-0135](../experiments/EXP-0135-cpu-gpu-baseline.md). This baseline is
+separate from the preserved CPU frontier and does not alter the root README.
