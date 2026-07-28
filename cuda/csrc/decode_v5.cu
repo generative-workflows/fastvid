@@ -463,7 +463,7 @@ std::vector<torch::Tensor> fastvid_decode_v5_cuda(
     bool parse_metadata,
     int64_t total_samples,
     int64_t y_samples,
-    int64_t chroma_samples,
+    int64_t secondary_samples,
     int64_t width,
     int64_t height,
     int64_t step,
@@ -518,10 +518,11 @@ std::vector<torch::Tensor> fastvid_decode_v5_cuda(
   std::vector<torch::Tensor> planes;
   planes.push_back(output.narrow(0, 0, y_samples).view({height, width}));
   if (!grayscale) {
-    const int64_t chroma_width = (width + 1) / 2;
-    planes.push_back(output.narrow(0, y_samples, chroma_samples).view({height, chroma_width}));
-    planes.push_back(output.narrow(0, y_samples + chroma_samples, chroma_samples)
-                         .view({height, chroma_width}));
+    const int64_t secondary_width = secondary_samples / height;
+    planes.push_back(output.narrow(0, y_samples, secondary_samples)
+                         .view({height, secondary_width}));
+    planes.push_back(output.narrow(0, y_samples + secondary_samples, secondary_samples)
+                         .view({height, secondary_width}));
   }
   return planes;
 }

@@ -148,7 +148,13 @@ def load_frames(sample: Sample, torch: Any) -> list[tuple[Any, ...]]:
             cursor += count
         frames.append(tuple(planes))
     maximum = (1 << sample.bit_depth) - 1
-    if any(int(plane.max().item()) > maximum for frame in frames for plane in frame):
+    # PyTorch does not implement CUDA reductions for uint16. Widen only for
+    # validation; codec inputs remain in their required native dtype.
+    if any(
+        int(plane.to(torch.int32).max().item()) > maximum
+        for frame in frames
+        for plane in frame
+    ):
         raise ValueError(f"{sample.id}: samples exceed {sample.bit_depth}-bit range")
     return frames
 
@@ -185,7 +191,18 @@ def distribution(seconds: Sequence[float]) -> dict[str, Any]:
     }
 
 
-def run_ffmpeg(raw: Path, output: Path, sample: Sample, ffmpeg: str) -> None:
+def metric_pixel_format(bit_depth: int) -> str:
+    """Return an FFVShip-supported 4:4:4 interchange at the source depth."""
+    return {
+        8: "yuv444p",
+        10: "yuv444p10le",
+        16: "yuv444p16le",
+    }[bit_depth]
+
+
+def run_ffmpeg(
+    raw: Path, output: Path, sample: Sample, ffmpeg: str, ffprobe: str = "ffprobe",
+) -> None:
     pixel_formats = {
         ("gray", 8): "gray", ("gray", 10): "gray10le", ("gray", 16): "gray16le",
         ("yuv422", 8): "yuv422p", ("yuv422", 10): "yuv422p10le",
@@ -193,17 +210,36 @@ def run_ffmpeg(raw: Path, output: Path, sample: Sample, ffmpeg: str) -> None:
         ("rgb444", 10): "gbrp10le", ("rgb444", 16): "gbrp16le",
     }
     source_format = pixel_formats[(sample.format, sample.bit_depth)]
+    metric_format = metric_pixel_format(sample.bit_depth)
     command = [
         ffmpeg, "-v", "error", "-y", "-f", "rawvideo",
         "-pixel_format", source_format, "-video_size", f"{sample.width}x{sample.height}",
         "-framerate", "1", "-color_range", "pc", "-colorspace", "bt709",
         "-color_primaries", "bt709", "-color_trc", "bt709",
         "-i", str(raw), "-frames:v", str(sample.batch_frames),
-        "-vf", "format=gbrp16le", "-color_range", "pc",
+        # FFVShip 5.0 rejects planar RGB but accepts planar YUV444 at every
+        # required depth. Preserve native precision through this conversion.
+        "-vf", f"format={metric_format}", "-color_range", "pc",
         "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
-        "-c:v", "ffv1", "-level", "3", "-pix_fmt", "gbrp16le", str(output),
+        "-c:v", "ffv1", "-level", "3", "-pix_fmt", metric_format, str(output),
     ]
     subprocess.run(command, check=True, capture_output=True, text=True)
+    probe = subprocess.run(
+        [
+            ffprobe, "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=pix_fmt,bits_per_raw_sample",
+            "-of", "json", str(output),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    streams = json.loads(probe.stdout).get("streams", [])
+    if len(streams) != 1 or streams[0].get("pix_fmt") != metric_format:
+        actual = streams[0].get("pix_fmt") if len(streams) == 1 else streams
+        raise RuntimeError(
+            f"metric video pixel format {actual!r}, expected {metric_format!r}"
+        )
 
 
 def parse_ffvship_scores(path: Path, metric: str) -> list[float]:
@@ -358,8 +394,8 @@ def evaluate_sample(
         reference_raw.write_bytes(b"".join(metric_raw(frame, sample) for frame in frames))
         decoded_raw.write_bytes(b"".join(metric_raw(frame, sample) for frame in decoded_frames))
         reference_video, decoded_video = temp / "reference.mkv", temp / "decoded.mkv"
-        run_ffmpeg(reference_raw, reference_video, sample, args.ffmpeg)
-        run_ffmpeg(decoded_raw, decoded_video, sample, args.ffmpeg)
+        run_ffmpeg(reference_raw, reference_video, sample, args.ffmpeg, args.ffprobe)
+        run_ffmpeg(decoded_raw, decoded_video, sample, args.ffmpeg, args.ffprobe)
         ssim = ffvship_metric(reference_video, decoded_video, "SSIMULACRA2", args.ffvship, temp)
         butter = ffvship_metric(reference_video, decoded_video, "Butteraugli", args.ffvship, temp)
     if len(ssim) != len(frames) or len(butter) != len(frames):
@@ -445,6 +481,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--ffvship-revision", required=True)
     parser.add_argument("--ffvship-build", required=True)
     parser.add_argument("--ffmpeg", default="ffmpeg")
+    parser.add_argument("--ffprobe", default="ffprobe")
     args = parser.parse_args(argv)
     if args.repetitions < 20:
         parser.error("--repetitions must be at least 20")
@@ -482,6 +519,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         failures.append(f"FFVShip binary not found: {args.ffvship}")
     if shutil.which(args.ffmpeg) is None:
         failures.append(f"FFmpeg binary not found: {args.ffmpeg}")
+    if shutil.which(args.ffprobe) is None:
+        failures.append(f"FFprobe binary not found: {args.ffprobe}")
 
     if not failures:
         for sample in samples:
@@ -526,8 +565,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "repetitions": args.repetitions, "tile_size": args.tile_size,
             "codec_module": args.codec_module,
             "metric_conversion": (
-                "raw planar little-endian uint16 at original format/depth -> "
-                "FFmpeg format=gbrp16le, full-range BT.709 -> lossless FFV1 level 3"
+                "raw planar at original format/depth -> FFmpeg full-range BT.709 "
+                "YUV444 at matching 8/10/16-bit depth -> lossless FFV1 level 3"
             ),
             "ffvship_revision": args.ffvship_revision,
             "ffvship_build": args.ffvship_build,
@@ -545,6 +584,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "torch": getattr(torch, "__version__", None),
             "cuda": getattr(torch.version, "cuda", None),
             "ffmpeg": command_output([args.ffmpeg, "-version"]),
+            "ffprobe": command_output([args.ffprobe, "-version"]),
         },
         "hardware": {
             "platform": platform.platform(),

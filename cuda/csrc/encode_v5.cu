@@ -38,14 +38,15 @@ std::vector<Tile> expected_tiles(
     int64_t height,
     int64_t tile_width,
     int64_t tile_height,
-    bool grayscale) {
+    int64_t layout) {
   std::vector<Tile> result;
   int64_t folded_base = 0;
   int64_t first_shard = 0;
-  const int64_t plane_count = grayscale ? 1 : 3;
+  const int64_t plane_count = layout == 0 ? 1 : 3;
   for (int64_t plane = 0; plane < plane_count; ++plane) {
-    const int64_t plane_width = plane == 0 ? width : (width + 1) / 2;
-    const int64_t nominal_width = plane == 0 ? tile_width : (tile_width + 1) / 2;
+    const bool subsampled = layout == 1 && plane != 0;
+    const int64_t plane_width = subsampled ? (width + 1) / 2 : width;
+    const int64_t nominal_width = subsampled ? (tile_width + 1) / 2 : tile_width;
     for (int64_t y = 0; y < height; y += tile_height) {
       for (int64_t x = 0; x < plane_width; x += nominal_width) {
         const int64_t actual_width = std::min(nominal_width, plane_width - x);
@@ -502,16 +503,18 @@ __global__ void emit_block_shards_kernel(
 
 torch::Tensor fastvid_encode_v5_cuda(
     std::vector<torch::Tensor> planes,
+    int64_t layout,
     int64_t bit_depth,
     int64_t quality,
     int64_t fps_numerator,
     int64_t fps_denominator,
     int64_t tile_width,
     int64_t tile_height) {
-  TORCH_CHECK(planes.size() == 1 || planes.size() == 3,
-              "planes must contain grayscale Y or Y/Cb/Cr 4:2:2 tensors");
-  TORCH_CHECK(bit_depth == 10 || bit_depth == 12 || bit_depth == 16,
-              "bit_depth must be 10, 12, or 16");
+  TORCH_CHECK(layout >= 0 && layout <= 2, "layout must be gray, yuv422, or rgb444");
+  TORCH_CHECK(planes.size() == (layout == 0 ? 1 : 3),
+              "plane count does not match layout");
+  TORCH_CHECK(bit_depth == 8 || bit_depth == 10 || bit_depth == 12 || bit_depth == 16,
+              "bit_depth must be 8, 10, 12, or 16");
   TORCH_CHECK(quality >= 1 && quality <= 100, "quality must be in 1..=100");
   TORCH_CHECK(fps_numerator > 0 && fps_numerator <= std::numeric_limits<uint32_t>::max() &&
                   fps_denominator > 0 && fps_denominator <= std::numeric_limits<uint32_t>::max(),
@@ -529,15 +532,14 @@ torch::Tensor fastvid_encode_v5_cuda(
                   width <= std::numeric_limits<uint32_t>::max() &&
                   height <= std::numeric_limits<uint32_t>::max(),
               "frame dimensions must be nonzero u32 values");
-  const bool grayscale = planes.size() == 1;
-  const int64_t chroma_width = (width + 1) / 2;
+  const int64_t secondary_width = layout == 1 ? (width + 1) / 2 : width;
   for (size_t plane = 0; plane < planes.size(); ++plane) {
     TORCH_CHECK(planes[plane].device() == device, "all planes must use the same CUDA device");
     TORCH_CHECK(planes[plane].scalar_type() == torch::kUInt16 && planes[plane].dim() == 2,
                 "encoder planes must be two-dimensional uint16 tensors");
-    const int64_t expected_width = plane == 0 ? width : chroma_width;
+    const int64_t expected_width = plane == 0 ? width : secondary_width;
     TORCH_CHECK(planes[plane].size(0) == height && planes[plane].size(1) == expected_width,
-                "plane dimensions do not match YUV 4:2:2 layout");
+                "plane dimensions do not match declared layout");
   }
 
   c10::cuda::CUDAGuard guard(device);
@@ -547,7 +549,7 @@ torch::Tensor fastvid_encode_v5_cuda(
     flat_planes.push_back(plane.contiguous().reshape({-1}));
   }
   auto source = torch::cat(flat_planes, 0);
-  auto tiles = expected_tiles(width, height, tile_width, tile_height, grayscale);
+  auto tiles = expected_tiles(width, height, tile_width, tile_height, layout);
   TORCH_CHECK(tiles.size() <= (1u << 20), "too many tiles");
   const int64_t total_samples = source.numel();
   const int64_t total_shards = tiles.empty() ? 0 : tiles.back().first_shard + tiles.back().shard_count;
@@ -557,9 +559,9 @@ torch::Tensor fastvid_encode_v5_cuda(
   tile_metadata.reserve(tiles.size() * 7);
   shard_metadata.reserve(total_shards * 3);
   const int64_t y_samples = width * height;
-  const int64_t chroma_samples = chroma_width * height;
-  const int64_t plane_bases[3] = {0, y_samples, y_samples + chroma_samples};
-  const int64_t plane_widths[3] = {width, chroma_width, chroma_width};
+  const int64_t secondary_samples = secondary_width * height;
+  const int64_t plane_bases[3] = {0, y_samples, y_samples + secondary_samples};
+  const int64_t plane_widths[3] = {width, secondary_width, secondary_width};
   for (size_t tile_index = 0; tile_index < tiles.size(); ++tile_index) {
     const auto& tile = tiles[tile_index];
     tile_metadata.insert(tile_metadata.end(), {
@@ -631,7 +633,7 @@ torch::Tensor fastvid_encode_v5_cuda(
   prefix.reserve(payload_start);
   prefix.insert(prefix.end(), {'F', 'V', 'I', 'D'});
   prefix.push_back(5);
-  prefix.push_back(grayscale ? 0 : 1);
+  prefix.push_back(static_cast<uint8_t>(layout));
   prefix.push_back(static_cast<uint8_t>(quality));
   prefix.push_back(static_cast<uint8_t>(bit_depth - 8));
   put_u32(prefix, static_cast<uint32_t>(width));

@@ -6,6 +6,7 @@ from . import _C
 def encode_v5(
     planes,
     *,
+    layout=None,
     bit_depth=10,
     quality=90,
     frame_rate=(24, 1),
@@ -23,10 +24,17 @@ def encode_v5(
         planes = (planes,)
     else:
         planes = tuple(planes)
+    if layout is None:
+        layout = 0 if len(planes) == 1 else (
+            1 if planes[1].shape[1] != planes[0].shape[1] else 2
+        )
+    elif isinstance(layout, str):
+        layout = {"gray": 0, "yuv422": 1, "rgb444": 2}[layout]
     fps_numerator, fps_denominator = frame_rate
     tile_width, tile_height = tile_size
     return _C.encode_v5(
         list(planes),
+        layout,
         bit_depth,
         quality,
         fps_numerator,
