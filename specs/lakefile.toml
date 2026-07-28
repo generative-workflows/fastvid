@@ -1,7 +1,0 @@
-name = "fastvid-spec"
-version = "0.1.0"
-defaultTargets = ["Fastvid"]
-
-[[lean_lib]]
-name = "Fastvid"
-

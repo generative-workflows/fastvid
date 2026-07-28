@@ -1,116 +1,224 @@
-Fastvid is a GPU-accelerated intermediate codec designed for high-resolution video.
+# Fastvid
 
-It balances three goals simultaneously:
-    1. Perceptual Similarity
-    2. Encoding and Decoding Speed
-    3. Compression Ratio
+Fastvid is an audio/video codec designed and built through autoresearch. Its
+video path is a fast, CUDA-accelerated, perceptually lossless intra-frame codec.
+Frames must be independently encodable and decodable: do not use temporal
+prediction, motion compensation, GOP dependencies, or any other inter-frame
+coding tool.
 
-This project is based around experimental research and formal verification.
-Every experiment MUST be logged (see experiments section below).
-Every research artifact MUST be logged (see research section below).
-Evaluation methodology MUST be clearly defined by research and experiments, so fastvid has a clear target to optimize against (see evaluation methodology below).
+The research objective is:
 
-## Implementation
+> Maximize compression while satisfying every correctness, perceptual-quality,
+> and performance gate in the canonical evaluator.
 
-This is a fast intermediate video codec consisting of two reference implementations: 
-  1. A CPU reference, written in Rust
-  2. A GPU reference, written as a C++/CUDA custom extension for pytorch.
+The gates are constraints, not values to trade away for a better average.
 
-The python API should be extremely simple. For encoding, accept a 16-bit RGB and YUV tensor and encode as 4:2:2 or 4:4:4. For images, support a shape of [3, H, W] or [3, 1, H, W]. For videos, accept [3, T, H, W].
+## Current Scope
 
-Decoding should allow decoding from either VRAM or DRAM. Decoding yields
-tensors on CUDA. The decode API should support decoding everything, as well as decoding selected frames or a range of frames from a video.
+Prioritize the CUDA video implementation and its Python-facing API. Do not
+spend research time on a CPU implementation or formal verification.
 
-Fastvid supports tiled encoding and decoding for use-cases where tile-wise edits are possible with
-lower resident VRAM.
+The required video format matrix is:
 
-### Engineering Requirements
+| Color format | Chroma sampling | Required depths |
+| --- | --- | --- |
+| YUV | 4:2:2 | 8, 10, and 16 bit |
+| RGB | 4:4:4 | 10 and 16 bit |
+| Gray | 4:0:0 | 10 and 16 bit |
 
-The codec should be largely size and length-independent, supporting arbitrary (rational) framerates.
-It should be possible to relatively cheaply decode or re-encode individual frames and tiles, with some overhead acceptable (e.g. needing to decode a few adjacent frames). This is necessary for downstream usage in video editing tasks.
+Do not silently evaluate one format or depth as a proxy for another. Every
+required matrix entry must have an explicit correctness and quality result.
 
-Some concrete goals to reach simultaneously:
-  1. >5 GP/s of decoding for ~real-time 4K.
-  2. >3 GP/s of encoding for ~real-time 4K.
-  3. >50dB minimum per-frame XPSNR
-  4. >15x compression ratio.
+Audio is part of Fastvid's overall product direction, but the current
+autoresearch loop, corpus, and acceptance gates below apply to the video path.
+Do not invent audio acceptance criteria; work on audio only when separately
+specified.
 
-### Patent Free / Open Source
+The implementation should:
 
-Do not draw on sources that are not open for use. Require MIT, Apache, or compatible licenses.
-This project will be legitimately MIT licensed and needs to have the grounding in its dependencies
-to do so.
+- run encode and decode on CUDA and expose a simple Python API;
+- support individual images and batches of independent frames;
+- accept and return formats without hidden precision loss or unintended chroma
+  conversion;
+- keep the bitstream independent of image dimensions where practical and
+  support arbitrary image sizes;
+- retain tile-local encode/decode as a design goal for editing workloads;
+- decode from bitstreams resident in either VRAM or host memory, without
+  including file I/O in codec timing.
 
-### Draw on Research Literature
+## Canonical Evaluation Harness
 
-Most of the codecs this will be measured against were written over 15 years ago. There is surely an advanced literature describing new compression techniques, optimized implementation, and metrics. Use code and research that is openly available to create the best possible implementation, with attribution.
+`scripts/evaluate.py` is the one canonical entry point for testing codec
+changes. Build or repair it before conducting codec experiments if it does not
+yet implement these requirements.
 
-Keep track of research references in the `research` subdirectory, using `research/INDEX.md` as an index. Independently verify results and try many paths. Each research reference should have a dedicated file, e.g. `research/0001-some-paper.md` that catalogues key findings and insights.
+The evaluator may call internal helpers, metric binaries, build tools, and
+profilers, but researchers and coding agents must invoke evaluation through
+this entry point. Do not create experiment-specific benchmark or quality
+scripts, and do not accept results from ad-hoc commands.
 
-Research references should contain a section linking them to relevant experiments.
+The evaluator must provide, at minimum:
 
-Code that is based on research should link to the research reference.
+- a fast `rejection` tier over a fixed, representative corpus subset;
+- a `full` tier over the entire corpus and complete format/depth matrix;
+- machine-readable output containing configuration, corpus revision, hardware,
+  software revisions, per-frame quality, encoded sizes, and timing samples;
+- a non-zero exit status when any required correctness, quality, coverage, or
+  performance gate fails;
+- reproducible selection: the rejection set, conversions, seeds, and corpus
+  manifests must be checked into the repository and versioned;
+- validation that every expected sample and required format/depth combination
+  was actually evaluated.
 
-## Specification
+The rejection tier exists only to shorten feedback. Passing it is not an
+acceptance result. A candidate may be accepted only after the unchanged
+candidate passes the full tier.
 
-We want to have a formal specification, described in the `specs` subdirectory, written in Lean.
+The evaluator and its thresholds are part of the experimental specification.
+Do not weaken, bypass, special-case, or silently modify them to make a codec
+change pass. A proposed methodology change must be documented and reviewed as
+its own experiment before it is used to judge codec changes.
 
-We will use Lean and Aeneas to formally verify and compare against Rust components that implement parts of the spec. There is no need to have the entire Rust codebase specified, but sub-components should be verified to the fullest extent possible.
+## Non-Negotiable Quality Gates
 
-## Experimental Approach
+Use FFVShip from [Vship](https://codeberg.org/Line-fr/Vship) for its
+GPU-accelerated SSIMULACRA2 and Butteraugli implementations. Pin the evaluated
+revision and record its build configuration.
 
-Keep Experimental Design Records in the `experiments` directory. Each experiment should have a numbered name (e.g. `EXP-0001-short-desc-here.md`). Experiments should each catalogue:
-  - A hypothesis
-  - A modification
-  - and a test.
+For every decoded frame in every required format/depth case:
 
-Experiments should reference other documentation artifacts: research references and other experiments.
+- SSIMULACRA2 must be strictly greater than 90.
+- Butteraugli must be less than or equal to 1.0.
 
-Experiments can be in 4 states:
-  - PENDING: untested
-  - ACCEPTED: the experimental results have proven successful
-  - REJECTED: the experimental results did not give the desired result
-  - SUPERSEDED: the experiment was superseded by a later experiment, with a link to that experiment.
+These are per-frame requirements. Corpus means, percentiles, or aggregate
+scores cannot hide a failing frame. Report the minimum SSIMULACRA2 score and
+maximum Butteraugli score in summaries, while retaining all per-frame results.
 
-Experiments, after completion, are IMMUTABLE RECORDS.
+Metric inputs must be produced by one documented, deterministic reference
+conversion path. Preserve the decoded format and depth until that conversion.
+The evaluator must also check dimensions, format metadata, frame count, decode
+success, and deterministic round trips before running perceptual metrics.
 
-## Perceptual Similarity
+“Perceptually lossless” in this project means passing both gates above; it does
+not mean mathematically lossless.
 
-This is an engineering goal rather than a hard metric. However, concrete metrics like XPSNR, SSIM, 
-VMAF, and per-pixel error should be used to measure error rates concretely.
+## Non-Negotiable Performance Gates
 
-We don't need to use "lossless" compression, but we do need to avoid as much perceptual destruction
-as possible. This is an intermediate codec like ProRes, which is designed for high-fidelity editing
-and storage.
+Measure CUDA execution with explicit device synchronization and GPU-appropriate
+timing. Include all codec work required for a usable encoded bitstream or
+decoded frame. Exclude one-time build/import initialization, corpus file I/O,
+and metric computation. Record warm-up policy, repetitions, GPU model, clocks
+or power mode when available, CUDA version, and relevant build flags.
 
-## Evaluation Methodology
+For a batch of 24 3840×2160 frames:
 
-The evaluation methodology and metrics should be clearly defined and backed by research.
-Keep a record in `EVALUATION_METHODOLOGY.md` with links to research.
+| Format | Encode throughput | Decode throughput |
+| --- | ---: | ---: |
+| 4:4:4 | at least 1.5 GP/s | at least 2.0 GP/s |
+| 4:2:2 | at least 2.0 GP/s | at least 3.0 GP/s |
 
-This methodology defines clear targets to optimize against: quality, speed, and compression ratios.
-Experiments MAY diverge from the standard methodology.
+Throughput is full-resolution luma pixels processed per second:
+`width × height × frame_count / elapsed_seconds`. Do not multiply the pixel
+count by the number of planes or channels.
 
-Evaluation methodology may evolve over time as new research is discovered and performed.
+For one 1920×1080 4:4:4 frame:
 
-## Encoding and Decoding Speed
+- encode latency must be less than 1.0 ms;
+- decode latency must be less than 0.5 ms.
 
-We are looking for maximum encoding and decoding speed with high parallel throughput. Focus exclusively on the CPU for now. Benchmarking encoding and decoding on test files should be done
-regularly as part of the development loop.
+Report distributions and the statistic used for gating. Until the evaluator
+specifies a stricter policy, gate on the median of at least 20 timed repetitions
+after warm-up. Always retain individual timing samples. Benchmark on the
+designated reference GPU; results from another GPU are informative but cannot
+establish acceptance.
 
-## Benchmarking
+## Compression Objective
 
-We suggest using `criterion` for microbenchmarks and an iperf-based profiler for profiling larger runs.
+After all gates pass, maximize corpus-wide compression. Report at least:
 
-Keep an updated benchmark table in the README.md
+- total uncompressed bytes divided by total encoded bytes;
+- bits per full-resolution pixel;
+- per-sample encoded size and the worst regressions;
+- codec metadata and container overhead.
 
-## Compression Ratio
+Never improve the headline ratio by omitting hard samples, changing the corpus,
+dropping required formats/depths, or averaging away a quality failure. When two
+candidates pass every gate, prefer the smaller total encoded corpus size. Use
+speed and implementation complexity as secondary tie-breakers.
 
-As an intermediate codec, we are aiming to maximize compression only as it trades off against other
-goals. 10x compression is a good initial goal, but we will attempt to go further.
+## Corpus
 
-Allow the user a light tuning parameter between quality and compression when encoding.
+Maintain a versioned, checksummed full corpus containing:
 
-## System Limits
+- 100–200 4K images;
+- at least a few examples of each of: people, video games, rendered imagery,
+  noise/static or otherwise difficult material, nature, and animals;
+- 20 AI-generated 1080p images.
 
-Take note of the CPU and memory limits of the current machine and structure benchmarks accordingly.
+Categories may overlap, but the manifest must label them and demonstrate
+coverage. Include varied texture, lighting, gradients, edges, skin tones,
+synthetic graphics, fine text, and high-entropy content. Preserve provenance,
+license, generation prompt/settings where applicable, original format, and all
+conversion steps.
+
+Corpus assets and dependencies must be compatible with legitimate open-source
+use. Prefer permissive or clearly redistributable sources, and do not add data
+whose licensing or provenance is uncertain.
+
+Select the smaller rejection set from the full corpus and freeze its manifest.
+It must represent all content categories and include known worst cases. Do not
+change it in response to a particular candidate without treating that change as
+an evaluation-methodology experiment.
+
+## Autoresearch Loop
+
+For each codec idea:
+
+1. Research the idea and state a falsifiable hypothesis.
+2. Record the baseline by running the canonical rejection tier.
+3. Make one attributable change.
+4. Run the canonical rejection tier with exactly the same settings.
+5. Reject immediately on any correctness, coverage, quality, or speed failure.
+6. If it passes and improves compression, run the canonical full tier.
+7. Accept only if the full tier passes every gate and improves total encoded
+   corpus size against the recorded baseline.
+8. Record the result, including failures and artifact paths, before starting
+   the next experiment.
+
+No result is valid unless it was produced by `scripts/evaluate.py`. Profilers
+and microbenchmarks may diagnose a result, but they cannot replace the
+canonical evaluator or establish acceptance.
+
+## Research and Experiment Records
+
+Keep research notes in `research/`, indexed by `research/INDEX.md`. Cite open
+papers and implementations, record actionable findings, and link each note to
+the experiments that use it. Code derived from research must retain appropriate
+attribution and license compatibility.
+
+Keep numbered experimental design records in `experiments/` using names such as
+`EXP-0001-short-description.md`. Each record must contain:
+
+- status: `PENDING`, `ACCEPTED`, `REJECTED`, or `SUPERSEDED`;
+- hypothesis and rationale;
+- exact code revision and canonical evaluator command;
+- baseline and candidate machine-readable artifact paths;
+- corpus and evaluator revisions;
+- quality extrema, timing gate results, and compression delta;
+- conclusion and links to related research or experiments.
+
+Completed experiment records are immutable. Corrections or follow-up work
+belong in a new linked record.
+
+## Direction
+
+Favor codec designs that map naturally to massively parallel CUDA execution:
+independent frames, bounded local dependencies, coalesced memory access,
+predictable control flow, and parallel output assembly. A compression idea that
+cannot meet the fixed throughput and latency gates is not a Fastvid direction,
+regardless of its offline compression ratio.
+
+The JPEG XL Pareto-front discussion is useful framing:
+<https://cloudinary.com/blog/jpeg-xl-and-the-pareto-front>. Fastvid seeks the
+best compression point inside its fixed quality and speed constraints, not a
+single metric win outside them.
