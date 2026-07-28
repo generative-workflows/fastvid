@@ -24,7 +24,7 @@ The required video format matrix is:
 | --- | --- | --- |
 | YUV | 4:2:2 | 8, 10, and 16 bit |
 | RGB | 4:4:4 | 10 and 16 bit |
-| Gray | 4:0:0 | 10 and 16 bit |
+| Gray | 4:0:0 | 8, 10, and 16 bit |
 
 Do not silently evaluate one format or depth as a proxy for another. Every
 required matrix entry must have an explicit correctness and quality result.

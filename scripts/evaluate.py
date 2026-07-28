@@ -50,7 +50,7 @@ ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_MATRIX = {
     ("yuv422", 8), ("yuv422", 10), ("yuv422", 16),
     ("rgb444", 10), ("rgb444", 16),
-    ("gray", 10), ("gray", 16),
+    ("gray", 8), ("gray", 10), ("gray", 16),
 }
 SSIMULACRA2_MIN = 90.0
 BUTTERAUGLI_MAX = 1.0
@@ -187,7 +187,7 @@ def distribution(seconds: Sequence[float]) -> dict[str, Any]:
 
 def run_ffmpeg(raw: Path, output: Path, sample: Sample, ffmpeg: str) -> None:
     pixel_formats = {
-        ("gray", 10): "gray10le", ("gray", 16): "gray16le",
+        ("gray", 8): "gray", ("gray", 10): "gray10le", ("gray", 16): "gray16le",
         ("yuv422", 8): "yuv422p", ("yuv422", 10): "yuv422p10le",
         ("yuv422", 16): "yuv422p16le",
         ("rgb444", 10): "gbrp10le", ("rgb444", 16): "gbrp16le",
