@@ -1,5 +1,8 @@
 /target/
 /artifacts/
+/corpus/sources/
+/corpus/fastvid-corpus-*-sources.tar.gz
 *.fvid
 *.yuv
 __pycache__/
+*.pyc

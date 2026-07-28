@@ -165,6 +165,21 @@ Corpus assets and dependencies must be compatible with legitimate open-source
 use. Prefer permissive or clearly redistributable sources, and do not add data
 whose licensing or provenance is uncertain.
 
+Treat original high-bit masters as the corpus source of truth. Prefer camera
+RAW, OpenEXR, HDR/RGBE, uncompressed high-bit TIFF, or raw YUV. An 8-bit
+tone-mapped image is not a valid reference source for 10-bit or 16-bit
+evaluation. PNG may be used sparingly where a content class—such as a captured
+open-source game—is not reasonably available in a high-bit master; JPEG is a
+discovery proxy, not a preferred canonical source. Follow
+`corpus/SOURCE_POLICY.md`.
+
+Enforce diversity by provenance as well as semantic labels: use no more than
+two frames from one movie or video sequence, no more than one screenshot from
+one game title, no more than one camera RAW from one camera model, and no more
+than one HDRI from one source asset. AI images are generated once and their
+original bytes and prompts are frozen; evaluation and corpus rebuilds must
+never regenerate them.
+
 Select the smaller rejection set from the full corpus and freeze its manifest.
 It must represent all content categories and include known worst cases. Do not
 change it in response to a particular candidate without treating that change as
