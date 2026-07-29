@@ -56,6 +56,8 @@ _Planes = ctypes.POINTER(ctypes.c_uint8) * 3
 _Strides = ctypes.c_int64 * 3
 _SAMPLE_TYPES = {8: 2, 10: 5, 16: 11}
 _BACKENDS = {0: "HIP", 1: "CUDA", 2: "Vulkan"}
+BUTTERAUGLI_INTENSITY_NITS = 80.0
+BUTTERAUGLI_PNORM = 3
 
 
 def libvship_version(library_path: Path) -> dict[str, Any]:
@@ -124,7 +126,8 @@ class DirectVshipMetrics:
             self._check(
                 self.library.Vship_ButteraugliInit2(
                     ctypes.byref(handler), colorspace, colorspace,
-                    2, ctypes.c_float(1.0), gpu_id,
+                    BUTTERAUGLI_PNORM,
+                    ctypes.c_float(BUTTERAUGLI_INTENSITY_NITS), gpu_id,
                 ),
                 "Butteraugli initialization",
             )
@@ -260,7 +263,9 @@ class DirectVshipMetrics:
         self.last_metric_seconds = time.perf_counter() - started
         self.metric_seconds += self.last_metric_seconds
         self.frame_count += len(source_frames)
-        return ssim, [max(norms) for norms in butter_norms]
+        # libjxl's primary Butteraugli distance is the maximum value of the
+        # distortion map. Vship exposes that value as the infinity norm.
+        return ssim, [norms[2] for norms in butter_norms]
 
     def close(self) -> None:
         if self._closed:

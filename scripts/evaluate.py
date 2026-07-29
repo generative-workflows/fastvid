@@ -635,7 +635,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "libvship_gpu_id": args.libvship_gpu_id,
             "libvship_workers_per_metric": args.libvship_workers,
             "libvship_parallel_metrics": 2,
-            "butteraugli_score": "maximum distance among q=2, q=3, and infinity norms",
+            "butteraugli_score": (
+                "infinity norm (maximum distortion-map value; libjxl primary distance)"
+            ),
+            "butteraugli_intensity_nits": 80.0,
+            "butteraugli_auxiliary_pnorm": 3,
         },
         "corpus": {
             "revision": revision,
