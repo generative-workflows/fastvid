@@ -103,7 +103,11 @@ class DirectVshipMetrics:
         self.bit_depth = bit_depth
         self.workers = workers
         self.metric_seconds = 0.0
+        self.transfer_seconds = 0.0
+        self.last_metric_seconds = 0.0
+        self.last_transfer_seconds = 0.0
         self.frame_count = 0
+        self._host_buffer_cache: dict[tuple[Any, ...], list[tuple[Any, ...]]] = {}
         self._closed = False
         self._configure_api()
         colorspace = _colorspace(width, height, format_name, bit_depth)
@@ -160,14 +164,30 @@ class DirectVshipMetrics:
         if error:
             raise RuntimeError(f"libvship {operation} failed ({error}): {_error_text(self.library)}")
 
-    def _host_frame(self, frame: Sequence[Any], torch: Any) -> tuple[Any, ...]:
+    def _copy_frames_to_host(
+        self, frames: Sequence[Sequence[Any]], torch: Any, role: str,
+    ) -> list[tuple[Any, ...]]:
         dtype = torch.uint8 if self.bit_depth == 8 else torch.uint16
-        planes = []
-        for plane in frame:
-            host = torch.empty(plane.shape, dtype=dtype, device="cpu", pin_memory=True)
-            host.copy_(plane, non_blocking=True)
-            planes.append(host)
-        return tuple(planes)
+        signature = (
+            role, str(dtype),
+            tuple(tuple(tuple(plane.shape) for plane in frame) for frame in frames),
+        )
+        buffers = self._host_buffer_cache.get(signature)
+        if buffers is None:
+            buffers = [
+                tuple(
+                    torch.empty(
+                        plane.shape, dtype=dtype, device="cpu", pin_memory=True,
+                    )
+                    for plane in frame
+                )
+                for frame in frames
+            ]
+            self._host_buffer_cache[signature] = buffers
+        for frame_buffers, frame in zip(buffers, frames):
+            for host, plane in zip(frame_buffers, frame):
+                host.copy_(plane, non_blocking=True)
+        return buffers
 
     def _arguments(self, frame: Sequence[Any]) -> tuple[_Planes, _Strides]:
         planes = frame if self.format_name != "gray" else (frame[0],) * 3
@@ -216,9 +236,14 @@ class DirectVshipMetrics:
             raise RuntimeError("libvship metric pool is closed")
         if len(source_frames) != len(distorted_frames):
             raise ValueError("source and distorted frame counts differ")
-        source_host = [self._host_frame(frame, torch) for frame in source_frames]
-        distorted_host = [self._host_frame(frame, torch) for frame in distorted_frames]
+        transfer_started = time.perf_counter()
+        source_host = self._copy_frames_to_host(source_frames, torch, "source")
+        distorted_host = self._copy_frames_to_host(
+            distorted_frames, torch, "distorted",
+        )
         torch.cuda.synchronize()
+        self.last_transfer_seconds = time.perf_counter() - transfer_started
+        self.transfer_seconds += self.last_transfer_seconds
         started = time.perf_counter()
         ssim_futures = []
         butter_futures = []
@@ -232,7 +257,8 @@ class DirectVshipMetrics:
             ))
         ssim = [future.result() for future in ssim_futures]
         butter_norms = [future.result() for future in butter_futures]
-        self.metric_seconds += time.perf_counter() - started
+        self.last_metric_seconds = time.perf_counter() - started
+        self.metric_seconds += self.last_metric_seconds
         self.frame_count += len(source_frames)
         return ssim, [max(norms) for norms in butter_norms]
 

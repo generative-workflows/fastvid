@@ -97,7 +97,10 @@ scores cannot hide a failing frame. Report the minimum SSIMULACRA2 score and
 maximum Butteraugli score in summaries, while retaining all per-frame results.
 
 Metric inputs are native-depth pinned-memory copies of the already-loaded
-canonical planes and the corresponding fastvid decoded planes. Describe YUV422
+canonical planes and the corresponding fastvid decoded planes. Reuse compatible
+pinned metric buffers across samples; do not retain a second pinned copy of the
+entire canonical corpus batch merely to avoid the source device-to-host copy.
+Describe YUV422
 as full-range BT.709 with left chroma location; describe RGB as full-range RGB
 with BT.709 transfer and primaries. Represent gray without altering samples by
 supplying its one plane as each of R, G, and B. Narrow the corpus's uint16
@@ -111,7 +114,9 @@ its original sample and frame. The evaluator must check dimensions, format
 metadata, frame count, decode success, and deterministic round trips before
 running perceptual metrics. Codec correctness and CUDA timing remain per sample;
 metric parallelism must never turn the per-frame quality gates into aggregate
-gates.
+gates. Reports must separately account for corpus load/validation/upload,
+correctness setup, timing wall time, final decode validation, metric transfer,
+and metric computation so pipeline regressions are visible.
 
 “Perceptually lossless” in this project means passing both gates above; it does
 not mean mathematically lossless.

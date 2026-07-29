@@ -168,7 +168,10 @@ def samples_exceed_maximum(
         for plane in frame
     )
 
-def load_frames(sample: Sample, torch: Any) -> list[tuple[Any, ...]]:
+def load_frames(
+    sample: Sample, torch: Any,
+) -> tuple[list[tuple[Any, ...]], str | list[str]]:
+    """Load CUDA codec planes and return the hashes verified while reading."""
     if sample.paths:
         chunks = [path.read_bytes() for path in sample.paths]
         if any(len(chunk) != sample.raw_bytes_per_frame for chunk in chunks):
@@ -180,29 +183,33 @@ def load_frames(sample: Sample, torch: Any) -> list[tuple[Any, ...]]:
     expected = sample.raw_bytes_per_frame * sample.batch_frames
     if len(payload) != expected:
         raise ValueError(f"{sample.id}: expected {expected} raw bytes, found {len(payload)}")
+    actual_hashes = tuple(hashlib.sha256(chunk).hexdigest() for chunk in chunks)
     if sample.expected_sha256:
-        actual = tuple(hashlib.sha256(chunk).hexdigest() for chunk in chunks)
         expected_hashes = sample.expected_sha256
-        if len(expected_hashes) == 1 and len(actual) > 1:
-            expected_hashes = expected_hashes * len(actual)
-        if actual != expected_hashes:
+        if len(expected_hashes) == 1 and len(actual_hashes) > 1:
+            expected_hashes = expected_hashes * len(actual_hashes)
+        if actual_hashes != expected_hashes:
             raise ValueError(f"{sample.id}: extracted input SHA-256 mismatch")
+
     values = torch.frombuffer(payload, dtype=torch.uint16)
-    frames: list[tuple[Any, ...]] = []
+    cuda_frames: list[tuple[Any, ...]] = []
     cursor = 0
     for _ in range(sample.batch_frames):
-        planes = []
+        cuda_planes = []
         for height, width in sample.plane_shapes:
             count = height * width
-            planes.append(values[cursor:cursor + count].clone().view(height, width).cuda())
+            cuda_planes.append(
+                values[cursor:cursor + count].clone().view(height, width).cuda()
+            )
             cursor += count
-        frames.append(tuple(planes))
+        cuda_frames.append(tuple(cuda_planes))
     maximum = (1 << sample.bit_depth) - 1
-    # PyTorch does not implement CUDA reductions for uint16. Widen only for
-    # validation; codec inputs remain in their required native dtype.
-    if samples_exceed_maximum(frames, maximum, torch):
+    if samples_exceed_maximum(cuda_frames, maximum, torch):
         raise ValueError(f"{sample.id}: samples exceed {sample.bit_depth}-bit range")
-    return frames
+    source_hashes: str | list[str] = (
+        list(actual_hashes) if sample.paths else actual_hashes[0]
+    )
+    return cuda_frames, source_hashes
 
 def cuda_samples(operation: Callable[[], Any], warmups: int, repetitions: int, torch: Any):
     """Return (seconds, last_result), timed by CUDA events with synchronization."""
@@ -283,7 +290,10 @@ def evaluate_sample(
     sample: Sample, codec: Any, torch: Any, args: argparse.Namespace,
     metrics: DirectVshipMetrics,
 ) -> dict[str, Any]:
-    frames = load_frames(sample, torch)
+    phases: dict[str, float] = {}
+    phase_started = time.perf_counter()
+    frames, source_hashes = load_frames(sample, torch)
+    phases["load_validate_upload"] = time.perf_counter() - phase_started
     if any(not callable(getattr(codec, name, None)) for name in ("encode", "decode", "inspect")):
         raise NotImplementedError(
             f"{args.codec_module} must expose the desired encode(), decode(), and inspect() API"
@@ -298,6 +308,7 @@ def evaluate_sample(
         tile_size=tuple(args.tile_size),
     )
     # Determinism is checked outside all timed regions.
+    phase_started = time.perf_counter()
     first = encode_one(frames[0])
     torch.cuda.synchronize()
     second = encode_one(frames[0])
@@ -345,12 +356,14 @@ def evaluate_sample(
     raw_bytes = sample.raw_bytes_per_frame * len(frames)
     encoded_bytes = sum(encoded_sizes)
     pixels = sample.width * sample.height * len(frames)
+    phases["correctness_and_stream_setup"] = time.perf_counter() - phase_started
 
     encode_op = (
         (lambda: encode_one(frames[0]))
         if len(frames) == 1 else
         (lambda: encode_batch(frames))
     )
+    phase_started = time.perf_counter()
     encode_times, _ = cuda_samples(encode_op, args.warmups, args.repetitions, torch)
     decode_op = (
         (lambda: codec.decode(streams[0]))
@@ -358,6 +371,7 @@ def evaluate_sample(
         (lambda: codec.decode(streams))
     )
     decode_times, _ = cuda_samples(decode_op, args.warmups, args.repetitions, torch)
+    phases["timing_wall"] = time.perf_counter() - phase_started
     encode_timing, decode_timing = distribution(encode_times), distribution(decode_times)
     mode = "throughput" if len(frames) > 1 else "latency"
     if mode == "throughput":
@@ -369,6 +383,7 @@ def evaluate_sample(
         encode_timing["median_ms"] = encode_timing["median_seconds"] * 1000
         decode_timing["median_ms"] = decode_timing["median_seconds"] * 1000
 
+    phase_started = time.perf_counter()
     decoded_frames = [decoded] if len(frames) == 1 else codec.decode(streams)
     torch.cuda.synchronize()
     if not isinstance(decoded_frames, (list, tuple)) or len(decoded_frames) != len(frames):
@@ -378,12 +393,12 @@ def evaluate_sample(
             raise RuntimeError(f"decoded frame {number} dimensions or format differ")
         if any(plane.dtype != torch.uint16 or not plane.is_cuda for plane in decoded_frame):
             raise RuntimeError(f"decoded frame {number} is not CUDA uint16")
+    phases["final_decode_validation"] = time.perf_counter() - phase_started
     result = {
         "id": sample.id,
         "path": str(sample.path) if not sample.paths else None,
         "paths": [str(path) for path in sample.paths] if sample.paths else None,
-        "source_sha256": ([sha256_file(path) for path in sample.paths]
-                          if sample.paths else sha256_file(sample.path)),
+        "source_sha256": source_hashes,
         "format": sample.format,
         "bit_depth": sample.bit_depth,
         "width": sample.width,
@@ -404,9 +419,12 @@ def evaluate_sample(
             "repetitions": args.repetitions,
             "encode": encode_timing, "decode": decode_timing,
         },
+        "phase_seconds": phases,
     }
     ssim, butter = metrics.evaluate(frames, decoded_frames, torch)
     assign_quality_scores([result], ssim, butter)
+    phases["metric_transfer"] = metrics.last_transfer_seconds
+    phases["metric_compute"] = metrics.last_metric_seconds
     return result
 
 
@@ -591,6 +609,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
     total_raw = sum(row["compression"]["raw_bytes"] for row in results)
     total_encoded = sum(row["compression"]["encoded_bytes"] for row in results)
+    phase_names = {name for row in results for name in row["phase_seconds"]}
+    phase_summary = {
+        name: sum(row["phase_seconds"].get(name, 0.0) for row in results)
+        for name in sorted(phase_names)
+    }
     report = {
         "schema_version": 3,
         "passed": not failures,
@@ -644,6 +667,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
         },
         "metric_groups": metric_groups,
+        "phase_summary_seconds": phase_summary,
         "compression_summary": {
             "raw_bytes": total_raw, "encoded_bytes": total_encoded,
             "ratio": total_raw / total_encoded if total_encoded else None,
