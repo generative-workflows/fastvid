@@ -40,7 +40,8 @@ namespace {
 constexpr int64_t kHeaderBytes = 32;
 constexpr int64_t kDirectoryEntryBytes = 32;
 constexpr int64_t kShardSymbols = 4096;
-constexpr uint8_t kVersion = 5;
+constexpr uint8_t kVersion = 6;
+constexpr uint8_t kLegacyVersion = 5;
 constexpr uint8_t kEntropyParallelShards = 19;
 constexpr uint8_t kPredictFullTileClampGradient = 6;
 
@@ -129,7 +130,9 @@ std::vector<torch::Tensor> decode_v5(torch::Tensor encoded, bool wavefront) {
       : encoded.contiguous();
   const auto* bytes = host.data_ptr<uint8_t>();
   TORCH_CHECK(std::memcmp(bytes, "FVID", 4) == 0, "bad Fastvid magic");
-  TORCH_CHECK(bytes[4] == kVersion, "CUDA decoder currently requires Fastvid v5");
+  TORCH_CHECK(bytes[4] == kLegacyVersion || bytes[4] == kVersion,
+              "CUDA decoder requires Fastvid v5 or v6");
+  const bool sixth_scale_quantizer = bytes[4] == kVersion;
   TORCH_CHECK(bytes[5] <= 2, "unknown pixel layout");
   const int64_t layout = bytes[5];
   const bool grayscale = layout == 0;
@@ -203,8 +206,10 @@ std::vector<torch::Tensor> decode_v5(torch::Tensor encoded, bool wavefront) {
     }
     auto shard_meta_cuda = torch::empty(
         {geometry.total_shards, 5}, device_encoded.options().dtype(torch::kInt64));
-    const int64_t base = 1 + (100 - quality) / 5;
-    const int64_t step = 1 + ((base - 1) << (bit_depth - 8));
+    const int64_t scale = int64_t{1} << (bit_depth - 8);
+    const int64_t step = sixth_scale_quantizer
+        ? 1 + ((100 - quality) * scale + 5) / 6
+        : 1 + (((100 - quality) / 5) * scale);
     const int64_t max_sample = (int64_t{1} << bit_depth) - 1;
     return fastvid_decode_v5_cuda(
         device_encoded,
@@ -306,8 +311,10 @@ std::vector<torch::Tensor> decode_v5(torch::Tensor encoded, bool wavefront) {
   auto device_encoded = encoded.is_cuda() ? encoded.contiguous() : encoded.to(torch::kCUDA);
   auto shard_meta_cuda = shard_meta_cpu.to(device_encoded.device());
   auto tile_meta_cuda = tile_meta_cpu.to(device_encoded.device());
-  const int64_t base = 1 + (100 - quality) / 5;
-  const int64_t step = 1 + ((base - 1) << (bit_depth - 8));
+  const int64_t scale = int64_t{1} << (bit_depth - 8);
+  const int64_t step = sixth_scale_quantizer
+      ? 1 + ((100 - quality) * scale + 5) / 6
+      : 1 + (((100 - quality) / 5) * scale);
   const int64_t max_sample = (int64_t{1} << bit_depth) - 1;
   return fastvid_decode_v5_cuda(
       device_encoded,

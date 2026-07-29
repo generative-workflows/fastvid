@@ -68,7 +68,7 @@ def inspect(encoded) -> dict[str, int | str]:
     if not isinstance(encoded, torch.Tensor) or encoded.dtype != torch.uint8 or encoded.ndim != 1:
         raise TypeError("encoded must be a one-dimensional uint8 tensor")
     header = bytes(encoded[:32].cpu().numpy())
-    if len(header) != 32 or header[:4] != b"FVID" or header[4] != 5:
+    if len(header) != 32 or header[:4] != b"FVID" or header[4] not in (5, 6):
         raise ValueError("not a Fastvid v5 stream")
     layout = header[5]
     if layout not in _LAYOUT_TO_FORMAT:

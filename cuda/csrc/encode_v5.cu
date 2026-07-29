@@ -737,8 +737,8 @@ torch::Tensor fastvid_encode_v5_cuda(
   auto rans_scratch = torch::empty({total_shards, 10240}, source.options().dtype(torch::kUInt8));
   auto rans_states = torch::empty({total_shards, 4}, source.options().dtype(torch::kUInt32));
   auto status = torch::zeros({1}, source.options().dtype(torch::kInt32));
-  const int32_t base_step = 1 + (100 - quality) / 5;
-  const int32_t step = 1 + ((base_step - 1) << (bit_depth - 8));
+  const int32_t scale = int32_t{1} << (bit_depth - 8);
+  const int32_t step = 1 + ((100 - quality) * scale + 5) / 6;
   const int32_t max_sample = (int32_t{1} << bit_depth) - 1;
   const auto stream = at::cuda::getCurrentCUDAStream(device.index());
 
@@ -795,7 +795,7 @@ torch::Tensor fastvid_encode_v5_cuda(
   std::vector<uint8_t> prefix;
   prefix.reserve(payload_start);
   prefix.insert(prefix.end(), {'F', 'V', 'I', 'D'});
-  prefix.push_back(5);
+  prefix.push_back(6);
   prefix.push_back(static_cast<uint8_t>(layout));
   prefix.push_back(static_cast<uint8_t>(quality));
   prefix.push_back(static_cast<uint8_t>(bit_depth - 8));
