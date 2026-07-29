@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Canonical correctness, quality, compression, and CUDA performance evaluator.
 
+This file MUST NOT be edited except when specifically requested.
+
 The input manifest is JSON with a ``revision`` string and a ``samples`` array.
 Each sample has ``id``, ``path``, ``width``, ``height``, ``format`` (``gray``,
 ``yuv422``, or ``rgb444``), ``bit_depth``, and ``tiers``. Raw files use
