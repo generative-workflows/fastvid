@@ -43,7 +43,6 @@ constexpr int64_t kShardSymbols = 4096;
 constexpr uint8_t kBitstreamVersion = 1;
 constexpr uint8_t kEntropyParallelShards = 19;
 constexpr uint8_t kPredictFullTileClampGradient = 6;
-constexpr uint8_t kPredictHadamard8x8 = 7;
 
 int64_t quantization_step(int64_t layout, int64_t bit_depth, int64_t quality) {
   if (layout == 0 && bit_depth == 8) {
@@ -240,7 +239,6 @@ std::vector<torch::Tensor> decode(torch::Tensor encoded, bool wavefront) {
         wavefront);
   }
 
-  const int64_t step = quantization_step(layout, bit_depth, quality);
   int64_t next_payload = directory_end;
   int64_t total_shards = 0;
   int64_t total_samples = 0;
@@ -249,9 +247,8 @@ std::vector<torch::Tensor> decode(torch::Tensor encoded, bool wavefront) {
     TORCH_CHECK(bytes[start] == tiles[i].plane, "non-canonical tile plane");
     TORCH_CHECK(bytes[start + 1] == kEntropyParallelShards,
                 "tile requires bounded-shard entropy");
-    const bool transform = step > 1 && tiles[i].width % 8 == 0 && tiles[i].height % 8 == 0;
-    const uint8_t expected_predictor = transform ? kPredictHadamard8x8 : kPredictFullTileClampGradient;
-    TORCH_CHECK(bytes[start + 2] == expected_predictor, "non-canonical tile predictor");
+    TORCH_CHECK(bytes[start + 2] == kPredictFullTileClampGradient,
+                "tile requires full-tile clamp-gradient prediction");
     TORCH_CHECK(bytes[start + 3] == 0, "nonzero reserved directory byte");
     TORCH_CHECK(read_u32(bytes, size, start + 4) == tiles[i].x &&
                     read_u32(bytes, size, start + 8) == tiles[i].y &&
@@ -325,6 +322,7 @@ std::vector<torch::Tensor> decode(torch::Tensor encoded, bool wavefront) {
   auto device_encoded = encoded.is_cuda() ? encoded.contiguous() : encoded.to(torch::kCUDA);
   auto shard_meta_cuda = shard_meta_cpu.to(device_encoded.device());
   auto tile_meta_cuda = tile_meta_cpu.to(device_encoded.device());
+  const int64_t step = quantization_step(layout, bit_depth, quality);
   const int64_t max_sample = (int64_t{1} << bit_depth) - 1;
   return fastvid_decode_cuda(
       device_encoded,
