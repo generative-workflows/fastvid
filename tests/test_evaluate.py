@@ -8,6 +8,7 @@ import pytest
 from scripts.evaluate import (
     Sample,
     assign_quality_scores,
+    concatenate_metric_videos,
     load_manifest,
     metric_pixel_format,
     metric_raw,
@@ -131,12 +132,17 @@ def test_manifest_accepts_multifile_batch_and_hashes(tmp_path: Path):
     assert len(samples[0].expected_sha256) == 2
 
 
-def test_quality_group_key_requires_matching_interchange_properties():
+def test_quality_group_key_ignores_normalized_source_format():
     sample = Sample(
         id="group", path=Path("unused.raw"), width=1920, height=1080,
         format="rgb444", bit_depth=10, tiers=("rejection",),
     )
-    assert quality_group_key(sample) == (1920, 1080, "rgb444", 10)
+    gray = Sample(
+        id="gray", path=Path("unused.raw"), width=1920, height=1080,
+        format="gray", bit_depth=10, tiers=("rejection",),
+    )
+    assert quality_group_key(sample) == (1920, 1080, 10)
+    assert quality_group_key(gray) == quality_group_key(sample)
 
 
 def test_consolidated_scores_map_back_to_sample_frames():
@@ -152,3 +158,28 @@ def test_consolidated_scores_map_back_to_sample_frames():
     assert results[0]["quality"]["passed"]
     assert not results[1]["quality"]["passed"]
     assert results[1]["quality"]["minimum_ssimulacra2"] == 89.0
+
+
+def test_metric_segment_concatenation_preserves_frame_count(tmp_path: Path):
+    sample = Sample(
+        id="concat", path=tmp_path / "unused.raw", width=16, height=16,
+        format="gray", bit_depth=10, tiers=("rejection",),
+    )
+    segments = []
+    for number, value in enumerate((100, 200)):
+        raw = tmp_path / f"segment-{number}.raw"
+        raw.write_bytes(value.to_bytes(2, "little") * (16 * 16))
+        video = tmp_path / f"segment-{number}.mkv"
+        run_ffmpeg(raw, video, sample, "ffmpeg")
+        segments.append(video)
+    output = tmp_path / "joined.mkv"
+    concatenate_metric_videos(segments, output, "ffmpeg", tmp_path)
+    probe = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-count_frames",
+            "-select_streams", "v:0", "-show_entries",
+            "stream=nb_read_frames", "-of", "default=nw=1:nk=1", str(output),
+        ],
+        check=True, capture_output=True, text=True,
+    )
+    assert probe.stdout.strip() == "2"

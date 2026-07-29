@@ -336,9 +336,9 @@ def metric_raw(frame: Sequence[Any], sample: Sample) -> bytes:
     return b"".join(array.tobytes() for array in arrays)
 
 
-def quality_group_key(sample: Sample) -> tuple[int, int, str, int]:
-    """Return the properties that must match within one metric video."""
-    return sample.width, sample.height, sample.format, sample.bit_depth
+def quality_group_key(sample: Sample) -> tuple[int, int, int]:
+    """Return properties fixed in one native-depth YUV444 metric sequence."""
+    return sample.width, sample.height, sample.bit_depth
 
 
 def assign_quality_scores(
@@ -379,25 +379,53 @@ def assign_quality_scores(
         cursor += count
 
 
+def concatenate_metric_videos(
+    inputs: Sequence[Path], output: Path, ffmpeg: str, directory: Path,
+) -> None:
+    """Stream-copy compatible lossless segments into one metric sequence."""
+    if len(inputs) == 1:
+        shutil.copyfile(inputs[0], output)
+        return
+    listing = directory / f"{output.stem}-segments.txt"
+    listing.write_text(
+        "".join(f"file '{path}'\n" for path in inputs), encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            ffmpeg, "-v", "error", "-y", "-f", "concat", "-safe", "0",
+            "-i", str(listing), "-map", "0:v:0", "-c", "copy", str(output),
+        ],
+        check=True, capture_output=True, text=True,
+    )
+
+
 def evaluate_quality_group(
-    sample: Sample,
-    results: Sequence[dict[str, Any]],
-    reference_raw: Path,
-    decoded_raw: Path,
+    segments: Sequence[tuple[Sample, Sequence[dict[str, Any]], Path, Path]],
     args: argparse.Namespace,
     directory: Path,
 ) -> dict[str, Any]:
-    """Evaluate one compatible sequence with two total FFVShip processes."""
+    """Evaluate one resolution/depth sequence with two FFVShip processes."""
+    results = [result for _, rows, _, _ in segments for result in rows]
     frame_count = sum(int(result["frame_count"]) for result in results)
-    metric_sample = replace(
-        sample, id=f"metric-group-{sample.id}", path=reference_raw,
-        paths=(), expected_sha256=(), batch_frames=frame_count,
-    )
+    reference_segments: list[Path] = []
+    decoded_segments: list[Path] = []
+    conversion_started = time.perf_counter()
+    for number, (sample, segment_results, reference_raw, decoded_raw) in enumerate(segments):
+        segment_frames = sum(int(result["frame_count"]) for result in segment_results)
+        metric_sample = replace(
+            sample, id=f"metric-segment-{sample.id}", path=reference_raw,
+            paths=(), expected_sha256=(), batch_frames=segment_frames,
+        )
+        reference_video = directory / f"reference-{number:02d}.mkv"
+        decoded_video = directory / f"decoded-{number:02d}.mkv"
+        run_ffmpeg(reference_raw, reference_video, metric_sample, args.ffmpeg, args.ffprobe)
+        run_ffmpeg(decoded_raw, decoded_video, metric_sample, args.ffmpeg, args.ffprobe)
+        reference_segments.append(reference_video)
+        decoded_segments.append(decoded_video)
     reference_video = directory / "reference.mkv"
     decoded_video = directory / "decoded.mkv"
-    conversion_started = time.perf_counter()
-    run_ffmpeg(reference_raw, reference_video, metric_sample, args.ffmpeg, args.ffprobe)
-    run_ffmpeg(decoded_raw, decoded_video, metric_sample, args.ffmpeg, args.ffprobe)
+    concatenate_metric_videos(reference_segments, reference_video, args.ffmpeg, directory)
+    concatenate_metric_videos(decoded_segments, decoded_video, args.ffmpeg, directory)
     conversion_seconds = time.perf_counter() - conversion_started
     metric_arguments = (
         args.ffvship, directory, args.ffvship_gpu_id,
@@ -416,9 +444,12 @@ def evaluate_quality_group(
         ssim, butter = ssim_future.result(), butter_future.result()
     metric_seconds = time.perf_counter() - metric_started
     assign_quality_scores(results, ssim, butter)
+    first_sample = segments[0][0]
     return {
-        "width": sample.width, "height": sample.height,
-        "format": sample.format, "bit_depth": sample.bit_depth,
+        "width": first_sample.width, "height": first_sample.height,
+        "bit_depth": first_sample.bit_depth,
+        "source_formats": [sample.format for sample, _, _, _ in segments],
+        "segment_count": len(segments),
         "sample_count": len(results), "frame_count": frame_count,
         "conversion_seconds": conversion_seconds,
         "metric_seconds": metric_seconds,
@@ -655,7 +686,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not failures:
         if args.quality_temp is not None:
             args.quality_temp.mkdir(parents=True, exist_ok=True)
-        grouped: dict[tuple[int, int, str, int], list[Sample]] = {}
+        grouped: dict[tuple[int, int, int], list[Sample]] = {}
         for sample in samples:
             grouped.setdefault(quality_group_key(sample), []).append(sample)
         for group_number, group_samples in enumerate(grouped.values()):
@@ -666,28 +697,39 @@ def main(argv: Sequence[str] | None = None) -> int:
                     dir=args.quality_temp,
                 ) as temp_name:
                     temp = Path(temp_name)
-                    reference_raw = temp / "reference.raw"
-                    decoded_raw = temp / "decoded.raw"
-                    with (
-                        reference_raw.open("wb") as reference_stream,
-                        decoded_raw.open("wb") as decoded_stream,
-                    ):
-                        for sample in group_samples:
-                            try:
-                                result, reference_payload, decoded_payload = evaluate_sample(
-                                    sample, codec, torch, args,
-                                )
-                                reference_stream.write(reference_payload)
-                                decoded_stream.write(decoded_payload)
-                                group_results.append(result)
-                            except Exception as error:
-                                failures.append(
-                                    f"{sample.id}: {type(error).__name__}: {error}"
-                                )
-                    if group_results:
+                    by_format: dict[str, list[Sample]] = {}
+                    for sample in group_samples:
+                        by_format.setdefault(sample.format, []).append(sample)
+                    segments = []
+                    for segment_number, format_samples in enumerate(by_format.values()):
+                        segment_results: list[dict[str, Any]] = []
+                        reference_raw = temp / f"reference-{segment_number:02d}.raw"
+                        decoded_raw = temp / f"decoded-{segment_number:02d}.raw"
+                        with (
+                            reference_raw.open("wb") as reference_stream,
+                            decoded_raw.open("wb") as decoded_stream,
+                        ):
+                            for sample in format_samples:
+                                try:
+                                    result, reference_payload, decoded_payload = evaluate_sample(
+                                        sample, codec, torch, args,
+                                    )
+                                    reference_stream.write(reference_payload)
+                                    decoded_stream.write(decoded_payload)
+                                    segment_results.append(result)
+                                    group_results.append(result)
+                                except Exception as error:
+                                    failures.append(
+                                        f"{sample.id}: {type(error).__name__}: {error}"
+                                    )
+                        if segment_results:
+                            segments.append((
+                                format_samples[0], segment_results,
+                                reference_raw, decoded_raw,
+                            ))
+                    if segments:
                         metric_groups.append(evaluate_quality_group(
-                            group_samples[0], group_results, reference_raw,
-                            decoded_raw, args, temp,
+                            segments, args, temp,
                         ))
                 results.extend(group_results)
                 for result in group_results:
@@ -749,7 +791,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "ffvship_threads": args.ffvship_threads,
             "ffvship_parallel_metrics": 2,
             "ffvship_batching": (
-                "one sequence per width, height, format, and bit depth"
+                "one native-depth YUV444 sequence per width, height, and bit depth; "
+                "source formats are converted as lossless segments before concatenation"
             ),
             "butteraugli_score": "maximum distance among all norms emitted by FFVShip",
         },
