@@ -145,7 +145,7 @@ __global__ void parse_metadata_kernel(
   const uint8_t* entry = encoded + entry_offset;
   const int64_t expected_plane = tile_parse_metadata[tile * 2 + 1];
   if (entry[0] != expected_plane || entry[1] != kEntropyParallelShards ||
-      entry[2] != kPredictFullTileClampGradient || entry[3] != 0 ||
+      entry[2] != kPredictFullTileClampGradient || entry[3] > 3 ||
       read_u32(entry + 4) != tile_metadata[tile * 7 + 2] ||
       read_u32(entry + 8) != tile_metadata[tile * 7 + 3] ||
       read_u32(entry + 12) != tile_metadata[tile * 7 + 4] ||
@@ -546,10 +546,13 @@ __global__ void decode_order0_shards_kernel(
 }
 
 __global__ void reconstruct_tiles_kernel(
+    const uint8_t* encoded,
     const uint32_t* folded,
     const int64_t* metadata,
     int64_t tile_count,
-    int32_t step,
+    int32_t base_step,
+    int32_t fine_step,
+    int32_t coarse_step,
     int32_t max_sample,
     uint16_t* output) {
   const int64_t tile = blockIdx.x;
@@ -563,6 +566,9 @@ __global__ void reconstruct_tiles_kernel(
   const int64_t width = metadata[tile * 7 + 4];
   const int64_t height = metadata[tile * 7 + 5];
   const int64_t folded_base = metadata[tile * 7 + 6];
+  const uint8_t tile_class = encoded[kHeaderBytes + tile * kDirectoryEntryBytes + 3];
+  const int32_t step = tile_class == 1 ? 1 :
+      (tile_class == 2 ? fine_step : (tile_class == 3 ? coarse_step : base_step));
 
   for (int64_t diagonal = 0; diagonal < width + height - 1; ++diagonal) {
     const int64_t diagonal_begin = diagonal - width + 1;
@@ -589,10 +595,13 @@ __global__ void reconstruct_tiles_kernel(
 }
 
 __global__ void reconstruct_tiles_serial_kernel(
+    const uint8_t* encoded,
     const uint32_t* folded,
     const int64_t* metadata,
     int64_t tile_count,
-    int32_t step,
+    int32_t base_step,
+    int32_t fine_step,
+    int32_t coarse_step,
     int32_t max_sample,
     uint16_t* output) {
   const int64_t tile = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -606,6 +615,9 @@ __global__ void reconstruct_tiles_serial_kernel(
   const int64_t width = metadata[tile * 7 + 4];
   const int64_t height = metadata[tile * 7 + 5];
   const int64_t folded_base = metadata[tile * 7 + 6];
+  const uint8_t tile_class = encoded[kHeaderBytes + tile * kDirectoryEntryBytes + 3];
+  const int32_t step = tile_class == 1 ? 1 :
+      (tile_class == 2 ? fine_step : (tile_class == 3 ? coarse_step : base_step));
   for (int64_t y = 0; y < height; ++y) {
     uint16_t left = 0;
     uint16_t upper_left = 0;
@@ -638,7 +650,9 @@ std::vector<torch::Tensor> fastvid_decode_cuda(
     int64_t secondary_samples,
     int64_t width,
     int64_t height,
-    int64_t step,
+    int64_t base_step,
+    int64_t fine_step,
+    int64_t coarse_step,
     int64_t max_sample,
     bool grayscale,
     bool wavefront) {
@@ -663,20 +677,26 @@ std::vector<torch::Tensor> fastvid_decode_cuda(
   C10_CUDA_KERNEL_LAUNCH_CHECK();
   if (wavefront) {
     reconstruct_tiles_kernel<<<tile_meta.size(0), 256, 0, stream>>>(
+        encoded.data_ptr<uint8_t>(),
         folded.data_ptr<uint32_t>(),
         tile_meta.data_ptr<int64_t>(),
         tile_meta.size(0),
-        static_cast<int32_t>(step),
+        static_cast<int32_t>(base_step),
+        static_cast<int32_t>(fine_step),
+        static_cast<int32_t>(coarse_step),
         static_cast<int32_t>(max_sample),
         output.data_ptr<uint16_t>());
   } else {
     constexpr int threads = 256;
     const int blocks = static_cast<int>((tile_meta.size(0) + threads - 1) / threads);
     reconstruct_tiles_serial_kernel<<<blocks, threads, 0, stream>>>(
+        encoded.data_ptr<uint8_t>(),
         folded.data_ptr<uint32_t>(),
         tile_meta.data_ptr<int64_t>(),
         tile_meta.size(0),
-        static_cast<int32_t>(step),
+        static_cast<int32_t>(base_step),
+        static_cast<int32_t>(fine_step),
+        static_cast<int32_t>(coarse_step),
         static_cast<int32_t>(max_sample),
         output.data_ptr<uint16_t>());
   }
