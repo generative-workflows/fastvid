@@ -4,8 +4,10 @@ from pathlib import Path
 import pytest
 
 from scripts.evaluate import (
-    Sample, assign_quality_scores, load_manifest, quality_group_key,
-    samples_exceed_maximum,
+    EDIT_CYCLES, Sample, apply_edit, assign_quality_scores, cycle_quality,
+    derived_edit_seed, load_manifest, make_edit_trace, normalize_edited_frame,
+    plane_shapes,
+    quality_group_key, samples_exceed_maximum,
 )
 from scripts.libvship_direct import _colorspace, libvship_version
 
@@ -124,6 +126,87 @@ def test_consolidated_scores_map_back_to_sample_frames():
     assert results[0]["quality"]["passed"]
     assert not results[1]["quality"]["passed"]
     assert results[1]["quality"]["minimum_ssimulacra2"] == 89.0
+
+
+def test_edit_trace_is_stable_varied_and_never_upscales():
+    sample = Sample(
+        id="batch", path=Path("unused.raw"), width=1920, height=1080,
+        format="rgb444", bit_depth=10, tiers=("rejection",), batch_frames=24,
+    )
+    trace = make_edit_trace(sample, 1234)
+    assert trace == make_edit_trace(sample, 1234)
+    assert len(trace) == EDIT_CYCLES
+    assert {kind: sum(row["type"] == kind for row in trace) for kind in {
+        "mild_crop", "mild_resize", "rotate", "recolor", "patch_recolor",
+        "patch_blur", "horizontal_flip", "sharpen",
+    }} == {
+        "mild_crop": 1, "mild_resize": 1, "rotate": 1, "recolor": 2,
+        "patch_recolor": 2, "patch_blur": 1, "horizontal_flip": 1,
+        "sharpen": 1,
+    }
+    for edit in trace:
+        before, after = edit["input_geometry"], edit["output_geometry"]
+        if edit["type"] in ("mild_crop", "mild_resize"):
+            assert 0.95 <= after["width"] / before["width"] <= 1.0
+            assert 0.95 <= after["height"] / before["height"] <= 1.0
+    assert derived_edit_seed(1234, "batch", 1) != derived_edit_seed(1234, "other", 1)
+
+
+def test_yuv_trace_preserves_horizontal_subsampling_rules():
+    sample = Sample(
+        id="yuv", path=Path("unused.raw"), width=320, height=180,
+        format="yuv422", bit_depth=10, tiers=("rejection",),
+    )
+    trace = make_edit_trace(sample, 9)
+    assert all(
+        edit.get("degrees") == 180
+        for edit in trace if edit["type"] == "rotate"
+    )
+    assert all(
+        edit["output_geometry"]["width"] % 2 == 0
+        for edit in trace
+    )
+    assert all(
+        edit.get("left", 0) % 2 == 0
+        for edit in trace if edit["type"] == "crop"
+    )
+
+
+def test_edit_replay_preserves_whole_batch_geometry_on_cuda():
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA unavailable")
+    sample = Sample(
+        id="small-batch", path=Path("unused.raw"), width=128, height=96,
+        format="rgb444", bit_depth=10, tiers=("rejection",), batch_frames=2,
+    )
+    frames = [tuple(
+        torch.full(
+            (sample.height, sample.width), value,
+            dtype=torch.uint16, device="cuda",
+        )
+        for value in (100, 200, 300)
+    ) for _ in range(2)]
+    for edit in make_edit_trace(sample, 55):
+        frames = [
+            apply_edit(frame, sample.format, sample.bit_depth, edit, torch)
+            for frame in frames
+        ]
+        output = edit["output_geometry"]
+        expected = plane_shapes(sample.format, output["width"], output["height"])
+        assert all(tuple(tuple(plane.shape) for plane in frame) == expected for frame in frames)
+        frames = [normalize_edited_frame(frame, sample.bit_depth, torch) for frame in frames]
+        assert all(all(plane.is_contiguous() for plane in frame) for frame in frames)
+        assert all(
+            all(int(plane.to(torch.int32).max().item()) <= 1023 for plane in frame)
+            for frame in frames
+        )
+
+
+def test_cycle_quality_gates_on_worst_frame():
+    quality = cycle_quality(3, [95.0, 89.0], [0.2, 0.4])
+    assert quality["minimum_ssimulacra2"] == 89.0
+    assert not quality["passed"]
 
 
 def test_direct_libvship_identical_and_perturbed_controls():

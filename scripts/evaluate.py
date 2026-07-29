@@ -38,11 +38,14 @@ import hashlib
 import importlib
 import json
 import platform
+import random
 import statistics
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
+
+from torchvision.transforms import functional as TVF
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -60,6 +63,9 @@ REQUIRED_MATRIX = {
 }
 SSIMULACRA2_MIN = 90.0
 BUTTERAUGLI_MAX = 1.0
+EDIT_CYCLES = 10
+DEFAULT_EDIT_SEED = 0xF45A0001
+MIN_EDIT_DIMENSION = 64
 
 
 @dataclass(frozen=True)
@@ -169,6 +175,231 @@ def samples_exceed_maximum(
         for frame in frames
         for plane in frame
     )
+
+
+def plane_shapes(format_name: str, width: int, height: int) -> tuple[tuple[int, int], ...]:
+    """Return native plane geometry for an edited frame."""
+    if format_name == "gray":
+        return ((height, width),)
+    if format_name == "yuv422":
+        return ((height, width), (height, (width + 1) // 2), (height, (width + 1) // 2))
+    if format_name == "rgb444":
+        return ((height, width),) * 3
+    raise ValueError(f"unsupported format {format_name!r}")
+
+
+def derived_edit_seed(suite_seed: int, sample_id: str, cycle: int) -> int:
+    """Derive a corpus-order-independent seed for one batch edit."""
+    value = f"fastvid-edit-v1\0{suite_seed}\0{sample_id}\0{cycle}".encode()
+    return int.from_bytes(hashlib.sha256(value).digest()[:8], "big")
+
+
+def make_edit_trace(sample: Sample, suite_seed: int) -> list[dict[str, Any]]:
+    """Materialize one deterministic ten-cycle suite of restrained edits."""
+    suite_rng = random.Random(derived_edit_seed(suite_seed, sample.id, 0))
+    kinds = [
+        "mild_crop", "mild_resize", "rotate", "recolor", "recolor",
+        "patch_recolor", "patch_recolor", "patch_blur", "horizontal_flip",
+        "sharpen",
+    ]
+    suite_rng.shuffle(kinds)
+    width, height = sample.width, sample.height
+    trace: list[dict[str, Any]] = []
+    for cycle, kind in enumerate(kinds, 1):
+        seed = derived_edit_seed(suite_seed, sample.id, cycle)
+        rng = random.Random(seed)
+        before = {"width": width, "height": height}
+        edit: dict[str, Any] = {"cycle": cycle, "type": kind, "derived_seed": seed}
+        if kind == "mild_crop":
+            minimum_width = min(width, MIN_EDIT_DIMENSION)
+            minimum_height = min(height, MIN_EDIT_DIMENSION)
+            output_width = max(minimum_width, round(width * rng.uniform(0.97, 0.99)))
+            output_height = max(minimum_height, round(height * rng.uniform(0.97, 0.99)))
+            if sample.format == "yuv422" and output_width > 1:
+                output_width -= output_width % 2
+            maximum_left, maximum_top = width - output_width, height - output_height
+            left = rng.randint(0, maximum_left) if maximum_left else 0
+            if sample.format == "yuv422":
+                left -= left % 2
+            top = rng.randint(0, maximum_top) if maximum_top else 0
+            edit.update({"left": left, "top": top})
+            width, height = output_width, output_height
+        elif kind == "mild_resize":
+            minimum_width = min(width, MIN_EDIT_DIMENSION)
+            minimum_height = min(height, MIN_EDIT_DIMENSION)
+            width = max(minimum_width, round(width * rng.uniform(0.96, 0.99)))
+            height = max(minimum_height, round(height * rng.uniform(0.96, 0.99)))
+            if sample.format == "yuv422" and width > 1:
+                width -= width % 2
+            edit.update({"interpolation": "bilinear", "antialias": True})
+        elif kind == "rotate":
+            degrees = rng.choice((90, 180, 270)) if sample.format != "yuv422" else 180
+            edit["degrees"] = degrees
+            if degrees in (90, 270):
+                width, height = height, width
+        elif kind in ("recolor", "patch_recolor"):
+            edit.update({
+                "brightness": round(rng.uniform(0.98, 1.02), 6),
+                "contrast": round(rng.uniform(0.97, 1.03), 6),
+                "saturation": round(rng.uniform(0.97, 1.03), 6),
+            })
+        elif kind == "patch_blur":
+            edit.update({"kernel_size": rng.choice((3, 5)), "sigma": round(rng.uniform(0.5, 1.0), 6)})
+        elif kind == "sharpen":
+            edit["sharpness"] = round(rng.uniform(0.85, 1.15), 6)
+        if kind in ("patch_recolor", "patch_blur"):
+            patch_width = max(1, round(width * rng.uniform(0.15, 0.30)))
+            patch_height = max(1, round(height * rng.uniform(0.15, 0.30)))
+            if sample.format == "yuv422" and patch_width > 1:
+                patch_width -= patch_width % 2
+            left = rng.randint(0, width - patch_width) if width > patch_width else 0
+            if sample.format == "yuv422":
+                left -= left % 2
+            top = rng.randint(0, height - patch_height) if height > patch_height else 0
+            edit["patch"] = {
+                "left": left, "top": top, "width": patch_width, "height": patch_height,
+            }
+        edit["input_geometry"] = before
+        edit["output_geometry"] = {"width": width, "height": height}
+        trace.append(edit)
+    return trace
+
+
+def _rgb_or_gray_recolor(
+    frame: tuple[Any, ...], edit: dict[str, Any], torch: Any,
+) -> tuple[Any, ...]:
+    image = torch.stack(frame)
+    image = TVF.adjust_brightness(image, edit["brightness"])
+    image = TVF.adjust_contrast(image, edit["contrast"])
+    if len(frame) == 3:
+        image = TVF.adjust_saturation(image, edit["saturation"])
+    return tuple(image[number] for number in range(len(frame)))
+
+
+def _yuv_recolor(
+    frame: tuple[Any, ...], bit_depth: int, edit: dict[str, Any], torch: Any,
+) -> tuple[Any, ...]:
+    maximum = float((1 << bit_depth) - 1)
+    midpoint = maximum / 2.0
+    edited = []
+    for number, plane in enumerate(frame):
+        values = plane.to(torch.float32)
+        if number:
+            values = (values - midpoint) * edit["saturation"] + midpoint
+        else:
+            values = (values - midpoint) * edit["contrast"] + midpoint
+            values *= edit["brightness"]
+        edited.append(values.round().clamp(0, maximum).to(torch.uint16))
+    return tuple(edited)
+
+
+def apply_edit(
+    frame: tuple[Any, ...], format_name: str, bit_depth: int,
+    edit: dict[str, Any], torch: Any,
+) -> tuple[Any, ...]:
+    """Replay one GPU edit; callers apply it identically across the batch."""
+    kind = edit["type"]
+    output = edit["output_geometry"]
+    output_shapes = plane_shapes(format_name, output["width"], output["height"])
+    if kind == "horizontal_flip":
+        return tuple(TVF.hflip(plane) for plane in frame)
+    if kind == "rotate":
+        turns = edit["degrees"] // 90
+        return tuple(
+            torch.rot90(plane.to(torch.int32), turns, dims=(0, 1)).to(torch.uint16)
+            for plane in frame
+        )
+    if kind == "mild_crop":
+        input_width = edit["input_geometry"]["width"]
+        cropped = []
+        for plane, (output_height, output_width) in zip(frame, output_shapes):
+            horizontal_scale = plane.shape[1] / input_width
+            left = round(edit["left"] * horizontal_scale)
+            cropped.append(TVF.crop(plane, edit["top"], left, output_height, output_width))
+        return tuple(cropped)
+    if kind == "mild_resize":
+        return tuple(
+            TVF.resize(plane[None], [height, width], antialias=True)[0]
+            for plane, (height, width) in zip(frame, output_shapes)
+        )
+    if kind == "recolor":
+        if format_name == "yuv422":
+            return _yuv_recolor(frame, bit_depth, edit, torch)
+        return _rgb_or_gray_recolor(frame, edit, torch)
+    if kind == "patch_recolor":
+        patch = edit["patch"]
+        edited = [plane.clone() for plane in frame]
+        patches = []
+        for plane in edited:
+            scale = plane.shape[1] / edit["input_geometry"]["width"]
+            left = round(patch["left"] * scale)
+            patch_width = max(1, round(patch["width"] * scale))
+            patches.append(plane[
+                patch["top"]:patch["top"] + patch["height"],
+                left:left + patch_width,
+            ])
+        changed = (
+            _yuv_recolor(tuple(patches), bit_depth, edit, torch)
+            if format_name == "yuv422" else
+            _rgb_or_gray_recolor(tuple(patches), edit, torch)
+        )
+        for target, source in zip(patches, changed):
+            target.copy_(source)
+        return tuple(edited)
+    if kind == "patch_blur":
+        patch = edit["patch"]
+        edited = [plane.clone() for plane in frame]
+        for plane in edited:
+            scale = plane.shape[1] / edit["input_geometry"]["width"]
+            left = round(patch["left"] * scale)
+            patch_width = max(1, round(patch["width"] * scale))
+            target = plane[
+                patch["top"]:patch["top"] + patch["height"],
+                left:left + patch_width,
+            ]
+            target.copy_(TVF.gaussian_blur(
+                target[None], edit["kernel_size"], edit["sigma"],
+            )[0])
+        return tuple(edited)
+    if kind == "sharpen":
+        if format_name == "yuv422":
+            return (TVF.adjust_sharpness(frame[0][None], edit["sharpness"])[0], *frame[1:])
+        image = TVF.adjust_sharpness(torch.stack(frame), edit["sharpness"])
+        return tuple(image[number] for number in range(len(frame)))
+    raise ValueError(f"unsupported edit type: {kind}")
+
+def normalize_edited_frame(
+    frame: tuple[Any, ...], bit_depth: int, torch: Any,
+) -> tuple[Any, ...]:
+    """Clamp an editor result to its declared native range and codec layout."""
+    maximum = (1 << bit_depth) - 1
+    return tuple(
+        plane.to(torch.int32).clamp(0, maximum).to(torch.uint16).contiguous()
+        for plane in frame
+    )
+
+
+def cycle_quality(
+    cycle: int, ssim: Sequence[float], butter: Sequence[float],
+) -> dict[str, Any]:
+    if len(ssim) != len(butter):
+        raise RuntimeError(f"edit cycle {cycle} metric score counts differ")
+    frames = [
+        {
+            "frame": number, "ssimulacra2": ssim_score,
+            "butteraugli": butter_score,
+            "passed": ssim_score > SSIMULACRA2_MIN and butter_score <= BUTTERAUGLI_MAX,
+        }
+        for number, (ssim_score, butter_score) in enumerate(zip(ssim, butter))
+    ]
+    if not frames:
+        raise RuntimeError(f"edit cycle {cycle} produced no metric scores")
+    return {
+        "frames": frames,
+        "minimum_ssimulacra2": min(row["ssimulacra2"] for row in frames),
+        "maximum_butteraugli": max(row["butteraugli"] for row in frames),
+        "passed": all(row["passed"] for row in frames),
+    }
 
 def load_frames(
     sample: Sample, torch: Any,
@@ -427,6 +658,82 @@ def evaluate_sample(
     assign_quality_scores([result], ssim, butter)
     phases["metric_transfer"] = metrics.last_transfer_seconds
     phases["metric_compute"] = metrics.last_metric_seconds
+
+    generation_started = time.perf_counter()
+    reference_frames = [tuple(plane.clone() for plane in frame) for frame in frames]
+    candidate_streams = streams[0] if len(frames) == 1 else streams
+    generation_cycles = []
+    for edit in make_edit_trace(sample, args.edit_seed):
+        candidate_frames = codec.decode(candidate_streams)
+        if len(frames) == 1:
+            candidate_frames = [candidate_frames]
+        reference_frames = [
+            normalize_edited_frame(
+                apply_edit(frame, sample.format, sample.bit_depth, edit, torch),
+                sample.bit_depth, torch,
+            )
+            for frame in reference_frames
+        ]
+        edited_candidates = [
+            normalize_edited_frame(
+                apply_edit(frame, sample.format, sample.bit_depth, edit, torch),
+                sample.bit_depth, torch,
+            )
+            for frame in candidate_frames
+        ]
+        candidate_streams = (
+            encode_one(edited_candidates[0])
+            if len(frames) == 1 else encode_batch(edited_candidates)
+        )
+        decoded_candidates = codec.decode(candidate_streams)
+        if len(frames) == 1:
+            decoded_candidates = [decoded_candidates]
+        torch.cuda.synchronize()
+        output = edit["output_geometry"]
+        expected_shapes = plane_shapes(sample.format, output["width"], output["height"])
+        for frame_number, decoded_frame in enumerate(decoded_candidates):
+            if tuple(tuple(plane.shape) for plane in decoded_frame) != expected_shapes:
+                raise RuntimeError(
+                    f"edit cycle {edit['cycle']} frame {frame_number} geometry differs"
+                )
+        first_stream = candidate_streams if len(frames) == 1 else candidate_streams[0]
+        first_metadata = codec.inspect(first_stream)
+        for key, expected_value in (
+            ("width", output["width"]), ("height", output["height"]),
+            ("format", sample.format), ("bit_depth", sample.bit_depth),
+        ):
+            if first_metadata.get(key) != expected_value:
+                raise RuntimeError(
+                    f"edit cycle {edit['cycle']} metadata {key} differs: "
+                    f"{first_metadata.get(key)!r} != {expected_value!r}"
+                )
+        generation_cycles.append({
+            "cycle": edit["cycle"], "edit": edit,
+            "frame_count": len(frames),
+            "encoded_bytes": (
+                int(candidate_streams.numel()) if len(frames) == 1 else
+                sum(int(stream.numel()) for stream in candidate_streams)
+            ),
+        })
+    final_output = generation_cycles[-1]["edit"]["output_geometry"]
+    with DirectVshipMetrics(
+        args.libvship, final_output["width"], final_output["height"], sample.format,
+        sample.bit_depth, args.libvship_gpu_id, args.libvship_workers,
+    ) as final_metrics:
+        final_ssim, final_butter = final_metrics.evaluate(
+            reference_frames, decoded_candidates, torch,
+        )
+    final_quality = cycle_quality(EDIT_CYCLES, final_ssim, final_butter)
+    result["generation_robustness"] = {
+        "suite_seed": args.edit_seed,
+        "cycle_count": EDIT_CYCLES,
+        "metric_scope": "final decode after cycle 10 only",
+        "reference": "same accumulated batch edits without codec round trips",
+        "cycles": generation_cycles,
+        "final_quality": final_quality,
+        "passed": final_quality["passed"],
+    }
+    phases["generation_robustness"] = time.perf_counter() - generation_started
     return result
 
 
@@ -476,6 +783,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--libvship-build", required=True)
     parser.add_argument("--libvship-gpu-id", type=int, default=0)
     parser.add_argument("--libvship-workers", type=int, default=2)
+    parser.add_argument(
+        "--edit-seed", type=int, default=DEFAULT_EDIT_SEED,
+        help="seed for the deterministic ten-cycle per-batch edit suite",
+    )
     args = parser.parse_args(argv)
     if args.repetitions < 20:
         parser.error("--repetitions must be at least 20")
@@ -580,6 +891,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 for result in group_results:
                     if not result["quality"]["passed"]:
                         failures.append(f"{result['id']}: perceptual quality gate failed")
+                    if not result["generation_robustness"]["passed"]:
+                        failures.append(
+                            f"{result['id']}: generation robustness quality gate failed"
+                        )
                     failures.extend(
                         f"{result['id']}: {item}"
                         for item in performance_failures(result)
@@ -617,7 +932,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         for name in sorted(phase_names)
     }
     report = {
-        "schema_version": 3,
+        "schema_version": 4,
         "passed": not failures,
         "tier": args.tier,
         "configuration": {
@@ -640,6 +955,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
             "butteraugli_intensity_nits": 80.0,
             "butteraugli_auxiliary_pnorm": 3,
+            "generation_robustness": {
+                "cycles": EDIT_CYCLES,
+                "suite_seed": args.edit_seed,
+                "seed_policy": "derived from suite seed, sample id, and cycle",
+                "batch_policy": "identical edit parameters for every frame in a sample",
+                "resize_policy": "one 1-4% downscale; one 1-3% crop retains geometry",
+                "performance_scope": "pristine source encode/decode only; edit suite excluded",
+                "metric_scope": "final decode after cycle 10 only",
+                "minimum_dimension": MIN_EDIT_DIMENSION,
+            },
         },
         "corpus": {
             "revision": revision,
@@ -651,6 +976,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "git": command_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"]),
             "python": sys.version,
             "torch": getattr(torch, "__version__", None),
+            "torchvision": __import__("torchvision").__version__,
             "cuda": getattr(torch.version, "cuda", None),
         },
         "hardware": {
@@ -670,6 +996,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
             "maximum_butteraugli": max(
                 (row["quality"]["maximum_butteraugli"] for row in results), default=None
+            ),
+            "generation_final_minimum_ssimulacra2": min(
+                (
+                    row["generation_robustness"]["final_quality"]["minimum_ssimulacra2"]
+                    for row in results
+                ),
+                default=None,
+            ),
+            "generation_final_maximum_butteraugli": max(
+                (
+                    row["generation_robustness"]["final_quality"]["maximum_butteraugli"]
+                    for row in results
+                ),
+                default=None,
             ),
         },
         "metric_groups": metric_groups,
