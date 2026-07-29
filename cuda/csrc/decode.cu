@@ -19,6 +19,7 @@ constexpr int kRansAlphabet = 511;
 constexpr int kRansTableLog = 12;
 constexpr uint32_t kRansByteL = 1u << 23;
 constexpr uint8_t kPredictFullTileClampGradient = 6;
+constexpr uint8_t kPredictHadamard8x8 = 7;
 
 __device__ uint16_t read_u16(const uint8_t* bytes) {
   return static_cast<uint16_t>(bytes[0]) |
@@ -134,6 +135,7 @@ __global__ void parse_metadata_kernel(
     const int64_t* tile_metadata,
     const int64_t* tile_parse_metadata,
     int64_t tile_count,
+    int32_t step,
     int64_t* shard_metadata,
     int32_t* status) {
   const int64_t tile = blockIdx.x;
@@ -144,8 +146,11 @@ __global__ void parse_metadata_kernel(
   const int64_t entry_offset = kHeaderBytes + tile * kDirectoryEntryBytes;
   const uint8_t* entry = encoded + entry_offset;
   const int64_t expected_plane = tile_parse_metadata[tile * 2 + 1];
+  const bool transform = step > 1 && tile_metadata[tile * 7 + 4] % 8 == 0 &&
+      tile_metadata[tile * 7 + 5] % 8 == 0;
+  const uint8_t expected_predictor = transform ? kPredictHadamard8x8 : kPredictFullTileClampGradient;
   if (entry[0] != expected_plane || entry[1] != kEntropyParallelShards ||
-      entry[2] != kPredictFullTileClampGradient || entry[3] != 0 ||
+      entry[2] != expected_predictor || entry[3] != 0 ||
       read_u32(entry + 4) != tile_metadata[tile * 7 + 2] ||
       read_u32(entry + 8) != tile_metadata[tile * 7 + 3] ||
       read_u32(entry + 12) != tile_metadata[tile * 7 + 4] ||
@@ -564,6 +569,8 @@ __global__ void reconstruct_tiles_kernel(
   const int64_t height = metadata[tile * 7 + 5];
   const int64_t folded_base = metadata[tile * 7 + 6];
 
+  if (step > 1 && width % 8 == 0 && height % 8 == 0) return;
+
   for (int64_t diagonal = 0; diagonal < width + height - 1; ++diagonal) {
     const int64_t diagonal_begin = diagonal - width + 1;
     const int64_t y_begin = diagonal_begin > 0 ? diagonal_begin : 0;
@@ -588,6 +595,67 @@ __global__ void reconstruct_tiles_kernel(
   }
 }
 
+__global__ void inverse_transform_tiles_kernel(
+    const uint32_t* folded,
+    const int64_t* metadata,
+    int64_t tile_count,
+    int32_t step,
+    int32_t max_sample,
+    uint16_t* output) {
+  const int64_t tile = blockIdx.x;
+  if (tile >= tile_count) return;
+  const int64_t plane_base = metadata[tile * 7 + 0];
+  const int64_t plane_width = metadata[tile * 7 + 1];
+  const int64_t origin_x = metadata[tile * 7 + 2];
+  const int64_t origin_y = metadata[tile * 7 + 3];
+  const int width = static_cast<int>(metadata[tile * 7 + 4]);
+  const int height = static_cast<int>(metadata[tile * 7 + 5]);
+  const int64_t folded_base = metadata[tile * 7 + 6];
+  if (step <= 1 || width % 8 != 0 || height % 8 != 0) return;
+  const int warp = threadIdx.x >> 5;
+  const int lane = threadIdx.x & 31;
+  const int blocks_x = width / 8;
+  const int block_count = blocks_x * (height / 8);
+  __shared__ int32_t values[8][64];
+  for (int block = warp; block < block_count; block += 8) {
+    const int block_x = (block % blocks_x) * 8;
+    const int block_y = (block / blocks_x) * 8;
+    for (int half = 0; half < 2; ++half) {
+      const int index = lane + half * 32;
+      const int32_t quantum = step * (index == 0 ? 8 : 12);
+      values[warp][index] = unzigzag(
+          folded[folded_base + static_cast<int64_t>(block) * 64 + index]) * quantum;
+    }
+    __syncwarp();
+    for (int stride = 1; stride < 64; stride <<= 1) {
+      int32_t own[2];
+      int32_t other[2];
+      for (int half = 0; half < 2; ++half) {
+        const int index = lane + half * 32;
+        own[half] = values[warp][index];
+        other[half] = values[warp][index ^ stride];
+      }
+      __syncwarp();
+      for (int half = 0; half < 2; ++half) {
+        const int index = lane + half * 32;
+        values[warp][index] = (index & stride) ? other[half] - own[half] : own[half] + other[half];
+      }
+      __syncwarp();
+    }
+    for (int half = 0; half < 2; ++half) {
+      const int index = lane + half * 32;
+      const int x = index & 7;
+      const int y = index >> 3;
+      const int32_t sum = values[warp][index];
+      const int32_t value = (sum + (sum >= 0 ? 32 : -32)) / 64;
+      const int64_t destination =
+          plane_base + (origin_y + block_y + y) * plane_width + origin_x + block_x + x;
+      output[destination] = static_cast<uint16_t>(max(0, min(max_sample, value)));
+    }
+    __syncwarp();
+  }
+}
+
 __global__ void reconstruct_tiles_serial_kernel(
     const uint32_t* folded,
     const int64_t* metadata,
@@ -606,6 +674,7 @@ __global__ void reconstruct_tiles_serial_kernel(
   const int64_t width = metadata[tile * 7 + 4];
   const int64_t height = metadata[tile * 7 + 5];
   const int64_t folded_base = metadata[tile * 7 + 6];
+  if (step > 1 && width % 8 == 0 && height % 8 == 0) return;
   for (int64_t y = 0; y < height; ++y) {
     uint16_t left = 0;
     uint16_t upper_left = 0;
@@ -652,13 +721,14 @@ std::vector<torch::Tensor> fastvid_decode_cuda(
     parse_metadata_kernel<<<tile_meta.size(0), 1, 0, stream>>>(
         encoded.data_ptr<uint8_t>(), encoded.numel(), tile_meta.data_ptr<int64_t>(),
         tile_parse_meta.data_ptr<int64_t>(), tile_meta.size(0),
+        static_cast<int32_t>(step),
         shard_meta.data_ptr<int64_t>(), status.data_ptr<int32_t>());
     C10_CUDA_KERNEL_LAUNCH_CHECK();
   }
 
   decode_order0_shards_kernel<<<shard_meta.size(0), 128, 0, stream>>>(
       encoded.data_ptr<uint8_t>(), shard_meta.data_ptr<int64_t>(), shard_meta.size(0),
-      static_cast<uint32_t>(max_sample * 2), folded.data_ptr<uint32_t>(),
+      static_cast<uint32_t>(max(max_sample * 2, int64_t{4095})), folded.data_ptr<uint32_t>(),
       status.data_ptr<int32_t>());
   C10_CUDA_KERNEL_LAUNCH_CHECK();
   if (wavefront) {
@@ -680,6 +750,11 @@ std::vector<torch::Tensor> fastvid_decode_cuda(
         static_cast<int32_t>(max_sample),
         output.data_ptr<uint16_t>());
   }
+  inverse_transform_tiles_kernel<<<tile_meta.size(0), 256, 0, stream>>>(
+      folded.data_ptr<uint32_t>(), tile_meta.data_ptr<int64_t>(), tile_meta.size(0),
+      static_cast<int32_t>(step), static_cast<int32_t>(max_sample), output.data_ptr<uint16_t>());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+
   C10_CUDA_KERNEL_LAUNCH_CHECK();
 
   const int32_t host_status = status.cpu().item<int32_t>();

@@ -26,6 +26,7 @@ constexpr int kRansAlphabet = 511;
 constexpr int kRansTableLog = 12;
 constexpr uint32_t kRansByteL = 1u << 23;
 constexpr uint8_t kPredictFullTileClampGradient = 6;
+constexpr uint8_t kPredictHadamard8x8 = 7;
 
 struct Tile {
   int64_t plane;
@@ -142,6 +143,8 @@ __global__ void predict_tiles_kernel(
   const int64_t height = metadata[tile * 7 + 5];
   const int64_t folded_base = metadata[tile * 7 + 6];
 
+  if (step > 1 && width % 8 == 0 && height % 8 == 0) return;
+
   for (int64_t diagonal = 0; diagonal < width + height - 1; ++diagonal) {
     const int64_t diagonal_begin = diagonal - width + 1;
     const int64_t y_begin = diagonal_begin > 0 ? diagonal_begin : 0;
@@ -172,6 +175,98 @@ __global__ void predict_tiles_kernel(
       folded[folded_base + y * width + x] = zigzag(quantized);
     }
     __syncthreads();
+  }
+}
+
+__global__ void transform_tiles_kernel(
+    const uint16_t* source,
+    const int64_t* metadata,
+    int64_t tile_count,
+    int32_t step,
+    int32_t max_sample,
+    uint16_t* reconstructed,
+    uint32_t* folded,
+    int32_t* status) {
+  const int64_t tile = blockIdx.x;
+  if (tile >= tile_count) return;
+  const int64_t plane_base = metadata[tile * 7 + 0];
+  const int64_t plane_width = metadata[tile * 7 + 1];
+  const int64_t origin_x = metadata[tile * 7 + 2];
+  const int64_t origin_y = metadata[tile * 7 + 3];
+  const int width = static_cast<int>(metadata[tile * 7 + 4]);
+  const int height = static_cast<int>(metadata[tile * 7 + 5]);
+  const int64_t folded_base = metadata[tile * 7 + 6];
+  if (step <= 1 || width % 8 != 0 || height % 8 != 0) return;
+  const int warp = threadIdx.x >> 5;
+  const int lane = threadIdx.x & 31;
+  const int blocks_x = width / 8;
+  const int block_count = blocks_x * (height / 8);
+  __shared__ int32_t values[8][64];
+  for (int block = warp; block < block_count; block += 8) {
+    const int block_x = (block % blocks_x) * 8;
+    const int block_y = (block / blocks_x) * 8;
+    for (int half = 0; half < 2; ++half) {
+      const int index = lane + half * 32;
+      const int x = index & 7;
+      const int y = index >> 3;
+      const int64_t source_index =
+          plane_base + (origin_y + block_y + y) * plane_width + origin_x + block_x + x;
+      const uint16_t sample = source[source_index];
+      if (sample > max_sample) set_error(status, 1);
+      values[warp][index] = static_cast<int32_t>(sample);
+    }
+    __syncwarp();
+    for (int stride = 1; stride < 64; stride <<= 1) {
+      int32_t own[2];
+      int32_t other[2];
+      for (int half = 0; half < 2; ++half) {
+        const int index = lane + half * 32;
+        own[half] = values[warp][index];
+        other[half] = values[warp][index ^ stride];
+      }
+      __syncwarp();
+      for (int half = 0; half < 2; ++half) {
+        const int index = lane + half * 32;
+        values[warp][index] = (index & stride) ? other[half] - own[half] : own[half] + other[half];
+      }
+      __syncwarp();
+    }
+    for (int half = 0; half < 2; ++half) {
+      const int index = lane + half * 32;
+      const int32_t coefficient = values[warp][index];
+      const int32_t quantum = step * (index == 0 ? 8 : 12);
+      const int32_t magnitude = (abs(coefficient) + quantum / 2) / quantum;
+      const int32_t quantized = coefficient < 0 ? -magnitude : magnitude;
+      folded[folded_base + static_cast<int64_t>(block) * 64 + index] = zigzag(quantized);
+      values[warp][index] = quantized * quantum;
+    }
+    __syncwarp();
+    for (int stride = 1; stride < 64; stride <<= 1) {
+      int32_t own[2];
+      int32_t other[2];
+      for (int half = 0; half < 2; ++half) {
+        const int index = lane + half * 32;
+        own[half] = values[warp][index];
+        other[half] = values[warp][index ^ stride];
+      }
+      __syncwarp();
+      for (int half = 0; half < 2; ++half) {
+        const int index = lane + half * 32;
+        values[warp][index] = (index & stride) ? other[half] - own[half] : own[half] + other[half];
+      }
+      __syncwarp();
+    }
+    for (int half = 0; half < 2; ++half) {
+      const int index = lane + half * 32;
+      const int x = index & 7;
+      const int y = index >> 3;
+      const int32_t sum = values[warp][index];
+      const int32_t value = (sum + (sum >= 0 ? 32 : -32)) / 64;
+      const int64_t destination =
+          plane_base + (origin_y + block_y + y) * plane_width + origin_x + block_x + x;
+      reconstructed[destination] = static_cast<uint16_t>(max(0, min(max_sample, value)));
+    }
+    __syncwarp();
   }
 }
 
@@ -763,6 +858,11 @@ torch::Tensor fastvid_encode_cuda(
       step, max_sample, reconstructed.data_ptr<uint16_t>(), folded.data_ptr<uint32_t>(),
       status.data_ptr<int32_t>());
   C10_CUDA_KERNEL_LAUNCH_CHECK();
+  transform_tiles_kernel<<<tiles.size(), 256, 0, stream>>>(
+      source.data_ptr<uint16_t>(), tile_meta.data_ptr<int64_t>(), tiles.size(),
+      step, max_sample, reconstructed.data_ptr<uint16_t>(), folded.data_ptr<uint32_t>(),
+      status.data_ptr<int32_t>());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
   const bool force_order0 = layout == 2;
   if (!force_order0) {
     analyze_shards_kernel<<<total_shards, 128, 0, stream>>>(
@@ -827,7 +927,8 @@ torch::Tensor fastvid_encode_cuda(
     const auto& tile = tiles[tile_index];
     prefix.push_back(static_cast<uint8_t>(tile.plane));
     prefix.push_back(kEntropyParallelShards);
-    prefix.push_back(kPredictFullTileClampGradient);
+    const bool transform = step > 1 && tile.width % 8 == 0 && tile.height % 8 == 0;
+    prefix.push_back(transform ? kPredictHadamard8x8 : kPredictFullTileClampGradient);
     prefix.push_back(0);
     put_u32(prefix, static_cast<uint32_t>(tile.x));
     put_u32(prefix, static_cast<uint32_t>(tile.y));
