@@ -99,6 +99,14 @@ conversion path. Preserve the decoded format and depth until that conversion.
 The evaluator must also check dimensions, format metadata, frame count, decode
 success, and deterministic round trips before running perceptual metrics.
 
+To amortize FFVShip startup and decoder/indexing cost, concatenate samples with
+identical width, height, source format, and bit depth into one metric sequence.
+Invoke each perceptual metric once per compatible sequence, retain strict frame
+order, and map every emitted score back to its original sample and frame. Codec
+correctness and CUDA timing remain per sample; batching metric calls must never
+turn the per-frame quality gates into aggregate gates. Process one compatibility
+group at a time so transient raw and lossless intermediates have bounded storage.
+
 “Perceptually lossless” in this project means passing both gates above; it does
 not mean mathematically lossless.
 

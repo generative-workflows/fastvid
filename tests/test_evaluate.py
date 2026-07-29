@@ -7,9 +7,11 @@ import pytest
 
 from scripts.evaluate import (
     Sample,
+    assign_quality_scores,
     load_manifest,
     metric_pixel_format,
     metric_raw,
+    quality_group_key,
     run_ffmpeg,
     samples_exceed_maximum,
 )
@@ -127,3 +129,26 @@ def test_manifest_accepts_multifile_batch_and_hashes(tmp_path: Path):
     assert samples[0].batch_frames == 2
     assert samples[0].paths == (first, second)
     assert len(samples[0].expected_sha256) == 2
+
+
+def test_quality_group_key_requires_matching_interchange_properties():
+    sample = Sample(
+        id="group", path=Path("unused.raw"), width=1920, height=1080,
+        format="rgb444", bit_depth=10, tiers=("rejection",),
+    )
+    assert quality_group_key(sample) == (1920, 1080, "rgb444", 10)
+
+
+def test_consolidated_scores_map_back_to_sample_frames():
+    results = [
+        {"id": "one", "frame_count": 1},
+        {"id": "two", "frame_count": 2},
+    ]
+    assign_quality_scores(
+        results, [95.0, 91.0, 89.0], [0.2, 0.9, 0.1],
+    )
+    assert results[0]["quality"]["frames"][0]["ssimulacra2"] == 95.0
+    assert [row["frame"] for row in results[1]["quality"]["frames"]] == [0, 1]
+    assert results[0]["quality"]["passed"]
+    assert not results[1]["quality"]["passed"]
+    assert results[1]["quality"]["minimum_ssimulacra2"] == 89.0

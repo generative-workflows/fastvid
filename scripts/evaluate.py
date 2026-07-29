@@ -43,7 +43,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -336,9 +336,101 @@ def metric_raw(frame: Sequence[Any], sample: Sample) -> bytes:
     return b"".join(array.tobytes() for array in arrays)
 
 
+def quality_group_key(sample: Sample) -> tuple[int, int, str, int]:
+    """Return the properties that must match within one metric video."""
+    return sample.width, sample.height, sample.format, sample.bit_depth
+
+
+def assign_quality_scores(
+    results: Sequence[dict[str, Any]],
+    ssim: Sequence[float],
+    butter: Sequence[float],
+) -> None:
+    """Map sequence-wide FFVShip scores back onto their source samples."""
+    expected = sum(int(result["frame_count"]) for result in results)
+    if len(ssim) != expected or len(butter) != expected:
+        raise RuntimeError(
+            f"FFVShip returned {len(ssim)} SSIMULACRA2 and {len(butter)} "
+            f"Butteraugli scores for {expected} input frames"
+        )
+    cursor = 0
+    for result in results:
+        count = int(result["frame_count"])
+        sample_ssim = ssim[cursor:cursor + count]
+        sample_butter = butter[cursor:cursor + count]
+        frames = [
+            {
+                "frame": number, "ssimulacra2": ssim_score,
+                "butteraugli": butter_score,
+                "passed": (
+                    ssim_score > SSIMULACRA2_MIN
+                    and butter_score <= BUTTERAUGLI_MAX
+                ),
+            }
+            for number, (ssim_score, butter_score)
+            in enumerate(zip(sample_ssim, sample_butter))
+        ]
+        result["quality"] = {
+            "frames": frames,
+            "minimum_ssimulacra2": min(sample_ssim),
+            "maximum_butteraugli": max(sample_butter),
+            "passed": all(frame["passed"] for frame in frames),
+        }
+        cursor += count
+
+
+def evaluate_quality_group(
+    sample: Sample,
+    results: Sequence[dict[str, Any]],
+    reference_raw: Path,
+    decoded_raw: Path,
+    args: argparse.Namespace,
+    directory: Path,
+) -> dict[str, Any]:
+    """Evaluate one compatible sequence with two total FFVShip processes."""
+    frame_count = sum(int(result["frame_count"]) for result in results)
+    metric_sample = replace(
+        sample, id=f"metric-group-{sample.id}", path=reference_raw,
+        paths=(), expected_sha256=(), batch_frames=frame_count,
+    )
+    reference_video = directory / "reference.mkv"
+    decoded_video = directory / "decoded.mkv"
+    conversion_started = time.perf_counter()
+    run_ffmpeg(reference_raw, reference_video, metric_sample, args.ffmpeg, args.ffprobe)
+    run_ffmpeg(decoded_raw, decoded_video, metric_sample, args.ffmpeg, args.ffprobe)
+    conversion_seconds = time.perf_counter() - conversion_started
+    metric_arguments = (
+        args.ffvship, directory, args.ffvship_gpu_id,
+        args.ffvship_gpu_threads, args.ffvship_threads,
+    )
+    metric_started = time.perf_counter()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        ssim_future = executor.submit(
+            ffvship_metric, reference_video, decoded_video,
+            "SSIMULACRA2", *metric_arguments,
+        )
+        butter_future = executor.submit(
+            ffvship_metric, reference_video, decoded_video,
+            "Butteraugli", *metric_arguments,
+        )
+        ssim, butter = ssim_future.result(), butter_future.result()
+    metric_seconds = time.perf_counter() - metric_started
+    assign_quality_scores(results, ssim, butter)
+    return {
+        "width": sample.width, "height": sample.height,
+        "format": sample.format, "bit_depth": sample.bit_depth,
+        "sample_count": len(results), "frame_count": frame_count,
+        "conversion_seconds": conversion_seconds,
+        "metric_seconds": metric_seconds,
+        "metric_frames_per_second": (
+            frame_count / metric_seconds if metric_seconds else None
+        ),
+    }
+
+
 def evaluate_sample(
     sample: Sample, codec: Any, torch: Any, args: argparse.Namespace,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], bytes, bytes]:
     frames = load_frames(sample, torch)
     if any(not callable(getattr(codec, name, None)) for name in ("encode", "decode", "inspect")):
         raise NotImplementedError(
@@ -425,41 +517,18 @@ def evaluate_sample(
         encode_timing["median_ms"] = encode_timing["median_seconds"] * 1000
         decode_timing["median_ms"] = decode_timing["median_seconds"] * 1000
 
-    with tempfile.TemporaryDirectory(prefix="fastvid-quality-") as temp_name:
-        temp = Path(temp_name)
-        decoded_frames = [decoded] if len(frames) == 1 else codec.decode(streams)
-        torch.cuda.synchronize()
-        if not isinstance(decoded_frames, (list, tuple)) or len(decoded_frames) != len(frames):
-            raise RuntimeError("batch decode must return one frame per independent stream")
-        for number, decoded_frame in enumerate(decoded_frames):
-            if tuple(tuple(plane.shape) for plane in decoded_frame) != sample.plane_shapes:
-                raise RuntimeError(f"decoded frame {number} dimensions or format differ")
-            if any(plane.dtype != torch.uint16 or not plane.is_cuda for plane in decoded_frame):
-                raise RuntimeError(f"decoded frame {number} is not CUDA uint16")
-        reference_raw, decoded_raw = temp / "reference.raw", temp / "decoded.raw"
-        reference_raw.write_bytes(b"".join(metric_raw(frame, sample) for frame in frames))
-        decoded_raw.write_bytes(b"".join(metric_raw(frame, sample) for frame in decoded_frames))
-        reference_video, decoded_video = temp / "reference.mkv", temp / "decoded.mkv"
-        run_ffmpeg(reference_raw, reference_video, sample, args.ffmpeg, args.ffprobe)
-        run_ffmpeg(decoded_raw, decoded_video, sample, args.ffmpeg, args.ffprobe)
-        metric_arguments = (args.ffvship, temp, args.ffvship_gpu_id, args.ffvship_gpu_threads, args.ffvship_threads)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            ssim_future = executor.submit(ffvship_metric, reference_video, decoded_video, "SSIMULACRA2", *metric_arguments)
-            butter_future = executor.submit(ffvship_metric, reference_video, decoded_video, "Butteraugli", *metric_arguments)
-            ssim, butter = ssim_future.result(), butter_future.result()
-    if len(ssim) != len(frames) or len(butter) != len(frames):
-        raise RuntimeError("FFVShip did not return exactly one score per input frame")
-
-    per_frame_quality = [
-        {
-            "frame": number, "ssimulacra2": ssim_score,
-            "butteraugli": butter_score,
-            "passed": ssim_score > SSIMULACRA2_MIN and butter_score <= BUTTERAUGLI_MAX,
-        }
-        for number, (ssim_score, butter_score) in enumerate(zip(ssim, butter))
-    ]
-    quality_pass = all(row["passed"] for row in per_frame_quality)
-    return {
+    decoded_frames = [decoded] if len(frames) == 1 else codec.decode(streams)
+    torch.cuda.synchronize()
+    if not isinstance(decoded_frames, (list, tuple)) or len(decoded_frames) != len(frames):
+        raise RuntimeError("batch decode must return one frame per independent stream")
+    for number, decoded_frame in enumerate(decoded_frames):
+        if tuple(tuple(plane.shape) for plane in decoded_frame) != sample.plane_shapes:
+            raise RuntimeError(f"decoded frame {number} dimensions or format differ")
+        if any(plane.dtype != torch.uint16 or not plane.is_cuda for plane in decoded_frame):
+            raise RuntimeError(f"decoded frame {number} is not CUDA uint16")
+    reference_payload = b"".join(metric_raw(frame, sample) for frame in frames)
+    decoded_payload = b"".join(metric_raw(frame, sample) for frame in decoded_frames)
+    result = {
         "id": sample.id,
         "path": str(sample.path) if not sample.paths else None,
         "paths": [str(path) for path in sample.paths] if sample.paths else None,
@@ -471,12 +540,7 @@ def evaluate_sample(
         "height": sample.height,
         "frame_count": len(frames),
         "correctness": {"passed": True, "deterministic": True},
-        "quality": {
-            "frames": per_frame_quality,
-            "minimum_ssimulacra2": min(ssim),
-            "maximum_butteraugli": max(butter),
-            "passed": quality_pass,
-        },
+        "quality": None,
         "compression": {
             "raw_bytes": raw_bytes, "encoded_bytes": encoded_bytes,
             "encoded_sizes": encoded_sizes,
@@ -491,6 +555,7 @@ def evaluate_sample(
             "encode": encode_timing, "decode": decode_timing,
         },
     }
+    return result, reference_payload, decoded_payload
 
 
 def performance_failures(result: dict[str, Any]) -> list[str]:
@@ -539,6 +604,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--ffvship-threads", type=int, default=2)
     parser.add_argument("--ffmpeg", default="ffmpeg")
     parser.add_argument("--ffprobe", default="ffprobe")
+    parser.add_argument(
+        "--quality-temp", type=Path,
+        help="directory for transient consolidated raw and FFV1 metric sequences",
+    )
     args = parser.parse_args(argv)
     if args.repetitions < 20:
         parser.error("--repetitions must be at least 20")
@@ -553,6 +622,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     started = time.time()
     failures: list[str] = []
     results: list[dict[str, Any]] = []
+    metric_groups: list[dict[str, Any]] = []
     try:
         revision, samples = load_manifest(args.manifest.resolve(), args.tier)
     except Exception as error:
@@ -583,15 +653,59 @@ def main(argv: Sequence[str] | None = None) -> int:
         failures.append(f"FFprobe binary not found: {args.ffprobe}")
 
     if not failures:
+        if args.quality_temp is not None:
+            args.quality_temp.mkdir(parents=True, exist_ok=True)
+        grouped: dict[tuple[int, int, str, int], list[Sample]] = {}
         for sample in samples:
+            grouped.setdefault(quality_group_key(sample), []).append(sample)
+        for group_number, group_samples in enumerate(grouped.values()):
+            group_results: list[dict[str, Any]] = []
             try:
-                result = evaluate_sample(sample, codec, torch, args)
-                results.append(result)
-                if not result["quality"]["passed"]:
-                    failures.append(f"{sample.id}: perceptual quality gate failed")
-                failures.extend(f"{sample.id}: {item}" for item in performance_failures(result))
+                with tempfile.TemporaryDirectory(
+                    prefix=f"fastvid-quality-{group_number:02d}-",
+                    dir=args.quality_temp,
+                ) as temp_name:
+                    temp = Path(temp_name)
+                    reference_raw = temp / "reference.raw"
+                    decoded_raw = temp / "decoded.raw"
+                    with (
+                        reference_raw.open("wb") as reference_stream,
+                        decoded_raw.open("wb") as decoded_stream,
+                    ):
+                        for sample in group_samples:
+                            try:
+                                result, reference_payload, decoded_payload = evaluate_sample(
+                                    sample, codec, torch, args,
+                                )
+                                reference_stream.write(reference_payload)
+                                decoded_stream.write(decoded_payload)
+                                group_results.append(result)
+                            except Exception as error:
+                                failures.append(
+                                    f"{sample.id}: {type(error).__name__}: {error}"
+                                )
+                    if group_results:
+                        metric_groups.append(evaluate_quality_group(
+                            group_samples[0], group_results, reference_raw,
+                            decoded_raw, args, temp,
+                        ))
+                results.extend(group_results)
+                for result in group_results:
+                    if not result["quality"]["passed"]:
+                        failures.append(f"{result['id']}: perceptual quality gate failed")
+                    failures.extend(
+                        f"{result['id']}: {item}"
+                        for item in performance_failures(result)
+                    )
             except Exception as error:
-                failures.append(f"{sample.id}: {type(error).__name__}: {error}")
+                for result in group_results:
+                    failures.append(
+                        f"{result['id']}: consolidated quality: "
+                        f"{type(error).__name__}: {error}"
+                    )
+
+    sample_order = {sample.id: number for number, sample in enumerate(samples)}
+    results.sort(key=lambda result: sample_order[result["id"]])
 
     covered = {(row["format"], row["bit_depth"]) for row in results}
     if not any(row["frame_count"] > 1 for row in results):
@@ -617,7 +731,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     total_raw = sum(row["compression"]["raw_bytes"] for row in results)
     total_encoded = sum(row["compression"]["encoded_bytes"] for row in results)
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "passed": not failures,
         "tier": args.tier,
         "configuration": {
@@ -634,6 +748,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "ffvship_gpu_threads": args.ffvship_gpu_threads,
             "ffvship_threads": args.ffvship_threads,
             "ffvship_parallel_metrics": 2,
+            "ffvship_batching": (
+                "one sequence per width, height, format, and bit depth"
+            ),
             "butteraugli_score": "maximum distance among all norms emitted by FFVShip",
         },
         "corpus": {
@@ -669,6 +786,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 (row["quality"]["maximum_butteraugli"] for row in results), default=None
             ),
         },
+        "metric_groups": metric_groups,
         "compression_summary": {
             "raw_bytes": total_raw, "encoded_bytes": total_encoded,
             "ratio": total_raw / total_encoded if total_encoded else None,
