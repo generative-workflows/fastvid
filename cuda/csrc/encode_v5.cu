@@ -67,6 +67,22 @@ std::vector<Tile> expected_tiles(
   return result;
 }
 
+int32_t quantization_step_v7(int64_t layout, int64_t bit_depth, int64_t quality) {
+  if (layout == 0 && bit_depth == 8) {
+    return 1;
+  }
+  int32_t denominator = 6;
+  if (layout == 1 && bit_depth == 10) {
+    denominator = 20;
+  } else if (layout == 1 && bit_depth == 16) {
+    denominator = 12;
+  } else if (layout == 2 && bit_depth == 10) {
+    denominator = 10;
+  }
+  const int32_t scale = int32_t{1} << (bit_depth - 8);
+  return 1 + ((100 - quality) * scale + denominator - 1) / denominator;
+}
+
 void put_u16(std::vector<uint8_t>& output, uint16_t value) {
   output.push_back(static_cast<uint8_t>(value));
   output.push_back(static_cast<uint8_t>(value >> 8));
@@ -737,8 +753,7 @@ torch::Tensor fastvid_encode_v5_cuda(
   auto rans_scratch = torch::empty({total_shards, 10240}, source.options().dtype(torch::kUInt8));
   auto rans_states = torch::empty({total_shards, 4}, source.options().dtype(torch::kUInt32));
   auto status = torch::zeros({1}, source.options().dtype(torch::kInt32));
-  const int32_t scale = int32_t{1} << (bit_depth - 8);
-  const int32_t step = 1 + ((100 - quality) * scale + 5) / 6;
+  const int32_t step = quantization_step_v7(layout, bit_depth, quality);
   const int32_t max_sample = (int32_t{1} << bit_depth) - 1;
   const auto stream = at::cuda::getCurrentCUDAStream(device.index());
 
@@ -795,7 +810,7 @@ torch::Tensor fastvid_encode_v5_cuda(
   std::vector<uint8_t> prefix;
   prefix.reserve(payload_start);
   prefix.insert(prefix.end(), {'F', 'V', 'I', 'D'});
-  prefix.push_back(6);
+  prefix.push_back(7);
   prefix.push_back(static_cast<uint8_t>(layout));
   prefix.push_back(static_cast<uint8_t>(quality));
   prefix.push_back(static_cast<uint8_t>(bit_depth - 8));
