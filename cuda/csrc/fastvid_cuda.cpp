@@ -20,7 +20,9 @@ std::vector<torch::Tensor> fastvid_decode_cuda(
     int64_t chroma_samples,
     int64_t width,
     int64_t height,
-    int64_t step,
+    int64_t base_step,
+    int64_t fine_step,
+    int64_t coarse_step,
     int64_t max_sample,
     bool grayscale,
     bool wavefront);
@@ -220,7 +222,10 @@ std::vector<torch::Tensor> decode(torch::Tensor encoded, bool wavefront) {
     }
     auto shard_meta_cuda = torch::empty(
         {geometry.total_shards, 5}, device_encoded.options().dtype(torch::kInt64));
-    const int64_t step = quantization_step(layout, bit_depth, quality);
+    const int64_t base_step = quantization_step(layout, bit_depth, quality);
+    const int64_t scale = int64_t{1} << (bit_depth - 8);
+    const int64_t fine_step = 1 + ((100 - quality) * scale + 11) / 12;
+    const int64_t coarse_step = 1 + ((100 - quality) * scale + 4) / 5;
     const int64_t max_sample = (int64_t{1} << bit_depth) - 1;
     return fastvid_decode_cuda(
         device_encoded,
@@ -233,7 +238,9 @@ std::vector<torch::Tensor> decode(torch::Tensor encoded, bool wavefront) {
         geometry.secondary_samples,
         width,
         height,
-        step,
+        base_step,
+        fine_step,
+        coarse_step,
         max_sample,
         grayscale,
         wavefront);
@@ -249,7 +256,7 @@ std::vector<torch::Tensor> decode(torch::Tensor encoded, bool wavefront) {
                 "tile requires bounded-shard entropy");
     TORCH_CHECK(bytes[start + 2] == kPredictFullTileClampGradient,
                 "tile requires full-tile clamp-gradient prediction");
-    TORCH_CHECK(bytes[start + 3] == 0, "nonzero reserved directory byte");
+    TORCH_CHECK(bytes[start + 3] <= 3, "invalid tile quantizer class");
     TORCH_CHECK(read_u32(bytes, size, start + 4) == tiles[i].x &&
                     read_u32(bytes, size, start + 8) == tiles[i].y &&
                     read_u32(bytes, size, start + 12) == tiles[i].width &&
@@ -322,7 +329,10 @@ std::vector<torch::Tensor> decode(torch::Tensor encoded, bool wavefront) {
   auto device_encoded = encoded.is_cuda() ? encoded.contiguous() : encoded.to(torch::kCUDA);
   auto shard_meta_cuda = shard_meta_cpu.to(device_encoded.device());
   auto tile_meta_cuda = tile_meta_cpu.to(device_encoded.device());
-  const int64_t step = quantization_step(layout, bit_depth, quality);
+  const int64_t base_step = quantization_step(layout, bit_depth, quality);
+  const int64_t scale = int64_t{1} << (bit_depth - 8);
+  const int64_t fine_step = 1 + ((100 - quality) * scale + 11) / 12;
+  const int64_t coarse_step = 1 + ((100 - quality) * scale + 4) / 5;
   const int64_t max_sample = (int64_t{1} << bit_depth) - 1;
   return fastvid_decode_cuda(
       device_encoded,
@@ -335,7 +345,9 @@ std::vector<torch::Tensor> decode(torch::Tensor encoded, bool wavefront) {
       secondary_samples,
       width,
       height,
-      step,
+      base_step,
+      fine_step,
+      coarse_step,
       max_sample,
       grayscale,
       wavefront);
