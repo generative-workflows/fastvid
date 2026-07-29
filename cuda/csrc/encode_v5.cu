@@ -20,6 +20,10 @@ constexpr uint8_t kEntropyZeroRun = 0;
 constexpr uint8_t kEntropyRiceBase = 1;
 constexpr uint8_t kEntropyBlockPack = 18;
 constexpr uint8_t kEntropyParallelShards = 19;
+constexpr uint8_t kEntropyOrder0 = 19;
+constexpr int kRansAlphabet = 511;
+constexpr int kRansTableLog = 12;
+constexpr uint32_t kRansByteL = 1u << 23;
 constexpr uint8_t kPredictFullTileClampGradient = 6;
 
 struct Tile {
@@ -87,6 +91,8 @@ __device__ int varint_length(uint32_t value) {
       : value < (1u << 28) ? 4
       : 5;
 }
+
+__device__ int write_varint(uint8_t* output, uint32_t value);
 
 __device__ uint32_t zigzag(int32_t value) {
   return value >= 0
@@ -157,11 +163,13 @@ __global__ void analyze_shards_kernel(
     const int64_t* shard_metadata,
     int64_t shard_count,
     int64_t* analysis,
-    int32_t* status) {
+    int32_t* status,
+    bool skip_order0) {
   const int64_t shard = blockIdx.x;
   if (shard >= shard_count) {
     return;
   }
+  if (skip_order0 && analysis[shard * 8 + 0] == kEntropyOrder0) return;
   const int64_t base = shard_metadata[shard * 3 + 0];
   const int count = static_cast<int>(shard_metadata[shard * 3 + 1]);
   const int lane_count = min(4, count);
@@ -274,6 +282,120 @@ __global__ void analyze_shards_kernel(
   }
 }
 
+__global__ void analyze_order0_shards_kernel(
+    const uint32_t* folded,
+    const int64_t* shard_metadata,
+    int64_t shard_count,
+    int64_t* analysis,
+    uint8_t* rans_scratch,
+    uint32_t* rans_states,
+    bool force_order0) {
+  const int64_t shard = blockIdx.x;
+  if (shard >= shard_count) return;
+  const int64_t base = shard_metadata[shard * 3 + 0];
+  const int count = static_cast<int>(shard_metadata[shard * 3 + 1]);
+  __shared__ uint32_t histogram[kRansAlphabet];
+  __shared__ uint16_t frequency[kRansAlphabet];
+  __shared__ uint16_t cumulative[kRansAlphabet];
+  __shared__ int supported;
+  __shared__ int table_bytes;
+  __shared__ int lane_bytes[4];
+  for (int value = threadIdx.x; value < kRansAlphabet; value += blockDim.x) {
+    histogram[value] = 0;
+    frequency[value] = 0;
+    cumulative[value] = 0;
+  }
+  if (threadIdx.x == 0) supported = 1;
+  __syncthreads();
+  for (int index = threadIdx.x; index < count; index += blockDim.x) {
+    const uint32_t value = folded[base + index];
+    if (value >= kRansAlphabet) {
+      atomicExch(&supported, 0);
+    } else {
+      atomicAdd(&histogram[value], 1u);
+    }
+  }
+  __syncthreads();
+  if (!supported) {
+    if (threadIdx.x == 0 && force_order0) analysis[shard * 8 + 0] = -1;
+    return;
+  }
+  if (threadIdx.x == 0) {
+    int distinct = 0;
+    for (int value = 0; value < kRansAlphabet; ++value) distinct += histogram[value] != 0;
+    if (distinct > 255) supported = 0;
+    int cursor = 0;
+    uint8_t* table_output = rans_scratch + shard * 10240;
+    table_output[cursor++] = kRansTableLog;
+    cursor += write_varint(table_output + cursor, distinct);
+    int bytes = 1 + varint_length(distinct) + 12 + 16;
+    uint32_t assigned = 0;
+    uint32_t prefix = 0;
+    int remaining_symbols = distinct;
+    int previous = 0;
+    for (int value = 0; value < kRansAlphabet; ++value) {
+      if (histogram[value] == 0) continue;
+      --remaining_symbols;
+      prefix += histogram[value];
+      uint32_t end;
+      if (remaining_symbols == 0) {
+        end = 1u << kRansTableLog;
+      } else {
+        end = static_cast<uint32_t>((static_cast<uint64_t>(prefix) << kRansTableLog) / count);
+        end = max(end, assigned + 1);
+        end = min(end, (1u << kRansTableLog) - static_cast<uint32_t>(remaining_symbols));
+      }
+      frequency[value] = static_cast<uint16_t>(end - assigned);
+      cumulative[value] = static_cast<uint16_t>(assigned);
+      bytes += varint_length(static_cast<uint32_t>(value - previous));
+      cursor += write_varint(table_output + cursor, static_cast<uint32_t>(value - previous));
+      if (remaining_symbols != 0) bytes += varint_length(end - assigned);
+      if (remaining_symbols != 0) cursor += write_varint(table_output + cursor, end - assigned);
+      assigned = end;
+      previous = value;
+    }
+    table_bytes = bytes;
+  }
+  __syncthreads();
+  if (!supported) {
+    if (threadIdx.x == 0 && force_order0) analysis[shard * 8 + 0] = -1;
+    return;
+  }
+  if (threadIdx.x < 4) {
+    const int lane = threadIdx.x;
+    uint32_t state = kRansByteL;
+    int bytes = 0;
+    int index = count - 1 - ((count - 1 - lane) & 3);
+    for (; index >= 0; index -= 4) {
+      const uint32_t value = folded[base + index];
+      const uint32_t freq = frequency[value];
+      const uint64_t threshold =
+          (static_cast<uint64_t>(kRansByteL >> kRansTableLog) << 8) * freq;
+      while (state >= threshold) {
+        rans_scratch[shard * 10240 + 2048 + lane * 2048 + bytes] =
+            static_cast<uint8_t>(state);
+        ++bytes;
+        state >>= 8;
+      }
+      state = ((state / freq) << kRansTableLog) + state % freq + cumulative[value];
+    }
+    lane_bytes[lane] = bytes;
+    rans_states[shard * 4 + lane] = state;
+  }
+  __syncthreads();
+  if (threadIdx.x == 0) {
+    const int64_t body_bytes = table_bytes + lane_bytes[0] + lane_bytes[1] +
+        lane_bytes[2] + lane_bytes[3];
+    if (force_order0 || body_bytes < analysis[shard * 8 + 2]) {
+      analysis[shard * 8 + 0] = kEntropyOrder0;
+      analysis[shard * 8 + 1] = kRansTableLog;
+      analysis[shard * 8 + 2] = body_bytes;
+      analysis[shard * 8 + 3] = body_bytes + 3;
+      for (int lane = 0; lane < 4; ++lane) analysis[shard * 8 + 4 + lane] = lane_bytes[lane];
+    }
+  }
+}
+
 __device__ void write_u16(uint8_t* output, uint16_t value) {
   output[0] = static_cast<uint8_t>(value);
   output[1] = static_cast<uint8_t>(value >> 8);
@@ -335,6 +457,8 @@ __global__ void emit_shards_kernel(
     const int64_t* analysis,
     const int64_t* output_offsets,
     int64_t shard_count,
+    const uint8_t* rans_scratch,
+    const uint32_t* rans_states,
     uint8_t* output) {
   const int64_t shard = blockIdx.x;
   if (shard >= shard_count) {
@@ -426,7 +550,31 @@ __global__ void emit_shards_kernel(
     return;
   }
 
-  return;
+  if (mode == kEntropyOrder0) {
+    const int lane0 = static_cast<int>(analysis[shard * 8 + 4]);
+    const int lane1 = static_cast<int>(analysis[shard * 8 + 5]);
+    const int lane2 = static_cast<int>(analysis[shard * 8 + 6]);
+    const int lane3 = static_cast<int>(analysis[shard * 8 + 7]);
+    const int sparse_bytes = body_bytes - lane0 - lane1 - lane2 - lane3 - 28;
+    for (int index = threadIdx.x; index < sparse_bytes; index += blockDim.x) {
+      body[index] = rans_scratch[shard * 10240 + index];
+    }
+    if (threadIdx.x < 3) {
+      write_u32(body + sparse_bytes + threadIdx.x * 4,
+          static_cast<uint32_t>(analysis[shard * 8 + 4 + threadIdx.x]));
+    }
+    if (threadIdx.x < 4) {
+      const int lane = threadIdx.x;
+      write_u32(body + sparse_bytes + 12 + lane * 4, rans_states[shard * 4 + lane]);
+      int start = sparse_bytes + 28;
+      for (int prior = 0; prior < lane; ++prior) {
+        start += static_cast<int>(analysis[shard * 8 + 4 + prior]);
+      }
+      const int length = static_cast<int>(analysis[shard * 8 + 4 + lane]);
+      const uint8_t* source = rans_scratch + shard * 10240 + 2048 + lane * 2048;
+      for (int index = 0; index < length; ++index) body[start + index] = source[length - 1 - index];
+    }
+  }
 }
 
 __global__ void emit_block_shards_kernel(
@@ -586,6 +734,8 @@ torch::Tensor fastvid_encode_v5_cuda(
   auto folded = torch::empty({total_samples}, source.options().dtype(torch::kUInt32));
   auto reconstructed = torch::zeros({total_samples}, source.options().dtype(torch::kUInt16));
   auto analysis = torch::empty({total_shards, 8}, source.options().dtype(torch::kInt64));
+  auto rans_scratch = torch::empty({total_shards, 10240}, source.options().dtype(torch::kUInt8));
+  auto rans_states = torch::empty({total_shards, 4}, source.options().dtype(torch::kUInt32));
   auto status = torch::zeros({1}, source.options().dtype(torch::kInt32));
   const int32_t base_step = 1 + (100 - quality) / 5;
   const int32_t step = 1 + ((base_step - 1) << (bit_depth - 8));
@@ -597,11 +747,24 @@ torch::Tensor fastvid_encode_v5_cuda(
       step, max_sample, reconstructed.data_ptr<uint16_t>(), folded.data_ptr<uint32_t>(),
       status.data_ptr<int32_t>());
   C10_CUDA_KERNEL_LAUNCH_CHECK();
-  analyze_shards_kernel<<<total_shards, 128, 0, stream>>>(
+  const bool force_order0 = layout == 2;
+  if (!force_order0) {
+    analyze_shards_kernel<<<total_shards, 128, 0, stream>>>(
+        folded.data_ptr<uint32_t>(), shard_meta.data_ptr<int64_t>(), total_shards,
+        analysis.data_ptr<int64_t>(), status.data_ptr<int32_t>(), force_order0);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+  }
+  analyze_order0_shards_kernel<<<total_shards, 128, 0, stream>>>(
       folded.data_ptr<uint32_t>(), shard_meta.data_ptr<int64_t>(), total_shards,
-      analysis.data_ptr<int64_t>(), status.data_ptr<int32_t>());
+      analysis.data_ptr<int64_t>(), rans_scratch.data_ptr<uint8_t>(),
+      rans_states.data_ptr<uint32_t>(), force_order0);
   C10_CUDA_KERNEL_LAUNCH_CHECK();
-
+  if (force_order0) {
+    analyze_shards_kernel<<<total_shards, 128, 0, stream>>>(
+        folded.data_ptr<uint32_t>(), shard_meta.data_ptr<int64_t>(), total_shards,
+        analysis.data_ptr<int64_t>(), status.data_ptr<int32_t>(), force_order0);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+  }
   auto analysis_cpu = analysis.cpu();
   const int32_t host_status = status.cpu().item<int32_t>();
   TORCH_CHECK(host_status == 0, "CUDA v5 encoder analysis failed (status ", host_status, ")");
@@ -674,7 +837,8 @@ torch::Tensor fastvid_encode_v5_cuda(
   auto offsets = offsets_cpu.to(device);
   emit_shards_kernel<<<total_shards, 128, 0, stream>>>(
       folded.data_ptr<uint32_t>(), shard_meta.data_ptr<int64_t>(), analysis.data_ptr<int64_t>(),
-      offsets.data_ptr<int64_t>(), total_shards, output_storage.data_ptr<uint8_t>());
+      offsets.data_ptr<int64_t>(), total_shards, rans_scratch.data_ptr<uint8_t>(),
+      rans_states.data_ptr<uint32_t>(), output_storage.data_ptr<uint8_t>());
   C10_CUDA_KERNEL_LAUNCH_CHECK();
   if (!block_shards.empty()) {
     auto block_shards_cpu = torch::from_blob(

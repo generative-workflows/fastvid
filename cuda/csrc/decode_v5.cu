@@ -14,6 +14,10 @@ constexpr int64_t kHeaderBytes = 32;
 constexpr int64_t kDirectoryEntryBytes = 32;
 constexpr int64_t kShardSymbols = 4096;
 constexpr uint8_t kEntropyParallelShards = 19;
+constexpr uint8_t kEntropyOrder0 = 19;
+constexpr int kRansAlphabet = 511;
+constexpr int kRansTableLog = 12;
+constexpr uint32_t kRansByteL = 1u << 23;
 constexpr uint8_t kPredictFullTileClampGradient = 6;
 
 __device__ uint16_t read_u16(const uint8_t* bytes) {
@@ -196,7 +200,7 @@ __global__ void parse_v5_metadata_kernel(
     const int64_t mode = encoded[cursor];
     const int64_t body_length = read_u16(encoded + cursor + 1);
     const int64_t body_offset = cursor + 3;
-    if (mode > 18 || body_length > tile_end - body_offset) {
+    if (mode > 19 || body_length > tile_end - body_offset) {
       set_error(status, 11);
       return;
     }
@@ -215,17 +219,13 @@ __global__ void parse_v5_metadata_kernel(
   }
 }
 
-__global__ void decode_shards_kernel(
+__device__ void decode_legacy_shard(
     const uint8_t* encoded,
     const int64_t* metadata,
-    int64_t shard_count,
+    int64_t shard,
     uint32_t max_folded,
     uint32_t* folded,
     int32_t* status) {
-  const int64_t shard = blockIdx.x;
-  if (shard >= shard_count) {
-    return;
-  }
   const int64_t mode = metadata[shard * 5 + 0];
   const int64_t body_offset = metadata[shard * 5 + 1];
   const int64_t body_length = metadata[shard * 5 + 2];
@@ -395,13 +395,154 @@ __global__ void decode_shards_kernel(
     return;
   }
 
-  set_error(status, 4);
+  if (mode != kEntropyOrder0) set_error(status, 4);
 }
 
 __device__ int32_t unzigzag(uint32_t value) {
   return (value & 1) == 0
       ? static_cast<int32_t>(value / 2)
       : -static_cast<int32_t>(value / 2) - 1;
+}
+
+__device__ bool read_varint_order0(
+    const uint8_t* body, int64_t length, int64_t* cursor, uint32_t* value) {
+  uint32_t result = 0;
+  int shift = 0;
+  for (int used = 0; used < 5; ++used) {
+    if (*cursor >= length) return false;
+    const uint8_t byte = body[(*cursor)++];
+    if (used == 4 && byte > 0x0f) return false;
+    result |= static_cast<uint32_t>(byte & 0x7f) << shift;
+    if ((byte & 0x80) == 0) {
+      const int canonical = result < (1u << 7) ? 1 : result < (1u << 14) ? 2 :
+          result < (1u << 21) ? 3 : result < (1u << 28) ? 4 : 5;
+      if (canonical != used + 1) return false;
+      *value = result;
+      return true;
+    }
+    shift += 7;
+  }
+  return false;
+}
+
+__global__ void decode_order0_shards_kernel(
+    const uint8_t* encoded,
+    const int64_t* metadata,
+    int64_t shard_count,
+    uint32_t max_folded,
+    uint32_t* folded,
+    int32_t* status) {
+  const int64_t shard = blockIdx.x;
+  if (shard >= shard_count) return;
+  if (metadata[shard * 5 + 0] != kEntropyOrder0) {
+    decode_legacy_shard(encoded, metadata, shard, max_folded, folded, status);
+    return;
+  }
+  const int64_t body_offset = metadata[shard * 5 + 1];
+  const int64_t body_length = metadata[shard * 5 + 2];
+  const int64_t sample_count = metadata[shard * 5 + 3];
+  const int64_t output_offset = metadata[shard * 5 + 4];
+  const uint8_t* body = encoded + body_offset;
+  uint32_t* output = folded + output_offset;
+  __shared__ uint16_t values[kRansAlphabet];
+  __shared__ uint16_t frequency[kRansAlphabet];
+  __shared__ uint16_t cumulative[kRansAlphabet];
+  __shared__ uint8_t table[1 << kRansTableLog];
+  __shared__ uint32_t states[4];
+  __shared__ int lane_start[4];
+  __shared__ int lane_length[4];
+  __shared__ int symbol_count;
+  __shared__ int valid;
+  if (threadIdx.x == 0) {
+    valid = 1;
+    int64_t cursor = 0;
+    if (body_length < 1 || body[cursor++] != kRansTableLog) valid = 0;
+    uint32_t n = 0;
+    if (valid && !read_varint_order0(body, body_length, &cursor, &n)) valid = 0;
+    if (n == 0 || n > 255) valid = 0;
+    symbol_count = static_cast<int>(n);
+    uint32_t previous = 0;
+    uint32_t assigned = 0;
+    for (uint32_t i = 0; valid && i < n; ++i) {
+      uint32_t delta = 0;
+      if (!read_varint_order0(body, body_length, &cursor, &delta) || (i != 0 && delta == 0) ||
+          previous + delta > max_folded) {
+        valid = 0;
+        break;
+      }
+      const uint32_t value = previous + delta;
+      uint32_t freq = (1u << kRansTableLog) - assigned;
+      if (i + 1 != n && !read_varint_order0(body, body_length, &cursor, &freq)) {
+        valid = 0;
+        break;
+      }
+      if (freq == 0 || assigned + freq > (1u << kRansTableLog) ||
+          (i + 1 != n && assigned + freq == (1u << kRansTableLog))) {
+        valid = 0;
+        break;
+      }
+      values[i] = static_cast<uint16_t>(value);
+      frequency[i] = static_cast<uint16_t>(freq);
+      cumulative[i] = static_cast<uint16_t>(assigned);
+      assigned += freq;
+      previous = value;
+    }
+    if (assigned != (1u << kRansTableLog)) valid = 0;
+    int total_payload = 0;
+    for (int lane = 0; valid && lane < 3; ++lane) {
+      if (cursor + 4 > body_length) {
+        valid = 0;
+      } else {
+        lane_length[lane] = static_cast<int>(read_u32(body + cursor));
+        total_payload += lane_length[lane];
+        cursor += 4;
+      }
+    }
+    if (valid && cursor + 16 > body_length) valid = 0;
+    for (int lane = 0; valid && lane < 4; ++lane) {
+      states[lane] = read_u32(body + cursor + lane * 4);
+      if (states[lane] < kRansByteL) valid = 0;
+    }
+    cursor += valid ? 16 : 0;
+    if (valid) {
+      lane_length[3] = static_cast<int>(body_length - cursor - total_payload);
+      if (lane_length[3] < 0) valid = 0;
+      for (int lane = 0; lane < 4; ++lane) {
+        lane_start[lane] = static_cast<int>(cursor);
+        cursor += lane_length[lane];
+      }
+      if (cursor != body_length) valid = 0;
+    }
+    if (!valid) set_error(status, 5);
+  }
+  __syncthreads();
+  if (!valid) return;
+  for (int symbol = threadIdx.x; symbol < symbol_count; symbol += blockDim.x) {
+    const int begin = cumulative[symbol];
+    const int end = begin + frequency[symbol];
+    for (int slot = begin; slot < end; ++slot) table[slot] = static_cast<uint8_t>(symbol);
+  }
+  __syncthreads();
+  if (threadIdx.x < 4) {
+    const int lane = threadIdx.x;
+    uint32_t state = states[lane];
+    int cursor = 0;
+    for (int64_t index = lane; index < sample_count; index += 4) {
+      const uint32_t slot = state & ((1u << kRansTableLog) - 1);
+      const uint16_t symbol = table[slot];
+      output[index] = values[symbol];
+      state = static_cast<uint32_t>(frequency[symbol]) * (state >> kRansTableLog) +
+          slot - cumulative[symbol];
+      while (state < kRansByteL) {
+        if (cursor >= lane_length[lane]) {
+          set_error(status, 5);
+          return;
+        }
+        state = (state << 8) | body[lane_start[lane] + cursor++];
+      }
+    }
+    if (cursor != lane_length[lane] || state != kRansByteL) set_error(status, 5);
+  }
 }
 
 __global__ void reconstruct_tiles_kernel(
@@ -515,12 +656,9 @@ std::vector<torch::Tensor> fastvid_decode_v5_cuda(
     C10_CUDA_KERNEL_LAUNCH_CHECK();
   }
 
-  decode_shards_kernel<<<shard_meta.size(0), 32, 0, stream>>>(
-      encoded.data_ptr<uint8_t>(),
-      shard_meta.data_ptr<int64_t>(),
-      shard_meta.size(0),
-      static_cast<uint32_t>(max_sample * 2),
-      folded.data_ptr<uint32_t>(),
+  decode_order0_shards_kernel<<<shard_meta.size(0), 128, 0, stream>>>(
+      encoded.data_ptr<uint8_t>(), shard_meta.data_ptr<int64_t>(), shard_meta.size(0),
+      static_cast<uint32_t>(max_sample * 2), folded.data_ptr<uint32_t>(),
       status.data_ptr<int32_t>());
   C10_CUDA_KERNEL_LAUNCH_CHECK();
   if (wavefront) {

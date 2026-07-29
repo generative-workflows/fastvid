@@ -285,7 +285,7 @@ std::vector<torch::Tensor> decode_v5(torch::Tensor encoded, bool wavefront) {
       const int64_t mode = bytes[cursor];
       const int64_t body_length = read_u16(bytes, size, cursor + 1);
       const int64_t body_offset = cursor + 3;
-      TORCH_CHECK(mode <= 18, "unknown entropy shard mode");
+      TORCH_CHECK(mode <= 19, "unknown entropy shard mode");
       TORCH_CHECK(body_length <= tile_end - body_offset, "truncated entropy shard body");
       const int64_t sample_count = std::min(kShardSymbols, tile.width * tile.height - decoded);
       shard_meta[shard_index * 5 + 0] = mode;
