@@ -69,16 +69,18 @@ std::vector<Tile> expected_tiles(
 }
 
 int32_t quantization_step(int64_t layout, int64_t bit_depth, int64_t quality) {
-  if (layout == 0 && bit_depth == 8) {
+  if (bit_depth == 8) {
     return 1;
   }
-  int32_t denominator = 6;
-  if (layout == 1 && bit_depth == 10) {
-    denominator = 20;
+  int32_t denominator = 12;
+  if (layout == 0 && bit_depth == 10) {
+    denominator = 24;
+  } else if (layout == 1 && bit_depth == 10) {
+    denominator = 40;
   } else if (layout == 1 && bit_depth == 16) {
-    denominator = 12;
+    denominator = 24;
   } else if (layout == 2 && bit_depth == 10) {
-    denominator = 10;
+    denominator = 20;
   }
   const int32_t scale = int32_t{1} << (bit_depth - 8);
   return 1 + ((100 - quality) * scale + denominator - 1) / denominator;
