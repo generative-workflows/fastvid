@@ -11,6 +11,19 @@ The canonical corpus has two reproducible source paths:
 All heavy files live under the gitignored `corpus/sources/` directory.
 Normalized evaluator inputs live under the gitignored `artifacts/` directory.
 
+The standard normalized-corpus path is `artifacts/corpus-v1/`. Keep manifests
+and evaluator commands relative to that in-tree path so a normal checkout uses
+local disk without configuration. On a machine with limited disk and a
+sufficiently large tmpfs, the ignored directory may instead be a local symlink:
+
+```sh
+mkdir -p /dev/shm/fastvid/corpus-v1 artifacts
+ln -s /dev/shm/fastvid/corpus-v1 artifacts/corpus-v1
+```
+
+The tmpfs contents are ephemeral and must be rebuilt after a reboot. Do not
+commit the machine-specific symlink.
+
 ## Frozen AI sources
 
 The AI images must never be regenerated during corpus setup. Their full prompts
