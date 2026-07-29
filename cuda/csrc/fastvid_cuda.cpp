@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <map>
+#include <mutex>
 #include <tuple>
 #include <vector>
 
@@ -71,6 +73,19 @@ struct Tile {
   int64_t payload_offset;
   int64_t payload_length;
 };
+
+struct DecodeGeometry {
+  torch::Tensor tile_meta;
+  torch::Tensor tile_parse_meta;
+  int64_t total_samples;
+  int64_t total_shards;
+  int64_t y_samples;
+  int64_t secondary_samples;
+};
+
+using GeometryKey = std::tuple<int64_t, int64_t, int64_t, int64_t, int64_t, int64_t>;
+std::mutex geometry_cache_mutex;
+std::map<GeometryKey, DecodeGeometry> geometry_cache;
 
 std::vector<Tile> expected_tiles(
     int64_t width,
@@ -140,50 +155,66 @@ std::vector<torch::Tensor> decode_v5(torch::Tensor encoded, bool wavefront) {
   TORCH_CHECK(directory_end <= size, "truncated tile directory");
 
   if (encoded.is_cuda()) {
-    auto long_cpu = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCPU);
-    auto tile_meta_cpu = torch::empty({tile_count, 7}, long_cpu);
-    auto tile_parse_meta_cpu = torch::empty({tile_count, 2}, long_cpu);
-    auto* tile_meta = tile_meta_cpu.data_ptr<int64_t>();
-    auto* tile_parse_meta = tile_parse_meta_cpu.data_ptr<int64_t>();
-    const int64_t y_samples = width * height;
-    const int64_t secondary_width = layout == 1 ? (width + 1) / 2 : width;
-    const int64_t secondary_samples = secondary_width * height;
-    const int64_t plane_bases[3] = {0, y_samples, y_samples + secondary_samples};
-    const int64_t plane_widths[3] = {width, secondary_width, secondary_width};
-    int64_t total_samples = 0;
-    int64_t total_shards = 0;
-    for (int64_t i = 0; i < tile_count; ++i) {
-      const auto& tile = tiles[i];
-      tile_meta[i * 7 + 0] = plane_bases[tile.plane];
-      tile_meta[i * 7 + 1] = plane_widths[tile.plane];
-      tile_meta[i * 7 + 2] = tile.x;
-      tile_meta[i * 7 + 3] = tile.y;
-      tile_meta[i * 7 + 4] = tile.width;
-      tile_meta[i * 7 + 5] = tile.height;
-      tile_meta[i * 7 + 6] = total_samples;
-      tile_parse_meta[i * 2 + 0] = total_shards;
-      tile_parse_meta[i * 2 + 1] = tile.plane;
-      const int64_t samples = tile.width * tile.height;
-      total_samples += samples;
-      total_shards += (samples + kShardSymbols - 1) / kShardSymbols;
-    }
     auto device_encoded = encoded.contiguous();
-    auto tile_meta_cuda = tile_meta_cpu.to(device_encoded.device());
-    auto tile_parse_meta_cuda = tile_parse_meta_cpu.to(device_encoded.device());
-    auto shard_meta_cuda = torch::zeros(
-        {total_shards, 5}, device_encoded.options().dtype(torch::kInt64));
+    const GeometryKey key{
+        device_encoded.get_device(), layout, width, height, tile_width, tile_height};
+    DecodeGeometry geometry;
+    {
+      std::lock_guard<std::mutex> lock(geometry_cache_mutex);
+      auto found = geometry_cache.find(key);
+      if (found == geometry_cache.end()) {
+        auto long_cpu = torch::TensorOptions().dtype(torch::kInt64).device(torch::kCPU);
+        auto tile_meta_cpu = torch::empty({tile_count, 7}, long_cpu);
+        auto tile_parse_meta_cpu = torch::empty({tile_count, 2}, long_cpu);
+        auto* tile_meta = tile_meta_cpu.data_ptr<int64_t>();
+        auto* tile_parse_meta = tile_parse_meta_cpu.data_ptr<int64_t>();
+        const int64_t y_samples = width * height;
+        const int64_t secondary_width = layout == 1 ? (width + 1) / 2 : width;
+        const int64_t secondary_samples = secondary_width * height;
+        const int64_t plane_bases[3] = {0, y_samples, y_samples + secondary_samples};
+        const int64_t plane_widths[3] = {width, secondary_width, secondary_width};
+        int64_t total_samples = 0;
+        int64_t total_shards = 0;
+        for (int64_t i = 0; i < tile_count; ++i) {
+          const auto& tile = tiles[i];
+          tile_meta[i * 7 + 0] = plane_bases[tile.plane];
+          tile_meta[i * 7 + 1] = plane_widths[tile.plane];
+          tile_meta[i * 7 + 2] = tile.x;
+          tile_meta[i * 7 + 3] = tile.y;
+          tile_meta[i * 7 + 4] = tile.width;
+          tile_meta[i * 7 + 5] = tile.height;
+          tile_meta[i * 7 + 6] = total_samples;
+          tile_parse_meta[i * 2 + 0] = total_shards;
+          tile_parse_meta[i * 2 + 1] = tile.plane;
+          const int64_t samples = tile.width * tile.height;
+          total_samples += samples;
+          total_shards += (samples + kShardSymbols - 1) / kShardSymbols;
+        }
+        DecodeGeometry created{
+            tile_meta_cpu.to(device_encoded.device()),
+            tile_parse_meta_cpu.to(device_encoded.device()),
+            total_samples,
+            total_shards,
+            y_samples,
+            secondary_samples};
+        found = geometry_cache.emplace(key, std::move(created)).first;
+      }
+      geometry = found->second;
+    }
+    auto shard_meta_cuda = torch::empty(
+        {geometry.total_shards, 5}, device_encoded.options().dtype(torch::kInt64));
     const int64_t base = 1 + (100 - quality) / 5;
     const int64_t step = 1 + ((base - 1) << (bit_depth - 8));
     const int64_t max_sample = (int64_t{1} << bit_depth) - 1;
     return fastvid_decode_v5_cuda(
         device_encoded,
         shard_meta_cuda,
-        tile_meta_cuda,
-        tile_parse_meta_cuda,
+        geometry.tile_meta,
+        geometry.tile_parse_meta,
         true,
-        total_samples,
-        y_samples,
-        secondary_samples,
+        geometry.total_samples,
+        geometry.y_samples,
+        geometry.secondary_samples,
         width,
         height,
         step,

@@ -56,37 +56,69 @@ __device__ bool read_bits(
   return true;
 }
 
-__device__ bool read_rice(
-    const uint8_t* bytes,
-    int64_t byte_count,
-    int64_t* bit_position,
-    int parameter,
-    uint32_t max_folded,
-    uint32_t* value) {
-  uint32_t quotient = 0;
-  while (true) {
-    uint32_t bit = 0;
-    if (!read_bits(bytes, byte_count, bit_position, 1, &bit)) {
-      return false;
+struct RiceBitReader {
+  const uint8_t* bytes;
+  int64_t byte_count;
+  int64_t byte_position = 0;
+  int64_t bit_position = 0;
+  uint64_t buffer = 0;
+  int buffered_bits = 0;
+
+  __device__ void refill() {
+    while (buffered_bits <= 56 && byte_position < byte_count) {
+      buffer |= static_cast<uint64_t>(bytes[byte_position++]) << buffered_bits;
+      buffered_bits += 8;
     }
-    if (bit != 0) {
+  }
+
+  __device__ bool read_rice(int parameter, uint32_t max_folded, uint32_t* value) {
+    uint32_t quotient = 0;
+    while (true) {
+      if (buffered_bits == 0) {
+        refill();
+        if (buffered_bits == 0) {
+          return false;
+        }
+      }
+      if (buffer == 0) {
+        quotient += buffered_bits;
+        bit_position += buffered_bits;
+        buffered_bits = 0;
+        if (quotient > max_folded) {
+          return false;
+        }
+        continue;
+      }
+      const int zeros = __ffsll(static_cast<long long>(buffer)) - 1;
+      quotient += zeros;
+      const int consumed = zeros + 1;
+      buffer = consumed == 64 ? 0 : buffer >> consumed;
+      buffered_bits -= consumed;
+      bit_position += consumed;
+      if (quotient > max_folded) {
+        return false;
+      }
       break;
     }
-    if (++quotient > max_folded) {
+    if (buffered_bits < parameter) {
+      refill();
+    }
+    if (buffered_bits < parameter) {
       return false;
     }
+    const uint32_t mask = parameter == 0 ? 0 : (uint32_t{1} << parameter) - 1;
+    const uint32_t remainder = static_cast<uint32_t>(buffer) & mask;
+    buffer >>= parameter;
+    buffered_bits -= parameter;
+    bit_position += parameter;
+    const uint64_t result = (static_cast<uint64_t>(quotient) << parameter) + remainder;
+    if (result > max_folded) {
+      return false;
+    }
+    *value = static_cast<uint32_t>(result);
+    return true;
   }
-  uint32_t remainder = 0;
-  if (!read_bits(bytes, byte_count, bit_position, parameter, &remainder)) {
-    return false;
-  }
-  const uint64_t result = (static_cast<uint64_t>(quotient) << parameter) + remainder;
-  if (result > max_folded) {
-    return false;
-  }
-  *value = static_cast<uint32_t>(result);
-  return true;
-}
+};
 
 __device__ void set_error(int32_t* status, int32_t code) {
   atomicCAS(status, 0, code);
@@ -284,23 +316,22 @@ __global__ void decode_shards_kernel(
       set_error(status, 2);
       return;
     }
-    int64_t bit_position = 0;
+    RiceBitReader reader{body + lane_offset, lane_length};
     for (int64_t index = lane; index < sample_count; index += lane_count) {
       uint32_t value = 0;
-      if (!read_rice(body + lane_offset, lane_length, &bit_position,
-                     static_cast<int>(mode - 1), max_folded, &value)) {
+      if (!reader.read_rice(static_cast<int>(mode - 1), max_folded, &value)) {
         set_error(status, 2);
         return;
       }
       output[index] = value;
     }
-    const int64_t used_bytes = (bit_position + 7) / 8;
+    const int64_t used_bytes = (reader.bit_position + 7) / 8;
     if (used_bytes != lane_length) {
       set_error(status, 2);
       return;
     }
-    if ((bit_position & 7) != 0) {
-      const uint8_t mask = static_cast<uint8_t>(~((1u << (bit_position & 7)) - 1));
+    if ((reader.bit_position & 7) != 0) {
+      const uint8_t mask = static_cast<uint8_t>(~((1u << (reader.bit_position & 7)) - 1));
       if ((body[lane_offset + used_bytes - 1] & mask) != 0) {
         set_error(status, 2);
       }
@@ -471,8 +502,8 @@ std::vector<torch::Tensor> fastvid_decode_v5_cuda(
     bool grayscale,
     bool wavefront) {
   c10::cuda::CUDAGuard guard(encoded.device());
-  auto folded = torch::zeros({total_samples}, encoded.options().dtype(torch::kUInt32));
-  auto output = torch::zeros({total_samples}, encoded.options().dtype(torch::kUInt16));
+  auto folded = torch::empty({total_samples}, encoded.options().dtype(torch::kUInt32));
+  auto output = torch::empty({total_samples}, encoded.options().dtype(torch::kUInt16));
   auto status = torch::zeros({1}, encoded.options().dtype(torch::kInt32));
   const auto stream = at::cuda::getCurrentCUDAStream(encoded.device().index());
 
