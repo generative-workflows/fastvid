@@ -130,7 +130,15 @@ def load_manifest(path: Path, tier: str) -> tuple[str, list[Sample]]:
     if not samples:
         raise ValueError(f"manifest contains no {tier!r} samples")
     return document["revision"], samples
-
+def samples_exceed_maximum(
+    frames: Sequence[tuple[Any, ...]], maximum: int, torch: Any,
+) -> bool:
+    """Return whether any native-depth plane exceeds the declared range."""
+    return any(
+        int(plane.to(torch.int32).max().item()) > maximum
+        for frame in frames
+        for plane in frame
+    )
 
 def load_frames(sample: Sample, torch: Any) -> list[tuple[Any, ...]]:
     payload = bytearray(sample.path.read_bytes())
@@ -150,11 +158,7 @@ def load_frames(sample: Sample, torch: Any) -> list[tuple[Any, ...]]:
     maximum = (1 << sample.bit_depth) - 1
     # PyTorch does not implement CUDA reductions for uint16. Widen only for
     # validation; codec inputs remain in their required native dtype.
-    if any(
-        int(plane.to(torch.int32).max().item()) > maximum
-        for frame in frames
-        for plane in frame
-    ):
+    if samples_exceed_maximum(frames, maximum, torch):
         raise ValueError(f"{sample.id}: samples exceed {sample.bit_depth}-bit range")
     return frames
 

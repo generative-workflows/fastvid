@@ -5,7 +5,13 @@ import subprocess
 
 import pytest
 
-from scripts.evaluate import Sample, metric_pixel_format, metric_raw, run_ffmpeg
+from scripts.evaluate import (
+    Sample,
+    metric_pixel_format,
+    metric_raw,
+    run_ffmpeg,
+    samples_exceed_maximum,
+)
 
 
 @pytest.mark.parametrize(
@@ -69,3 +75,28 @@ def test_rgb_metric_raw_reorders_api_rgb_to_ffmpeg_gbr():
     assert metric_raw((red, green, blue), sample) == (
         b"\x02\x00\x03\x00\x01\x00"
     )
+
+
+def test_sample_range_validation_is_linear_in_frame_planes():
+    class FakePlane:
+        calls = 0
+
+        def __init__(self, value):
+            self.value = value
+
+        def to(self, _dtype):
+            FakePlane.calls += 1
+            return self
+
+        def max(self):
+            return self
+
+        def item(self):
+            return self.value
+
+    class FakeTorch:
+        int32 = object()
+
+    frames = [tuple(FakePlane(value) for value in pair) for pair in ((1, 2), (3, 4), (5, 6))]
+    assert not samples_exceed_maximum(frames, 6, FakeTorch)
+    assert FakePlane.calls == 6
