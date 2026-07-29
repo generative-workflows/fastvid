@@ -12,6 +12,11 @@ MASTER_ROOT = ROOT / "corpus/sources"
 DEFAULT_OUTPUT = ROOT / "artifacts/corpus-v1"
 W4, H4, WH, HH = 3840, 2160, 1920, 1080
 MATRIX = (("yuv422",8),("yuv422",10),("yuv422",16),("rgb444",10),("rgb444",16),("gray",8),("gray",10),("gray",16))
+STRATIFIED_DEPTHS = {
+    "yuv422": (8, 10, 16),
+    "rgb444": (10, 16),
+    "gray": (8, 10, 16),
+}
 REJECTION_CASES = {
     ("ai-01", "rgb444", 10),
     ("ai-05", "rgb444", 16),
@@ -42,6 +47,32 @@ def rows():
 def dimensions(row): return (WH,HH) if row["ai"] else (W4,H4)
 def output_path(root,item_id,fmt,depth): return root/"raw"/item_id/f"{fmt}-{depth}.raw"
 def expected_bytes(fmt,w,h): return w*h*({"gray":1,"yuv422":2,"rgb444":3}[fmt])*2
+
+def stratified_cases(index):
+    """Assign one depth per format using the frozen source-catalog order."""
+    return {
+        ("yuv422", STRATIFIED_DEPTHS["yuv422"][index % 3]),
+        ("rgb444", STRATIFIED_DEPTHS["rgb444"][index % 2]),
+        ("gray", STRATIFIED_DEPTHS["gray"][(index + 1) % 3]),
+    }
+
+def extraction_case_map(source_rows):
+    """Return stratified cases plus every fixed rejection/performance input."""
+    performance_ids = {
+        row["id"]
+        for row in [item for item in source_rows if dimensions(item) == (W4, H4)][:24]
+    }
+    result = {}
+    for index, row in enumerate(source_rows):
+        cases = stratified_cases(index)
+        cases.update(
+            (fmt, depth) for item_id, fmt, depth in REJECTION_CASES
+            if item_id == row["id"]
+        )
+        if row["id"] in performance_ids:
+            cases.update((("yuv422", 10), ("rgb444", 10)))
+        result[row["id"]] = tuple(case for case in MATRIX if case in cases)
+    return result
 
 def ffmpeg_decode(path,w,h,ffmpeg,input_args=(),payload=None):
     vf=f"scale={w}:{h}:force_original_aspect_ratio=increase:flags=lanczos,crop={w}:{h},format=rgb48le"
@@ -79,20 +110,20 @@ def write_planes(path,planes):
         for plane in planes: stream.write(plane.astype("<u2",copy=False).tobytes())
     temporary.replace(path); return sha256(path)
 
-def extract_one(row,root,ffmpeg,force):
+def extract_one(row,cases,root,ffmpeg,force):
     w,h=dimensions(row); outputs={}; complete=not force
-    for fmt,depth in MATRIX:
+    for fmt,depth in cases:
         path=output_path(root,row["id"],fmt,depth); complete &= path.is_file() and path.stat().st_size==expected_bytes(fmt,w,h)
     if not complete:
         rgb=decode(row,ffmpeg); y,cb,cr=yuv422(rgb)
-        for fmt,depth in MATRIX:
+        for fmt,depth in cases:
             path=output_path(root,row["id"],fmt,depth)
             if fmt=="rgb444": planes=tuple(quantize(rgb[...,i],depth) for i in range(3))
             elif fmt=="gray": planes=(quantize(y,depth),)
             else: planes=tuple(quantize(p,depth) for p in (y,cb,cr))
             outputs[f"{fmt}-{depth}"]={"path":path,"sha256":write_planes(path,planes)}
     else:
-        for fmt,depth in MATRIX:
+        for fmt,depth in cases:
             path=output_path(root,row["id"],fmt,depth); outputs[f"{fmt}-{depth}"]={"path":path,"sha256":sha256(path)}
     return {"id":row["id"],"provider":row["provider"],"source_group":row.get("source_group"),"source_path":row["source_path"],"source_sha256":sha256(row["path"]),"width":w,"height":h,"tiers":["full"],"outputs":outputs}
 
@@ -113,15 +144,18 @@ def performance(items,root):
     return result
 
 def write_manifest(root,items,ffmpeg):
-    samples=[sample(item,fmt,depth,root) for item in items for fmt,depth in MATRIX]+performance(items,root)
+    samples=[
+        sample(item,fmt,depth,root) for item in items for fmt,depth in MATRIX
+        if f"{fmt}-{depth}" in item["outputs"]
+    ]+performance(items,root)
     version=subprocess.run([ffmpeg,"-version"],check=True,capture_output=True,text=True).stdout.splitlines()[0]
-    conversion={"schema_version":1,"source_catalog_sha256":sha256(CATALOG),"rawpy":rawpy.__version__,"numpy":np.__version__,"ffmpeg":version,"geometry":"center crop after Lanczos aspect-fill scaling","camera_raw":"16-bit linear gamma, camera white balance, no automatic brightness, sRGB primaries","other_sources":"FFmpeg decode to RGB48LE; HDR/PQ sources form an explicit high-bit SDR evaluation view","matrix":[f"{f}-{d}" for f,d in MATRIX],"storage":"little-endian planar uint16 at every depth; RGB plane order R,G,B","yuv":"full-range BT.709 integer transform; horizontal two-tap box chroma downsample","bit_depth":"round(value16 * (2^depth-1) / 65535)"}
+    conversion={"schema_version":1,"source_catalog_sha256":sha256(CATALOG),"rawpy":rawpy.__version__,"numpy":np.__version__,"ffmpeg":version,"geometry":"center crop after Lanczos aspect-fill scaling","camera_raw":"16-bit linear gamma, camera white balance, no automatic brightness, sRGB primaries","other_sources":"FFmpeg decode to RGB48LE; HDR/PQ sources form an explicit high-bit SDR evaluation view","matrix":[f"{f}-{d}" for f,d in MATRIX],"stratification":"one depth per source per format, round-robin over frozen catalog order; fixed rejection and performance cases are unioned in","storage":"little-endian planar uint16 at every depth; RGB plane order R,G,B","yuv":"full-range BT.709 integer transform; horizontal two-tap box chroma downsample","bit_depth":"round(value16 * (2^depth-1) / 65535)"}
     manifest_sources=[]
     for item in items:
         public={key:value for key,value in item.items() if key!="outputs"}
         public["outputs"]={key:{"path":str(value["path"].relative_to(root)),"sha256":value["sha256"]} for key,value in item["outputs"].items()}
         manifest_sources.append(public)
-    document={"schema_version":2,"revision":"fastvid-corpus-v1-extracted-1","conversion":conversion,"sources":manifest_sources,"samples":samples}
+    document={"schema_version":2,"revision":"fastvid-corpus-v1-extracted-2","conversion":conversion,"sources":manifest_sources,"samples":samples}
     path=root/"manifest.json"; temporary=path.with_suffix(".json.part")
     temporary.write_text(json.dumps(document,indent=2,sort_keys=True)+"\n"); temporary.replace(path); return path
 
@@ -129,11 +163,11 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__); parser.add_argument("--output",type=Path,default=DEFAULT_OUTPUT); parser.add_argument("--ffmpeg",default="ffmpeg"); parser.add_argument("--jobs",type=int,default=2); parser.add_argument("--force",action="store_true"); args=parser.parse_args()
     if args.jobs<1: parser.error("--jobs must be positive")
     if shutil.which(args.ffmpeg) is None: parser.error(f"FFmpeg not found: {args.ffmpeg}")
-    source_rows=rows(); missing=[str(x["path"]) for x in source_rows if not x["path"].is_file()]
+    source_rows=rows(); case_map=extraction_case_map(source_rows); missing=[str(x["path"]) for x in source_rows if not x["path"].is_file()]
     if missing: parser.error(f"missing {len(missing)} source masters; first: {missing[0]}")
     root=args.output.resolve(); root.mkdir(parents=True,exist_ok=True); items=[]
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        futures={pool.submit(extract_one,row,root,args.ffmpeg,args.force):row for row in source_rows}
+        futures={pool.submit(extract_one,row,case_map[row["id"]],root,args.ffmpeg,args.force):row for row in source_rows}
         for future in concurrent.futures.as_completed(futures):
             row=futures[future]; items.append(future.result()); print(f"extracted {row['id']}",file=sys.stderr,flush=True)
     order={row["id"]:i for i,row in enumerate(source_rows)}; items.sort(key=lambda x:order[x["id"]]); manifest=write_manifest(root,items,args.ffmpeg)

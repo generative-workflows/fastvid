@@ -60,7 +60,8 @@ scripts, and do not accept results from ad-hoc commands.
 The evaluator must provide, at minimum:
 
 - a fast `rejection` tier over a fixed, representative corpus subset;
-- a `full` tier over the entire corpus and complete format/depth matrix;
+- a `full` tier over the entire source corpus using frozen, balanced format/depth
+  strata that collectively cover the complete matrix;
 - machine-readable output containing configuration, corpus revision, hardware,
   software revisions, per-frame quality, encoded sizes, and timing samples;
 - a non-zero exit status when any required correctness, quality, coverage, or
@@ -73,6 +74,13 @@ The evaluator must provide, at minimum:
 The rejection tier exists only to shorten feedback. Passing it is not an
 acceptance result. A candidate may be accepted only after the unchanged
 candidate passes the full tier.
+
+The full tier assigns every canonical source exactly one depth in each of
+YUV422, RGB444, and gray, rotating depths over the frozen catalog order. This
+keeps every source and color family while balancing each required depth across
+many sources. Fixed rejection and performance cases are unioned into those
+strata. Do not restore the Cartesian product of every source and every depth
+without a separate methodology experiment.
 
 The evaluator and its thresholds are part of the experimental specification.
 Do not weaken, bypass, special-case, or silently modify them to make a codec

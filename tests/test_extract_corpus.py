@@ -1,6 +1,12 @@
 """Focused tests for deterministic corpus sample conversion."""
+from collections import Counter
+
 import numpy as np
-from scripts.extract_corpus import MATRIX, REJECTION_CASES, quantize, yuv422
+
+from scripts.extract_corpus import (
+    MATRIX, REJECTION_CASES, extraction_case_map, quantize, rows,
+    stratified_cases, yuv422,
+)
 
 
 def test_quantize_retains_uint16_container_and_range():
@@ -23,3 +29,35 @@ def test_yuv422_shapes_and_neutral_chroma():
 def test_rejection_cases_cover_matrix_once():
     assert len(REJECTION_CASES) == len(MATRIX)
     assert {(fmt, depth) for _, fmt, depth in REJECTION_CASES} == set(MATRIX)
+
+
+def test_strata_assign_every_source_once_per_format_and_balance_depths():
+    source_rows = rows()
+    assigned = [case for index in range(len(source_rows)) for case in stratified_cases(index)]
+    counts = Counter(assigned)
+    assert len(source_rows) == 120
+    assert counts == {
+        ("yuv422", 8): 40, ("yuv422", 10): 40, ("yuv422", 16): 40,
+        ("rgb444", 10): 60, ("rgb444", 16): 60,
+        ("gray", 8): 40, ("gray", 10): 40, ("gray", 16): 40,
+    }
+    for index in range(len(source_rows)):
+        assert {fmt for fmt, _ in stratified_cases(index)} == {
+            "yuv422", "rgb444", "gray",
+        }
+
+
+def test_extraction_union_retains_rejection_and_performance_cases():
+    source_rows = rows()
+    case_map = extraction_case_map(source_rows)
+    for item_id, fmt, depth in REJECTION_CASES:
+        assert (fmt, depth) in case_map[item_id]
+    performance_ids = [row["id"] for row in source_rows if not row["ai"]][:24]
+    for item_id in performance_ids:
+        assert ("yuv422", 10) in case_map[item_id]
+        assert ("rgb444", 10) in case_map[item_id]
+    counts = Counter(case for cases in case_map.values() for case in cases)
+    assert sum(counts.values()) == 394
+    assert set(counts) == set(MATRIX)
+    assert min(counts.values()) >= 40
+    assert case_map == extraction_case_map(source_rows)
