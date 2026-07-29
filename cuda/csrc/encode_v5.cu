@@ -68,11 +68,13 @@ std::vector<Tile> expected_tiles(
 }
 
 int32_t quantization_step_v7(int64_t layout, int64_t bit_depth, int64_t quality) {
-  if (layout == 0 && bit_depth == 8) {
+  if (layout == 1 && bit_depth == 8) {
     return 1;
   }
   int32_t denominator = 6;
-  if (layout == 1 && bit_depth == 10) {
+  if ((layout == 0 && bit_depth >= 10) || (layout == 2 && bit_depth == 16)) {
+    denominator = 12;
+  } else if (layout == 1 && bit_depth == 10) {
     denominator = 20;
   } else if (layout == 1 && bit_depth == 16) {
     denominator = 12;
@@ -810,7 +812,7 @@ torch::Tensor fastvid_encode_v5_cuda(
   std::vector<uint8_t> prefix;
   prefix.reserve(payload_start);
   prefix.insert(prefix.end(), {'F', 'V', 'I', 'D'});
-  prefix.push_back(7);
+  prefix.push_back(8);
   prefix.push_back(static_cast<uint8_t>(layout));
   prefix.push_back(static_cast<uint8_t>(quality));
   prefix.push_back(static_cast<uint8_t>(bit_depth - 8));
