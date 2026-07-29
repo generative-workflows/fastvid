@@ -45,16 +45,20 @@ constexpr uint8_t kEntropyParallelShards = 19;
 constexpr uint8_t kPredictFullTileClampGradient = 6;
 
 int64_t quantization_step(int64_t layout, int64_t bit_depth, int64_t quality) {
-  if (layout == 0 && bit_depth == 8) {
+  if ((layout == 0 || layout == 1) && bit_depth == 8) {
     return 1;
   }
   int64_t denominator = 6;
-  if (layout == 1 && bit_depth == 10) {
+  if (layout == 0 && bit_depth >= 10) {
+    denominator = 12;
+  } else if (layout == 1 && bit_depth == 10) {
     denominator = 20;
   } else if (layout == 1 && bit_depth == 16) {
     denominator = 12;
   } else if (layout == 2 && bit_depth == 10) {
-    denominator = 10;
+    denominator = 5;
+  } else if (layout == 2 && bit_depth == 16) {
+    denominator = 12;
   }
   const int64_t scale = int64_t{1} << (bit_depth - 8);
   return 1 + ((100 - quality) * scale + denominator - 1) / denominator;
