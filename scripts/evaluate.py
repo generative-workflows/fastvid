@@ -631,8 +631,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--ffvship-revision", required=True)
     parser.add_argument("--ffvship-build", required=True)
     parser.add_argument("--ffvship-gpu-id", type=int, default=0)
-    parser.add_argument("--ffvship-gpu-threads", type=int, default=3)
-    parser.add_argument("--ffvship-threads", type=int, default=2)
+    parser.add_argument("--ffvship-gpu-threads", type=int, default=2)
+    parser.add_argument("--ffvship-threads", type=int, default=1)
     parser.add_argument("--ffmpeg", default="ffmpeg")
     parser.add_argument("--ffprobe", default="ffprobe")
     parser.add_argument(
