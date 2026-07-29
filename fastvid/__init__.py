@@ -7,7 +7,8 @@ from collections.abc import Sequence
 
 import torch
 
-from fastvid_cuda import decode_v5, encode_v5
+from fastvid_cuda import decode as _decode
+from fastvid_cuda import encode as _encode
 
 _LAYOUT_TO_FORMAT = {0: "gray", 1: "yuv422", 2: "rgb444"}
 
@@ -31,7 +32,7 @@ def encode(
     """Encode one frame or a sequence of independent frames."""
 
     if _is_frame(frame):
-        return encode_v5(
+        return _encode(
             frame,
             layout=format,
             bit_depth=bit_depth,
@@ -41,7 +42,7 @@ def encode(
     if not isinstance(frame, Sequence):
         raise TypeError("frame must be planar tensors or a sequence of frames")
     return [
-        encode_v5(
+        _encode(
             item,
             layout=format,
             bit_depth=bit_depth,
@@ -56,10 +57,10 @@ def decode(encoded):
     """Decode one independent stream or a sequence of streams."""
 
     if isinstance(encoded, torch.Tensor):
-        return decode_v5(encoded)
+        return _decode(encoded)
     if not isinstance(encoded, Sequence):
         raise TypeError("encoded must be a byte tensor or a sequence of byte tensors")
-    return [decode_v5(stream) for stream in encoded]
+    return [_decode(stream) for stream in encoded]
 
 
 def inspect(encoded) -> dict[str, int | str]:
@@ -68,7 +69,7 @@ def inspect(encoded) -> dict[str, int | str]:
     if not isinstance(encoded, torch.Tensor) or encoded.dtype != torch.uint8 or encoded.ndim != 1:
         raise TypeError("encoded must be a one-dimensional uint8 tensor")
     header = bytes(encoded[:32].cpu().numpy())
-    if len(header) != 32 or header[:4] != b"FVID" or header[4] not in (5, 6, 7):
+    if len(header) != 32 or header[:4] != b"FVID" or header[4] != 1:
         raise ValueError("not a Fastvid supported stream")
     layout = header[5]
     if layout not in _LAYOUT_TO_FORMAT:

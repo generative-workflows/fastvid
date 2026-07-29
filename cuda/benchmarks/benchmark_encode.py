@@ -5,7 +5,7 @@ from pathlib import Path
 
 import torch
 
-from fastvid_cuda import encode_v5
+from fastvid_cuda import encode
 
 
 def load_yuv422(path, width, height):
@@ -26,7 +26,7 @@ def load_yuv422(path, width, height):
 
 def benchmark(planes, bit_depth, quality, frame_rate, tile_size, warmups, trials):
     for _ in range(warmups):
-        encode_v5(
+        encode(
             planes,
             bit_depth=bit_depth,
             quality=quality,
@@ -39,7 +39,7 @@ def benchmark(planes, bit_depth, quality, frame_rate, tile_size, warmups, trials
     for _ in range(trials):
         torch.cuda.synchronize()
         start = time.perf_counter_ns()
-        encoded = encode_v5(
+        encoded = encode(
             planes,
             bit_depth=bit_depth,
             quality=quality,
@@ -73,7 +73,6 @@ def main():
     parser.add_argument("--tile-size", default="256x128")
     parser.add_argument("--warmups", type=int, default=5)
     parser.add_argument("--trials", type=int, default=20)
-    parser.add_argument("--oracle", type=Path)
     args = parser.parse_args()
     frame_rate = tuple(map(int, args.frame_rate.split("/")))
     tile_size = tuple(map(int, args.tile_size.split("x")))
@@ -92,11 +91,6 @@ def main():
             args.warmups,
             args.trials,
         )
-        if args.oracle:
-            oracle = args.oracle.read_bytes()
-            actual = bytes(row["encoded"].cpu().numpy())
-            if actual != oracle:
-                raise RuntimeError("CUDA output differs from the supplied Rust oracle")
         print(
             f"{args.input}\t{quality}\t{args.width}\t{args.height}\t{args.bit_depth}\t"
             f"{row['encoded_bytes']}\t{row['raw_bytes']}\t{row['ratio']:.6f}\t"

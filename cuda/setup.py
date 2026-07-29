@@ -8,15 +8,14 @@ ROOT = Path(__file__).parent
 
 setup(
     name="fastvid-cuda",
-    version="0.1.0",
     packages=["fastvid_cuda"],
     ext_modules=[
         CUDAExtension(
             "fastvid_cuda._C",
             [
                 str(ROOT / "csrc" / "fastvid_cuda.cpp"),
-                str(ROOT / "csrc" / "decode_v5.cu"),
-                str(ROOT / "csrc" / "encode_v5.cu"),
+                str(ROOT / "csrc" / "decode.cu"),
+                str(ROOT / "csrc" / "encode.cu"),
             ],
             extra_compile_args={
                 "cxx": ["-O3", "-std=c++17"],

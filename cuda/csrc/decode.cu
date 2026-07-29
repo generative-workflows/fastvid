@@ -128,7 +128,7 @@ __device__ void set_error(int32_t* status, int32_t code) {
   atomicCAS(status, 0, code);
 }
 
-__global__ void parse_v5_metadata_kernel(
+__global__ void parse_metadata_kernel(
     const uint8_t* encoded,
     int64_t encoded_size,
     const int64_t* tile_metadata,
@@ -627,7 +627,7 @@ __global__ void reconstruct_tiles_serial_kernel(
 
 }  // namespace
 
-std::vector<torch::Tensor> fastvid_decode_v5_cuda(
+std::vector<torch::Tensor> fastvid_decode_cuda(
     const torch::Tensor& encoded,
     torch::Tensor shard_meta,
     const torch::Tensor& tile_meta,
@@ -649,7 +649,7 @@ std::vector<torch::Tensor> fastvid_decode_v5_cuda(
   const auto stream = at::cuda::getCurrentCUDAStream(encoded.device().index());
 
   if (parse_metadata) {
-    parse_v5_metadata_kernel<<<tile_meta.size(0), 1, 0, stream>>>(
+    parse_metadata_kernel<<<tile_meta.size(0), 1, 0, stream>>>(
         encoded.data_ptr<uint8_t>(), encoded.numel(), tile_meta.data_ptr<int64_t>(),
         tile_parse_meta.data_ptr<int64_t>(), tile_meta.size(0),
         shard_meta.data_ptr<int64_t>(), status.data_ptr<int32_t>());
@@ -683,7 +683,7 @@ std::vector<torch::Tensor> fastvid_decode_v5_cuda(
   C10_CUDA_KERNEL_LAUNCH_CHECK();
 
   const int32_t host_status = status.cpu().item<int32_t>();
-  TORCH_CHECK(host_status == 0, "malformed v5 entropy payload (CUDA status ", host_status, ")");
+  TORCH_CHECK(host_status == 0, "malformed entropy payload (CUDA status ", host_status, ")");
   std::vector<torch::Tensor> planes;
   planes.push_back(output.narrow(0, 0, y_samples).view({height, width}));
   if (!grayscale) {

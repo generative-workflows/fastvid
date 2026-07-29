@@ -9,7 +9,7 @@
 #include <tuple>
 #include <vector>
 
-std::vector<torch::Tensor> fastvid_decode_v5_cuda(
+std::vector<torch::Tensor> fastvid_decode_cuda(
     const torch::Tensor& encoded,
     torch::Tensor shard_meta,
     const torch::Tensor& tile_meta,
@@ -25,7 +25,7 @@ std::vector<torch::Tensor> fastvid_decode_v5_cuda(
     bool grayscale,
     bool wavefront);
 
-torch::Tensor fastvid_encode_v5_cuda(
+torch::Tensor fastvid_encode_cuda(
     std::vector<torch::Tensor> planes,
     int64_t layout,
     int64_t bit_depth,
@@ -40,13 +40,11 @@ namespace {
 constexpr int64_t kHeaderBytes = 32;
 constexpr int64_t kDirectoryEntryBytes = 32;
 constexpr int64_t kShardSymbols = 4096;
-constexpr uint8_t kVersion = 7;
-constexpr uint8_t kSixthScaleVersion = 6;
-constexpr uint8_t kLegacyVersion = 5;
+constexpr uint8_t kBitstreamVersion = 1;
 constexpr uint8_t kEntropyParallelShards = 19;
 constexpr uint8_t kPredictFullTileClampGradient = 6;
 
-int64_t quantization_step_v7(int64_t layout, int64_t bit_depth, int64_t quality) {
+int64_t quantization_step(int64_t layout, int64_t bit_depth, int64_t quality) {
   if (layout == 0 && bit_depth == 8) {
     return 1;
   }
@@ -135,7 +133,7 @@ std::vector<Tile> expected_tiles(
 
 }  // namespace
 
-std::vector<torch::Tensor> decode_v5(torch::Tensor encoded, bool wavefront) {
+std::vector<torch::Tensor> decode(torch::Tensor encoded, bool wavefront) {
   TORCH_CHECK(encoded.scalar_type() == torch::kUInt8, "encoded must have dtype uint8");
   TORCH_CHECK(encoded.dim() == 1, "encoded must be one-dimensional");
   TORCH_CHECK(torch::cuda::is_available(), "CUDA is required");
@@ -147,11 +145,8 @@ std::vector<torch::Tensor> decode_v5(torch::Tensor encoded, bool wavefront) {
       : encoded.contiguous();
   const auto* bytes = host.data_ptr<uint8_t>();
   TORCH_CHECK(std::memcmp(bytes, "FVID", 4) == 0, "bad Fastvid magic");
-  TORCH_CHECK(bytes[4] == kLegacyVersion || bytes[4] == kSixthScaleVersion ||
-                  bytes[4] == kVersion,
-              "CUDA decoder requires Fastvid v5, v6, or v7");
-  const bool sixth_scale_quantizer = bytes[4] == kSixthScaleVersion;
-  const bool format_aware_quantizer = bytes[4] == kVersion;
+  TORCH_CHECK(bytes[4] == kBitstreamVersion,
+              "unsupported Fastvid bitstream version");
   TORCH_CHECK(bytes[5] <= 2, "unknown pixel layout");
   const int64_t layout = bytes[5];
   const bool grayscale = layout == 0;
@@ -225,14 +220,9 @@ std::vector<torch::Tensor> decode_v5(torch::Tensor encoded, bool wavefront) {
     }
     auto shard_meta_cuda = torch::empty(
         {geometry.total_shards, 5}, device_encoded.options().dtype(torch::kInt64));
-    const int64_t scale = int64_t{1} << (bit_depth - 8);
-    const int64_t step = format_aware_quantizer
-        ? quantization_step_v7(layout, bit_depth, quality)
-        : sixth_scale_quantizer
-            ? 1 + ((100 - quality) * scale + 5) / 6
-            : 1 + (((100 - quality) / 5) * scale);
+    const int64_t step = quantization_step(layout, bit_depth, quality);
     const int64_t max_sample = (int64_t{1} << bit_depth) - 1;
-    return fastvid_decode_v5_cuda(
+    return fastvid_decode_cuda(
         device_encoded,
         shard_meta_cuda,
         geometry.tile_meta,
@@ -256,9 +246,9 @@ std::vector<torch::Tensor> decode_v5(torch::Tensor encoded, bool wavefront) {
     const int64_t start = kHeaderBytes + i * kDirectoryEntryBytes;
     TORCH_CHECK(bytes[start] == tiles[i].plane, "non-canonical tile plane");
     TORCH_CHECK(bytes[start + 1] == kEntropyParallelShards,
-                "v5 tile requires bounded-shard entropy");
+                "tile requires bounded-shard entropy");
     TORCH_CHECK(bytes[start + 2] == kPredictFullTileClampGradient,
-                "v5 tile requires full-tile clamp-gradient prediction");
+                "tile requires full-tile clamp-gradient prediction");
     TORCH_CHECK(bytes[start + 3] == 0, "nonzero reserved directory byte");
     TORCH_CHECK(read_u32(bytes, size, start + 4) == tiles[i].x &&
                     read_u32(bytes, size, start + 8) == tiles[i].y &&
@@ -332,14 +322,9 @@ std::vector<torch::Tensor> decode_v5(torch::Tensor encoded, bool wavefront) {
   auto device_encoded = encoded.is_cuda() ? encoded.contiguous() : encoded.to(torch::kCUDA);
   auto shard_meta_cuda = shard_meta_cpu.to(device_encoded.device());
   auto tile_meta_cuda = tile_meta_cpu.to(device_encoded.device());
-  const int64_t scale = int64_t{1} << (bit_depth - 8);
-  const int64_t step = format_aware_quantizer
-      ? quantization_step_v7(layout, bit_depth, quality)
-      : sixth_scale_quantizer
-          ? 1 + ((100 - quality) * scale + 5) / 6
-          : 1 + (((100 - quality) / 5) * scale);
+  const int64_t step = quantization_step(layout, bit_depth, quality);
   const int64_t max_sample = (int64_t{1} << bit_depth) - 1;
-  return fastvid_decode_v5_cuda(
+  return fastvid_decode_cuda(
       device_encoded,
       shard_meta_cuda,
       tile_meta_cuda,
@@ -358,15 +343,15 @@ std::vector<torch::Tensor> decode_v5(torch::Tensor encoded, bool wavefront) {
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
   module.def(
-      "decode_v5",
-      &decode_v5,
-      "Decode a Fastvid v5 frame on CUDA",
+      "decode",
+      &decode,
+      "Decode a Fastvid frame on CUDA",
       pybind11::arg("encoded"),
       pybind11::arg("wavefront") = true);
   module.def(
-      "encode_v5",
-      &fastvid_encode_v5_cuda,
-      "Encode CUDA uint16 planes to a Rust-compatible Fastvid v5 frame",
+      "encode",
+      &fastvid_encode_cuda,
+      "Encode CUDA uint16 planes to a Fastvid frame",
       pybind11::arg("planes"),
       pybind11::arg("layout"),
       pybind11::arg("bit_depth"),

@@ -12,6 +12,7 @@
 namespace {
 
 constexpr int64_t kHeaderBytes = 32;
+constexpr uint8_t kBitstreamVersion = 1;
 constexpr int64_t kDirectoryEntryBytes = 32;
 constexpr int64_t kShardSymbols = 4096;
 constexpr int64_t kBlockSymbols = 128;
@@ -67,7 +68,7 @@ std::vector<Tile> expected_tiles(
   return result;
 }
 
-int32_t quantization_step_v7(int64_t layout, int64_t bit_depth, int64_t quality) {
+int32_t quantization_step(int64_t layout, int64_t bit_depth, int64_t quality) {
   if (layout == 0 && bit_depth == 8) {
     return 1;
   }
@@ -665,7 +666,7 @@ __global__ void emit_block_shards_kernel(
 
 }  // namespace
 
-torch::Tensor fastvid_encode_v5_cuda(
+torch::Tensor fastvid_encode_cuda(
     std::vector<torch::Tensor> planes,
     int64_t layout,
     int64_t bit_depth,
@@ -753,7 +754,7 @@ torch::Tensor fastvid_encode_v5_cuda(
   auto rans_scratch = torch::empty({total_shards, 10240}, source.options().dtype(torch::kUInt8));
   auto rans_states = torch::empty({total_shards, 4}, source.options().dtype(torch::kUInt32));
   auto status = torch::zeros({1}, source.options().dtype(torch::kInt32));
-  const int32_t step = quantization_step_v7(layout, bit_depth, quality);
+  const int32_t step = quantization_step(layout, bit_depth, quality);
   const int32_t max_sample = (int32_t{1} << bit_depth) - 1;
   const auto stream = at::cuda::getCurrentCUDAStream(device.index());
 
@@ -782,7 +783,7 @@ torch::Tensor fastvid_encode_v5_cuda(
   }
   auto analysis_cpu = analysis.cpu();
   const int32_t host_status = status.cpu().item<int32_t>();
-  TORCH_CHECK(host_status == 0, "CUDA v5 encoder analysis failed (status ", host_status, ")");
+  TORCH_CHECK(host_status == 0, "CUDA encoder analysis failed (status ", host_status, ")");
   const auto* analysis_data = analysis_cpu.data_ptr<int64_t>();
   std::vector<int64_t> tile_lengths(tiles.size(), 0);
   std::vector<int64_t> block_shards;
@@ -810,7 +811,7 @@ torch::Tensor fastvid_encode_v5_cuda(
   std::vector<uint8_t> prefix;
   prefix.reserve(payload_start);
   prefix.insert(prefix.end(), {'F', 'V', 'I', 'D'});
-  prefix.push_back(7);
+  prefix.push_back(kBitstreamVersion);
   prefix.push_back(static_cast<uint8_t>(layout));
   prefix.push_back(static_cast<uint8_t>(quality));
   prefix.push_back(static_cast<uint8_t>(bit_depth - 8));

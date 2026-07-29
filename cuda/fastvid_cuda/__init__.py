@@ -1,9 +1,11 @@
 """PyTorch bindings for the experimental Fastvid CUDA implementation."""
 
+import torch
+
 from . import _C
 
 
-def encode_v5(
+def encode(
     planes,
     *,
     layout=None,
@@ -14,10 +16,9 @@ def encode_v5(
 ):
     """Encode one CUDA uint16 grayscale or planar YUV 4:2:2 frame.
 
-    ``planes`` is ``(Y,)`` or ``(Y, Cb, Cr)``. The returned canonical v5
-    byte stream is a one-dimensional CUDA uint8 tensor. This initial API is
-    deliberately frame-oriented; video batching and RGB/4:4:4 conversion are
-    separate format/API milestones.
+    ``planes`` is ``(Y,)`` or ``(Y, Cb, Cr)``. The returned version-1
+    bitstream is a one-dimensional CUDA uint8 tensor. The API is deliberately
+    frame-oriented; the public ``fastvid`` package handles independent batches.
     """
 
     if isinstance(planes, torch.Tensor):
@@ -32,7 +33,7 @@ def encode_v5(
         layout = {"gray": 0, "yuv422": 1, "rgb444": 2}[layout]
     fps_numerator, fps_denominator = frame_rate
     tile_width, tile_height = tile_size
-    return _C.encode_v5(
+    return _C.encode(
         list(planes),
         layout,
         bit_depth,
@@ -44,8 +45,8 @@ def encode_v5(
     )
 
 
-def decode_v5(encoded, predictor="wavefront"):
-    """Decode one Rust-compatible Fastvid v5 frame to CUDA plane tensors.
+def decode(encoded, predictor="wavefront"):
+    """Decode one Fastvid version-1 frame to CUDA plane tensors.
 
     ``encoded`` is a one-dimensional uint8 tensor in CPU DRAM or CUDA VRAM.
     The result is ``(Y,)`` for grayscale or ``(Y, Cb, Cr)`` for YUV 4:2:2.
@@ -54,10 +55,7 @@ def decode_v5(encoded, predictor="wavefront"):
 
     if predictor not in ("wavefront", "serial"):
         raise ValueError("predictor must be 'wavefront' or 'serial'")
-    return tuple(_C.decode_v5(encoded, predictor == "wavefront"))
+    return tuple(_C.decode(encoded, predictor == "wavefront"))
 
 
-import torch
-
-
-__all__ = ["decode_v5", "encode_v5"]
+__all__ = ["decode", "encode"]

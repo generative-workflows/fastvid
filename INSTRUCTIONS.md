@@ -16,6 +16,9 @@ The research objective is:
 
 The gates are constraints, not values to trade away for a better average.
 
+This research is PRE version 1. Do not introduce or increment version numbers or
+add any kind of code relating to backwards compatibility. The result of research after each experiment is simply the latest v1 candidate.
+
 ## Current Scope
 
 Prioritize the CUDA video implementation and its Python-facing API. Do not

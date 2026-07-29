@@ -6,7 +6,7 @@ from pathlib import Path
 
 import torch
 
-from fastvid_cuda import decode_v5
+from fastvid_cuda import decode
 
 
 def benchmark(path, placement, predictor, warmups, trials):
@@ -20,13 +20,13 @@ def benchmark(path, placement, predictor, warmups, trials):
     raw_bytes = raw_samples * 2
 
     for _ in range(warmups):
-        decode_v5(encoded, predictor=predictor)
+        decode(encoded, predictor=predictor)
     torch.cuda.synchronize()
     elapsed = []
     for _ in range(trials):
         torch.cuda.synchronize()
         start = time.perf_counter_ns()
-        result = decode_v5(encoded, predictor=predictor)
+        result = decode(encoded, predictor=predictor)
         torch.cuda.synchronize()
         elapsed.append((time.perf_counter_ns() - start) / 1e9)
         if not result:
