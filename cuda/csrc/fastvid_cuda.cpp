@@ -40,8 +40,7 @@ namespace {
 constexpr int64_t kHeaderBytes = 32;
 constexpr int64_t kDirectoryEntryBytes = 32;
 constexpr int64_t kShardSymbols = 4096;
-constexpr uint8_t kVersion = 8;
-constexpr uint8_t kFormatAwareVersion = 7;
+constexpr uint8_t kVersion = 7;
 constexpr uint8_t kSixthScaleVersion = 6;
 constexpr uint8_t kLegacyVersion = 5;
 constexpr uint8_t kEntropyParallelShards = 19;
@@ -59,17 +58,6 @@ int64_t quantization_step_v7(int64_t layout, int64_t bit_depth, int64_t quality)
   } else if (layout == 2 && bit_depth == 10) {
     denominator = 10;
   }
-  const int64_t scale = int64_t{1} << (bit_depth - 8);
-  return 1 + ((100 - quality) * scale + denominator - 1) / denominator;
-}
-
-int64_t quantization_step_v8(int64_t layout, int64_t bit_depth, int64_t quality) {
-  if (layout == 1 && bit_depth == 8) return 1;
-  int64_t denominator = 6;
-  if ((layout == 0 && bit_depth >= 10) || (layout == 2 && bit_depth == 16)) denominator = 12;
-  else if (layout == 1 && bit_depth == 10) denominator = 20;
-  else if (layout == 1 && bit_depth == 16) denominator = 12;
-  else if (layout == 2 && bit_depth == 10) denominator = 10;
   const int64_t scale = int64_t{1} << (bit_depth - 8);
   return 1 + ((100 - quality) * scale + denominator - 1) / denominator;
 }
@@ -160,11 +148,10 @@ std::vector<torch::Tensor> decode_v5(torch::Tensor encoded, bool wavefront) {
   const auto* bytes = host.data_ptr<uint8_t>();
   TORCH_CHECK(std::memcmp(bytes, "FVID", 4) == 0, "bad Fastvid magic");
   TORCH_CHECK(bytes[4] == kLegacyVersion || bytes[4] == kSixthScaleVersion ||
-                  bytes[4] == kFormatAwareVersion || bytes[4] == kVersion,
-              "CUDA decoder requires Fastvid v5, v6, v7, or v8");
+                  bytes[4] == kVersion,
+              "CUDA decoder requires Fastvid v5, v6, or v7");
   const bool sixth_scale_quantizer = bytes[4] == kSixthScaleVersion;
-  const bool format_aware_quantizer = bytes[4] == kFormatAwareVersion;
-  const bool full_quality_quantizer = bytes[4] == kVersion;
+  const bool format_aware_quantizer = bytes[4] == kVersion;
   TORCH_CHECK(bytes[5] <= 2, "unknown pixel layout");
   const int64_t layout = bytes[5];
   const bool grayscale = layout == 0;
@@ -239,10 +226,8 @@ std::vector<torch::Tensor> decode_v5(torch::Tensor encoded, bool wavefront) {
     auto shard_meta_cuda = torch::empty(
         {geometry.total_shards, 5}, device_encoded.options().dtype(torch::kInt64));
     const int64_t scale = int64_t{1} << (bit_depth - 8);
-    const int64_t step = full_quality_quantizer
-        ? quantization_step_v8(layout, bit_depth, quality)
-        : format_aware_quantizer
-            ? quantization_step_v7(layout, bit_depth, quality)
+    const int64_t step = format_aware_quantizer
+        ? quantization_step_v7(layout, bit_depth, quality)
         : sixth_scale_quantizer
             ? 1 + ((100 - quality) * scale + 5) / 6
             : 1 + (((100 - quality) / 5) * scale);
@@ -348,10 +333,8 @@ std::vector<torch::Tensor> decode_v5(torch::Tensor encoded, bool wavefront) {
   auto shard_meta_cuda = shard_meta_cpu.to(device_encoded.device());
   auto tile_meta_cuda = tile_meta_cpu.to(device_encoded.device());
   const int64_t scale = int64_t{1} << (bit_depth - 8);
-  const int64_t step = full_quality_quantizer
-      ? quantization_step_v8(layout, bit_depth, quality)
-      : format_aware_quantizer
-          ? quantization_step_v7(layout, bit_depth, quality)
+  const int64_t step = format_aware_quantizer
+      ? quantization_step_v7(layout, bit_depth, quality)
       : sixth_scale_quantizer
           ? 1 + ((100 - quality) * scale + 5) / 6
           : 1 + (((100 - quality) / 5) * scale);
