@@ -32,6 +32,7 @@ metric implementation.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import hashlib
 import importlib
 import json
@@ -47,6 +48,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_CORPUS = ROOT / "artifacts" / "corpus-v1"
 REQUIRED_MATRIX = {
     ("yuv422", 8), ("yuv422", 10), ("yuv422", 16),
     ("rgb444", 10), ("rgb444", 16),
@@ -66,6 +68,8 @@ class Sample:
     bit_depth: int
     tiers: tuple[str, ...]
     batch_frames: int = 1
+    paths: tuple[Path, ...] = ()
+    expected_sha256: tuple[str, ...] = ()
 
     @property
     def plane_shapes(self) -> tuple[tuple[int, int], ...]:
@@ -105,18 +109,35 @@ def load_manifest(path: Path, tier: str) -> tuple[str, list[Sample]]:
         tiers = tuple(row.get("tiers", ("full",)))
         if tier not in tiers:
             continue
-        sample_path = Path(row["path"])
-        if not sample_path.is_absolute():
-            sample_path = path.parent / sample_path
+        listed_paths = row.get("paths")
+        if listed_paths is not None:
+            if "path" in row or "batch_frames" in row:
+                raise ValueError(f"{row.get('id')}: paths cannot be combined with path or batch_frames")
+            if not isinstance(listed_paths, list) or not listed_paths:
+                raise ValueError(f"{row.get('id')}: paths must be a non-empty list")
+            raw_paths = [Path(value) for value in listed_paths]
+            batch_frames = len(raw_paths)
+        else:
+            raw_paths = [Path(row["path"])]
+            batch_frames = int(row.get("batch_frames", 1))
+        resolved_paths = tuple(
+            (value if value.is_absolute() else path.parent / value).resolve()
+            for value in raw_paths
+        )
+        hashes = row.get("sha256", ())
+        if isinstance(hashes, str):
+            hashes = (hashes,)
+        elif isinstance(hashes, list):
+            hashes = tuple(str(value) for value in hashes)
+        elif hashes:
+            raise ValueError(f"{row.get('id')}: sha256 must be a string or list")
         sample = Sample(
-            id=str(row["id"]),
-            path=sample_path.resolve(),
-            width=int(row["width"]),
-            height=int(row["height"]),
-            format=str(row["format"]).lower(),
-            bit_depth=int(row["bit_depth"]),
-            tiers=tiers,
-            batch_frames=int(row.get("batch_frames", 1)),
+            id=str(row["id"]), path=resolved_paths[0], width=int(row["width"]),
+            height=int(row["height"]), format=str(row["format"]).lower(),
+            bit_depth=int(row["bit_depth"]), tiers=tiers,
+            batch_frames=batch_frames,
+            paths=resolved_paths if listed_paths is not None else (),
+            expected_sha256=tuple(hashes),
         )
         if sample.id in ids:
             raise ValueError(f"duplicate sample id: {sample.id}")
@@ -124,12 +145,17 @@ def load_manifest(path: Path, tier: str) -> tuple[str, list[Sample]]:
             raise ValueError(f"{sample.id}: dimensions and batch_frames must be positive")
         if sample.bit_depth not in (8, 10, 16):
             raise ValueError(f"{sample.id}: unsupported bit depth {sample.bit_depth}")
-        sample.plane_shapes  # validate format now
+        if sample.expected_sha256 and len(sample.expected_sha256) not in (1, sample.batch_frames):
+            raise ValueError(f"{sample.id}: sha256 count differs from input frame count")
+        if any(len(value) != 64 for value in sample.expected_sha256):
+            raise ValueError(f"{sample.id}: malformed sha256")
+        sample.plane_shapes
         ids.add(sample.id)
         samples.append(sample)
     if not samples:
         raise ValueError(f"manifest contains no {tier!r} samples")
     return document["revision"], samples
+
 def samples_exceed_maximum(
     frames: Sequence[tuple[Any, ...]], maximum: int, torch: Any,
 ) -> bool:
@@ -141,10 +167,24 @@ def samples_exceed_maximum(
     )
 
 def load_frames(sample: Sample, torch: Any) -> list[tuple[Any, ...]]:
-    payload = bytearray(sample.path.read_bytes())
+    if sample.paths:
+        chunks = [path.read_bytes() for path in sample.paths]
+        if any(len(chunk) != sample.raw_bytes_per_frame for chunk in chunks):
+            raise ValueError(f"{sample.id}: one or more frame files have incorrect size")
+        payload = bytearray().join(chunks)
+    else:
+        payload = bytearray(sample.path.read_bytes())
+        chunks = [payload]
     expected = sample.raw_bytes_per_frame * sample.batch_frames
     if len(payload) != expected:
         raise ValueError(f"{sample.id}: expected {expected} raw bytes, found {len(payload)}")
+    if sample.expected_sha256:
+        actual = tuple(hashlib.sha256(chunk).hexdigest() for chunk in chunks)
+        expected_hashes = sample.expected_sha256
+        if len(expected_hashes) == 1 and len(actual) > 1:
+            expected_hashes = expected_hashes * len(actual)
+        if actual != expected_hashes:
+            raise ValueError(f"{sample.id}: extracted input SHA-256 mismatch")
     values = torch.frombuffer(payload, dtype=torch.uint16)
     frames: list[tuple[Any, ...]] = []
     cursor = 0
@@ -161,7 +201,6 @@ def load_frames(sample: Sample, torch: Any) -> list[tuple[Any, ...]]:
     if samples_exceed_maximum(frames, maximum, torch):
         raise ValueError(f"{sample.id}: samples exceed {sample.bit_depth}-bit range")
     return frames
-
 
 def cuda_samples(operation: Callable[[], Any], warmups: int, repetitions: int, torch: Any):
     """Return (seconds, last_result), timed by CUDA events with synchronization."""
@@ -268,19 +307,22 @@ def parse_ffvship_scores(path: Path, metric: str) -> list[float]:
     return scores
 
 
+
+
 def ffvship_metric(
     reference: Path, distorted: Path, metric: str, binary: str, directory: Path,
+    gpu_id: int, gpu_threads: int, decoder_threads: int,
 ) -> list[float]:
     output = directory / f"{metric.lower()}.json"
     command = [
         binary, "--source", str(reference), "--encoded", str(distorted),
-        "-m", metric, "--json", str(output),
+        "-m", metric, "--json", str(output), "--gpu-id", str(gpu_id),
+        "--gpu-threads", str(gpu_threads), "--threads", str(decoder_threads),
     ]
     completed = subprocess.run(command, capture_output=True, text=True)
     if completed.returncode:
         raise RuntimeError(f"FFVShip {metric} failed: {completed.stderr.strip()}")
     return parse_ffvship_scores(output, metric)
-
 
 def metric_raw(frame: Sequence[Any], sample: Sample) -> bytes:
     """Serialize a frame in the exact raw layout passed to FFmpeg."""
@@ -400,8 +442,11 @@ def evaluate_sample(
         reference_video, decoded_video = temp / "reference.mkv", temp / "decoded.mkv"
         run_ffmpeg(reference_raw, reference_video, sample, args.ffmpeg, args.ffprobe)
         run_ffmpeg(decoded_raw, decoded_video, sample, args.ffmpeg, args.ffprobe)
-        ssim = ffvship_metric(reference_video, decoded_video, "SSIMULACRA2", args.ffvship, temp)
-        butter = ffvship_metric(reference_video, decoded_video, "Butteraugli", args.ffvship, temp)
+        metric_arguments = (args.ffvship, temp, args.ffvship_gpu_id, args.ffvship_gpu_threads, args.ffvship_threads)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            ssim_future = executor.submit(ffvship_metric, reference_video, decoded_video, "SSIMULACRA2", *metric_arguments)
+            butter_future = executor.submit(ffvship_metric, reference_video, decoded_video, "Butteraugli", *metric_arguments)
+            ssim, butter = ssim_future.result(), butter_future.result()
     if len(ssim) != len(frames) or len(butter) != len(frames):
         raise RuntimeError("FFVShip did not return exactly one score per input frame")
 
@@ -416,8 +461,10 @@ def evaluate_sample(
     quality_pass = all(row["passed"] for row in per_frame_quality)
     return {
         "id": sample.id,
-        "path": str(sample.path),
-        "source_sha256": sha256_file(sample.path),
+        "path": str(sample.path) if not sample.paths else None,
+        "paths": [str(path) for path in sample.paths] if sample.paths else None,
+        "source_sha256": ([sha256_file(path) for path in sample.paths]
+                          if sample.paths else sha256_file(sample.path)),
         "format": sample.format,
         "bit_depth": sample.bit_depth,
         "width": sample.width,
@@ -473,7 +520,10 @@ def command_output(command: Sequence[str]) -> str | None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, required=True)
+    inputs = parser.add_mutually_exclusive_group()
+    inputs.add_argument("--manifest", type=Path)
+    inputs.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS,
+                        help="extracted corpus directory containing manifest.json")
     parser.add_argument("--tier", choices=("rejection", "full"), default="rejection")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--quality", type=int, default=90)
@@ -484,16 +534,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--ffvship", default="FFVship")
     parser.add_argument("--ffvship-revision", required=True)
     parser.add_argument("--ffvship-build", required=True)
+    parser.add_argument("--ffvship-gpu-id", type=int, default=0)
+    parser.add_argument("--ffvship-gpu-threads", type=int, default=3)
+    parser.add_argument("--ffvship-threads", type=int, default=2)
     parser.add_argument("--ffmpeg", default="ffmpeg")
     parser.add_argument("--ffprobe", default="ffprobe")
     args = parser.parse_args(argv)
     if args.repetitions < 20:
         parser.error("--repetitions must be at least 20")
+    if args.ffvship_gpu_id < 0 or args.ffvship_gpu_threads < 1 or args.ffvship_threads < 1:
+        parser.error("FFVShip GPU id must be non-negative and thread counts positive")
     if args.warmups < 1:
         parser.error("--warmups must be positive")
     if len(args.tile_size) != 2 or min(args.tile_size) <= 0:
         parser.error("--tile-size must be WIDTHxHEIGHT")
 
+    args.manifest = args.manifest or args.corpus / "manifest.json"
     started = time.time()
     failures: list[str] = []
     results: list[dict[str, Any]] = []
@@ -574,6 +630,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
             "ffvship_revision": args.ffvship_revision,
             "ffvship_build": args.ffvship_build,
+            "ffvship_gpu_id": args.ffvship_gpu_id,
+            "ffvship_gpu_threads": args.ffvship_gpu_threads,
+            "ffvship_threads": args.ffvship_threads,
+            "ffvship_parallel_metrics": 2,
             "butteraugli_score": "maximum distance among all norms emitted by FFVShip",
         },
         "corpus": {

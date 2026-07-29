@@ -24,6 +24,25 @@ ln -s /dev/shm/fastvid/corpus-v1 artifacts/corpus-v1
 The tmpfs contents are ephemeral and must be rebuilt after a reboot. Do not
 commit the machine-specific symlink.
 
+Build or verify all 120 sources, eight required format/depth derivatives, and
+both evaluation tiers with:
+
+```sh
+python scripts/extract_corpus.py
+```
+
+The command is resumable: correctly sized derivatives are reused and hashed.
+It writes `artifacts/corpus-v1/manifest.json`, including source/output hashes,
+pinned tool versions, conversion parameters, the frozen rejection selection,
+and multi-file 24-frame performance cases. Evaluate the standard corpus with:
+
+```sh
+python scripts/evaluate.py --tier rejection --output artifacts/rejection.json --ffvship-revision 5.0.0-a --ffvship-build cuda
+```
+
+Use `--corpus PATH` for another extracted root or `--manifest PATH` for an
+explicit compatible manifest.
+
 ## Frozen AI sources
 
 The AI images must never be regenerated during corpus setup. Their full prompts

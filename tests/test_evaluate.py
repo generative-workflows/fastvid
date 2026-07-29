@@ -7,6 +7,7 @@ import pytest
 
 from scripts.evaluate import (
     Sample,
+    load_manifest,
     metric_pixel_format,
     metric_raw,
     run_ffmpeg,
@@ -100,3 +101,29 @@ def test_sample_range_validation_is_linear_in_frame_planes():
     frames = [tuple(FakePlane(value) for value in pair) for pair in ((1, 2), (3, 4), (5, 6))]
     assert not samples_exceed_maximum(frames, 6, FakeTorch)
     assert FakePlane.calls == 6
+
+
+def test_manifest_accepts_multifile_batch_and_hashes(tmp_path: Path):
+    first = tmp_path / "first.raw"
+    second = tmp_path / "second.raw"
+    first.write_bytes(b"\x00\x00")
+    second.write_bytes(b"\x01\x00")
+    import hashlib
+    document = {
+        "revision": "test",
+        "samples": [{
+            "id": "batch", "paths": [first.name, second.name],
+            "sha256": [hashlib.sha256(first.read_bytes()).hexdigest(),
+                       hashlib.sha256(second.read_bytes()).hexdigest()],
+            "width": 1, "height": 1, "format": "gray", "bit_depth": 8,
+            "tiers": ["rejection"],
+        }],
+    }
+    import json
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps(document))
+    revision, samples = load_manifest(manifest, "rejection")
+    assert revision == "test"
+    assert samples[0].batch_frames == 2
+    assert samples[0].paths == (first, second)
+    assert len(samples[0].expected_sha256) == 2
