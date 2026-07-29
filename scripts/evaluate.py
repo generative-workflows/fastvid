@@ -24,28 +24,30 @@ tensors. Decode obtains dimensions, format, and depth from each bitstream. The
 ``container_overhead_bytes``. The evaluator intentionally fails when any part
 of this public interface is absent.
 
-FFVShip revision and build configuration are deliberately command-line inputs:
-the evaluator records them but never downloads or silently substitutes a
-metric implementation.
+libvship revision and build configuration are deliberately command-line inputs:
+the evaluator records them and passes original and roundtrip planes directly to
+the in-memory C API without media containers, FFmpeg, or FFMS2.
 """
 
 from __future__ import annotations
 
 import argparse
-import concurrent.futures
 import hashlib
 import importlib
 import json
 import platform
-import shutil
 import statistics
 import subprocess
 import sys
-import tempfile
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
+
+if __package__:
+    from .libvship_direct import DirectVshipMetrics, libvship_version
+else:
+    from libvship_direct import DirectVshipMetrics, libvship_version
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CORPUS = ROOT / "artifacts" / "corpus-v1"
@@ -234,110 +236,8 @@ def distribution(seconds: Sequence[float]) -> dict[str, Any]:
     }
 
 
-def metric_pixel_format(bit_depth: int) -> str:
-    """Return an FFVShip-supported 4:4:4 interchange at the source depth."""
-    return {
-        8: "yuv444p",
-        10: "yuv444p10le",
-        16: "yuv444p16le",
-    }[bit_depth]
-
-
-def run_ffmpeg(
-    raw: Path, output: Path, sample: Sample, ffmpeg: str, ffprobe: str = "ffprobe",
-) -> None:
-    pixel_formats = {
-        ("gray", 8): "gray", ("gray", 10): "gray10le", ("gray", 16): "gray16le",
-        ("yuv422", 8): "yuv422p", ("yuv422", 10): "yuv422p10le",
-        ("yuv422", 16): "yuv422p16le",
-        ("rgb444", 10): "gbrp10le", ("rgb444", 16): "gbrp16le",
-    }
-    source_format = pixel_formats[(sample.format, sample.bit_depth)]
-    metric_format = metric_pixel_format(sample.bit_depth)
-    command = [
-        ffmpeg, "-v", "error", "-y", "-f", "rawvideo",
-        "-pixel_format", source_format, "-video_size", f"{sample.width}x{sample.height}",
-        "-framerate", "1", "-color_range", "pc", "-colorspace", "bt709",
-        "-color_primaries", "bt709", "-color_trc", "bt709",
-        "-i", str(raw), "-frames:v", str(sample.batch_frames),
-        # FFVShip 5.0 rejects planar RGB but accepts planar YUV444 at every
-        # required depth. Preserve native precision through this conversion.
-        "-vf", f"format={metric_format}", "-color_range", "pc",
-        "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
-        "-c:v", "ffv1", "-level", "3", "-pix_fmt", metric_format, str(output),
-    ]
-    subprocess.run(command, check=True, capture_output=True, text=True)
-    probe = subprocess.run(
-        [
-            ffprobe, "-v", "error", "-select_streams", "v:0",
-            "-show_entries", "stream=pix_fmt,bits_per_raw_sample",
-            "-of", "json", str(output),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    streams = json.loads(probe.stdout).get("streams", [])
-    if len(streams) != 1 or streams[0].get("pix_fmt") != metric_format:
-        actual = streams[0].get("pix_fmt") if len(streams) == 1 else streams
-        raise RuntimeError(
-            f"metric video pixel format {actual!r}, expected {metric_format!r}"
-        )
-
-
-def parse_ffvship_scores(path: Path, metric: str) -> list[float]:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if isinstance(data, dict):
-        for key in (metric, metric.lower(), "frames", "scores"):
-            if key in data:
-                data = data[key]
-                break
-    if not isinstance(data, list):
-        raise ValueError(f"unexpected FFVShip {metric} JSON")
-    scores = []
-    for row in data:
-        if isinstance(row, (int, float)):
-            scores.append(float(row))
-        elif metric == "Butteraugli":
-            # Releases have changed the order/names of the three norms. Using
-            # the largest emitted distance is deterministic and conservative.
-            scores.append(max(float(value) for value in row))
-        else:
-            scores.append(float(row[0]))
-    return scores
-
-
-
-
-def ffvship_metric(
-    reference: Path, distorted: Path, metric: str, binary: str, directory: Path,
-    gpu_id: int, gpu_threads: int, decoder_threads: int,
-) -> list[float]:
-    output = directory / f"{metric.lower()}.json"
-    command = [
-        binary, "--source", str(reference), "--encoded", str(distorted),
-        "-m", metric, "--json", str(output), "--gpu-id", str(gpu_id),
-        "--gpu-threads", str(gpu_threads), "--threads", str(decoder_threads),
-    ]
-    completed = subprocess.run(command, capture_output=True, text=True)
-    if completed.returncode:
-        raise RuntimeError(f"FFVShip {metric} failed: {completed.stderr.strip()}")
-    return parse_ffvship_scores(output, metric)
-
-def metric_raw(frame: Sequence[Any], sample: Sample) -> bytes:
-    """Serialize a frame in the exact raw layout passed to FFmpeg."""
-    planes = frame
-    if sample.format == "rgb444":
-        # The public API is conventional R,G,B; FFmpeg's planar format is G,B,R.
-        planes = (frame[1], frame[2], frame[0])
-    arrays = [plane.detach().cpu().contiguous().numpy() for plane in planes]
-    if sample.bit_depth == 8:
-        return b"".join(array.astype("uint8", copy=False).tobytes() for array in arrays)
-    return b"".join(array.tobytes() for array in arrays)
-
-
 def quality_group_key(sample: Sample) -> tuple[int, int, int]:
-    """Return properties fixed in one native-depth YUV444 metric sequence."""
+    """Return properties used to summarize direct metric work."""
     return sample.width, sample.height, sample.bit_depth
 
 
@@ -346,11 +246,11 @@ def assign_quality_scores(
     ssim: Sequence[float],
     butter: Sequence[float],
 ) -> None:
-    """Map sequence-wide FFVShip scores back onto their source samples."""
+    """Map direct libvship scores back onto their source samples."""
     expected = sum(int(result["frame_count"]) for result in results)
     if len(ssim) != expected or len(butter) != expected:
         raise RuntimeError(
-            f"FFVShip returned {len(ssim)} SSIMULACRA2 and {len(butter)} "
+            f"libvship returned {len(ssim)} SSIMULACRA2 and {len(butter)} "
             f"Butteraugli scores for {expected} input frames"
         )
     cursor = 0
@@ -379,89 +279,10 @@ def assign_quality_scores(
         cursor += count
 
 
-def concatenate_metric_videos(
-    inputs: Sequence[Path], output: Path, ffmpeg: str, directory: Path,
-) -> None:
-    """Stream-copy compatible lossless segments into one metric sequence."""
-    if len(inputs) == 1:
-        shutil.copyfile(inputs[0], output)
-        return
-    listing = directory / f"{output.stem}-segments.txt"
-    listing.write_text(
-        "".join(f"file '{path}'\n" for path in inputs), encoding="utf-8",
-    )
-    subprocess.run(
-        [
-            ffmpeg, "-v", "error", "-y", "-f", "concat", "-safe", "0",
-            "-i", str(listing), "-map", "0:v:0", "-c", "copy", str(output),
-        ],
-        check=True, capture_output=True, text=True,
-    )
-
-
-def evaluate_quality_group(
-    segments: Sequence[tuple[Sample, Sequence[dict[str, Any]], Path, Path]],
-    args: argparse.Namespace,
-    directory: Path,
-) -> dict[str, Any]:
-    """Evaluate one resolution/depth sequence with two FFVShip processes."""
-    results = [result for _, rows, _, _ in segments for result in rows]
-    frame_count = sum(int(result["frame_count"]) for result in results)
-    reference_segments: list[Path] = []
-    decoded_segments: list[Path] = []
-    conversion_started = time.perf_counter()
-    for number, (sample, segment_results, reference_raw, decoded_raw) in enumerate(segments):
-        segment_frames = sum(int(result["frame_count"]) for result in segment_results)
-        metric_sample = replace(
-            sample, id=f"metric-segment-{sample.id}", path=reference_raw,
-            paths=(), expected_sha256=(), batch_frames=segment_frames,
-        )
-        reference_video = directory / f"reference-{number:02d}.mkv"
-        decoded_video = directory / f"decoded-{number:02d}.mkv"
-        run_ffmpeg(reference_raw, reference_video, metric_sample, args.ffmpeg, args.ffprobe)
-        run_ffmpeg(decoded_raw, decoded_video, metric_sample, args.ffmpeg, args.ffprobe)
-        reference_segments.append(reference_video)
-        decoded_segments.append(decoded_video)
-    reference_video = directory / "reference.mkv"
-    decoded_video = directory / "decoded.mkv"
-    concatenate_metric_videos(reference_segments, reference_video, args.ffmpeg, directory)
-    concatenate_metric_videos(decoded_segments, decoded_video, args.ffmpeg, directory)
-    conversion_seconds = time.perf_counter() - conversion_started
-    metric_arguments = (
-        args.ffvship, directory, args.ffvship_gpu_id,
-        args.ffvship_gpu_threads, args.ffvship_threads,
-    )
-    metric_started = time.perf_counter()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        ssim_future = executor.submit(
-            ffvship_metric, reference_video, decoded_video,
-            "SSIMULACRA2", *metric_arguments,
-        )
-        butter_future = executor.submit(
-            ffvship_metric, reference_video, decoded_video,
-            "Butteraugli", *metric_arguments,
-        )
-        ssim, butter = ssim_future.result(), butter_future.result()
-    metric_seconds = time.perf_counter() - metric_started
-    assign_quality_scores(results, ssim, butter)
-    first_sample = segments[0][0]
-    return {
-        "width": first_sample.width, "height": first_sample.height,
-        "bit_depth": first_sample.bit_depth,
-        "source_formats": [sample.format for sample, _, _, _ in segments],
-        "segment_count": len(segments),
-        "sample_count": len(results), "frame_count": frame_count,
-        "conversion_seconds": conversion_seconds,
-        "metric_seconds": metric_seconds,
-        "metric_frames_per_second": (
-            frame_count / metric_seconds if metric_seconds else None
-        ),
-    }
-
-
 def evaluate_sample(
     sample: Sample, codec: Any, torch: Any, args: argparse.Namespace,
-) -> tuple[dict[str, Any], bytes, bytes]:
+    metrics: DirectVshipMetrics,
+) -> dict[str, Any]:
     frames = load_frames(sample, torch)
     if any(not callable(getattr(codec, name, None)) for name in ("encode", "decode", "inspect")):
         raise NotImplementedError(
@@ -557,8 +378,6 @@ def evaluate_sample(
             raise RuntimeError(f"decoded frame {number} dimensions or format differ")
         if any(plane.dtype != torch.uint16 or not plane.is_cuda for plane in decoded_frame):
             raise RuntimeError(f"decoded frame {number} is not CUDA uint16")
-    reference_payload = b"".join(metric_raw(frame, sample) for frame in frames)
-    decoded_payload = b"".join(metric_raw(frame, sample) for frame in decoded_frames)
     result = {
         "id": sample.id,
         "path": str(sample.path) if not sample.paths else None,
@@ -586,7 +405,9 @@ def evaluate_sample(
             "encode": encode_timing, "decode": decode_timing,
         },
     }
-    return result, reference_payload, decoded_payload
+    ssim, butter = metrics.evaluate(frames, decoded_frames, torch)
+    assign_quality_scores([result], ssim, butter)
+    return result
 
 
 def performance_failures(result: dict[str, Any]) -> list[str]:
@@ -627,23 +448,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--repetitions", type=int, default=20)
     parser.add_argument("--tile-size", type=lambda value: [int(x) for x in value.split("x")], default=[256, 128])
     parser.add_argument("--codec-module", default="fastvid")
-    parser.add_argument("--ffvship", default="FFVship")
-    parser.add_argument("--ffvship-revision", required=True)
-    parser.add_argument("--ffvship-build", required=True)
-    parser.add_argument("--ffvship-gpu-id", type=int, default=0)
-    parser.add_argument("--ffvship-gpu-threads", type=int, default=2)
-    parser.add_argument("--ffvship-threads", type=int, default=1)
-    parser.add_argument("--ffmpeg", default="ffmpeg")
-    parser.add_argument("--ffprobe", default="ffprobe")
     parser.add_argument(
-        "--quality-temp", type=Path,
-        help="directory for transient consolidated raw and FFV1 metric sequences",
+        "--libvship", type=Path,
+        default=Path("/usr/local/lib/fastvid-vship-5.0.0/libvship.so"),
     )
+    parser.add_argument("--libvship-revision", required=True)
+    parser.add_argument("--libvship-build", required=True)
+    parser.add_argument("--libvship-gpu-id", type=int, default=0)
+    parser.add_argument("--libvship-workers", type=int, default=2)
     args = parser.parse_args(argv)
     if args.repetitions < 20:
         parser.error("--repetitions must be at least 20")
-    if args.ffvship_gpu_id < 0 or args.ffvship_gpu_threads < 1 or args.ffvship_threads < 1:
-        parser.error("FFVShip GPU id must be non-negative and thread counts positive")
+    if args.libvship_gpu_id < 0 or args.libvship_workers < 1:
+        parser.error("libvship GPU id must be non-negative and workers positive")
     if args.warmups < 1:
         parser.error("--warmups must be positive")
     if len(args.tile_size) != 2 or min(args.tile_size) <= 0:
@@ -676,61 +493,69 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
     if not torch.cuda.is_available():
         failures.append("CUDA is unavailable")
-    if shutil.which(args.ffvship) is None:
-        failures.append(f"FFVShip binary not found: {args.ffvship}")
-    if shutil.which(args.ffmpeg) is None:
-        failures.append(f"FFmpeg binary not found: {args.ffmpeg}")
-    if shutil.which(args.ffprobe) is None:
-        failures.append(f"FFprobe binary not found: {args.ffprobe}")
+    libvship_actual = None
+    if not args.libvship.is_file():
+        failures.append(f"libvship library not found: {args.libvship}")
+    else:
+        try:
+            libvship_actual = libvship_version(args.libvship)
+        except (OSError, ValueError) as error:
+            failures.append(f"libvship library unavailable: {args.libvship}: {error}")
 
     if not failures:
-        if args.quality_temp is not None:
-            args.quality_temp.mkdir(parents=True, exist_ok=True)
         grouped: dict[tuple[int, int, int], list[Sample]] = {}
         for sample in samples:
             grouped.setdefault(quality_group_key(sample), []).append(sample)
-        for group_number, group_samples in enumerate(grouped.values()):
+        for group_samples in grouped.values():
             group_results: list[dict[str, Any]] = []
-            try:
-                with tempfile.TemporaryDirectory(
-                    prefix=f"fastvid-quality-{group_number:02d}-",
-                    dir=args.quality_temp,
-                ) as temp_name:
-                    temp = Path(temp_name)
-                    by_format: dict[str, list[Sample]] = {}
-                    for sample in group_samples:
-                        by_format.setdefault(sample.format, []).append(sample)
-                    segments = []
-                    for segment_number, format_samples in enumerate(by_format.values()):
-                        segment_results: list[dict[str, Any]] = []
-                        reference_raw = temp / f"reference-{segment_number:02d}.raw"
-                        decoded_raw = temp / f"decoded-{segment_number:02d}.raw"
-                        with (
-                            reference_raw.open("wb") as reference_stream,
-                            decoded_raw.open("wb") as decoded_stream,
-                        ):
-                            for sample in format_samples:
-                                try:
-                                    result, reference_payload, decoded_payload = evaluate_sample(
-                                        sample, codec, torch, args,
-                                    )
-                                    reference_stream.write(reference_payload)
-                                    decoded_stream.write(decoded_payload)
-                                    segment_results.append(result)
-                                    group_results.append(result)
-                                except Exception as error:
-                                    failures.append(
-                                        f"{sample.id}: {type(error).__name__}: {error}"
-                                    )
-                        if segment_results:
-                            segments.append((
-                                format_samples[0], segment_results,
-                                reference_raw, decoded_raw,
-                            ))
-                    if segments:
-                        metric_groups.append(evaluate_quality_group(
-                            segments, args, temp,
-                        ))
+            group_metric_seconds = 0.0
+            group_frame_count = 0
+            source_formats: list[str] = []
+            by_format: dict[str, list[Sample]] = {}
+            for sample in group_samples:
+                by_format.setdefault(sample.format, []).append(sample)
+            for format_samples in by_format.values():
+                template = format_samples[0]
+                source_formats.append(template.format)
+                try:
+                    with DirectVshipMetrics(
+                        args.libvship, template.width, template.height,
+                        template.format, template.bit_depth,
+                        args.libvship_gpu_id, args.libvship_workers,
+                    ) as metrics:
+                        for sample in format_samples:
+                            try:
+                                result = evaluate_sample(
+                                    sample, codec, torch, args, metrics,
+                                )
+                                group_results.append(result)
+                            except Exception as error:
+                                failures.append(
+                                    f"{sample.id}: {type(error).__name__}: {error}"
+                                )
+                        group_metric_seconds += metrics.metric_seconds
+                        group_frame_count += metrics.frame_count
+                except Exception as error:
+                    for sample in format_samples:
+                        if not any(result["id"] == sample.id for result in group_results):
+                            failures.append(
+                                f"{sample.id}: direct libvship: "
+                                f"{type(error).__name__}: {error}"
+                            )
+            if group_results:
+                metric_groups.append({
+                    "width": group_samples[0].width,
+                    "height": group_samples[0].height,
+                    "bit_depth": group_samples[0].bit_depth,
+                    "source_formats": source_formats,
+                    "sample_count": len(group_results),
+                    "frame_count": group_frame_count,
+                    "metric_seconds": group_metric_seconds,
+                    "metric_frames_per_second": (
+                        group_frame_count / group_metric_seconds
+                        if group_metric_seconds else None
+                    ),
+                })
                 results.extend(group_results)
                 for result in group_results:
                     if not result["quality"]["passed"]:
@@ -738,12 +563,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                     failures.extend(
                         f"{result['id']}: {item}"
                         for item in performance_failures(result)
-                    )
-            except Exception as error:
-                for result in group_results:
-                    failures.append(
-                        f"{result['id']}: consolidated quality: "
-                        f"{type(error).__name__}: {error}"
                     )
 
     sample_order = {sample.id: number for number, sample in enumerate(samples)}
@@ -773,28 +592,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     total_raw = sum(row["compression"]["raw_bytes"] for row in results)
     total_encoded = sum(row["compression"]["encoded_bytes"] for row in results)
     report = {
-        "schema_version": 2,
+        "schema_version": 3,
         "passed": not failures,
         "tier": args.tier,
         "configuration": {
             "quality": args.quality, "warmups": args.warmups,
             "repetitions": args.repetitions, "tile_size": args.tile_size,
             "codec_module": args.codec_module,
-            "metric_conversion": (
-                "raw planar at original format/depth -> FFmpeg full-range BT.709 "
-                "YUV444 at matching 8/10/16-bit depth -> lossless FFV1 level 3"
+            "metric_interface": "direct in-memory libvship C API",
+            "metric_colorspace": (
+                "native full-range BT.709 YUV422 or RGB; gray planes are repeated as RGB"
             ),
-            "ffvship_revision": args.ffvship_revision,
-            "ffvship_build": args.ffvship_build,
-            "ffvship_gpu_id": args.ffvship_gpu_id,
-            "ffvship_gpu_threads": args.ffvship_gpu_threads,
-            "ffvship_threads": args.ffvship_threads,
-            "ffvship_parallel_metrics": 2,
-            "ffvship_batching": (
-                "one native-depth YUV444 sequence per width, height, and bit depth; "
-                "source formats are converted as lossless segments before concatenation"
-            ),
-            "butteraugli_score": "maximum distance among all norms emitted by FFVShip",
+            "libvship_path": str(args.libvship.resolve()),
+            "libvship_revision": args.libvship_revision,
+            "libvship_build": args.libvship_build,
+            "libvship_actual_version": libvship_actual,
+            "libvship_gpu_id": args.libvship_gpu_id,
+            "libvship_workers_per_metric": args.libvship_workers,
+            "libvship_parallel_metrics": 2,
+            "butteraugli_score": "maximum distance among q=2, q=3, and infinity norms",
         },
         "corpus": {
             "revision": revision,
@@ -807,8 +623,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             "python": sys.version,
             "torch": getattr(torch, "__version__", None),
             "cuda": getattr(torch.version, "cuda", None),
-            "ffmpeg": command_output([args.ffmpeg, "-version"]),
-            "ffprobe": command_output([args.ffprobe, "-version"]),
         },
         "hardware": {
             "platform": platform.platform(),

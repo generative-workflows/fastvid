@@ -1,85 +1,51 @@
 """Regression tests for the canonical evaluator's metric interchange."""
 
 from pathlib import Path
-import subprocess
-
 import pytest
 
 from scripts.evaluate import (
-    Sample,
-    assign_quality_scores,
-    concatenate_metric_videos,
-    load_manifest,
-    metric_pixel_format,
-    metric_raw,
-    quality_group_key,
-    run_ffmpeg,
+    Sample, assign_quality_scores, load_manifest, quality_group_key,
     samples_exceed_maximum,
 )
+from scripts.libvship_direct import _colorspace, libvship_version
+
 
 
 @pytest.mark.parametrize(
-    ("bit_depth", "expected"),
-    ((8, "yuv444p"), (10, "yuv444p10le"), (16, "yuv444p16le")),
+    ("format_name", "family", "matrix", "subw", "subh"),
+    (
+        ("yuv422", 0, 1, 1, 0),
+        ("rgb444", 1, 0, 0, 0),
+        ("gray", 1, 0, 0, 0),
+    ),
 )
-def test_metric_pixel_format_preserves_source_depth(bit_depth, expected):
-    assert metric_pixel_format(bit_depth) == expected
+def test_direct_colorspace_preserves_native_layout(
+    format_name, family, matrix, subw, subh,
+):
+    colorspace = _colorspace(1920, 1080, format_name, 10)
+    assert colorspace.width == 1920
+    assert colorspace.height == 1080
+    assert colorspace.sample == 5
+    assert colorspace.range == 1
+    assert colorspace.color_family == family
+    assert colorspace.yuv_matrix == matrix
+    assert colorspace.subsampling.subw == subw
+    assert colorspace.subsampling.subh == subh
 
 
-def test_gray16_metric_conversion_preserves_low_bits(tmp_path: Path):
-    """A one-LSB 16-bit difference must survive the metric conversion."""
-    sample = Sample(
-        id="gray16-lsb",
-        path=tmp_path / "unused.raw",
-        width=16,
-        height=16,
-        format="gray",
-        bit_depth=16,
-        tiers=("rejection",),
-    )
-    left = tmp_path / "left.raw"
-    right = tmp_path / "right.raw"
-    left_values = [30_000] * (16 * 16)
-    right_values = left_values.copy()
-    right_values[100] += 1
-    left.write_bytes(b"".join(value.to_bytes(2, "little") for value in left_values))
-    right.write_bytes(b"".join(value.to_bytes(2, "little") for value in right_values))
-    left_video = tmp_path / "left.mkv"
-    right_video = tmp_path / "right.mkv"
-    run_ffmpeg(left, left_video, sample, "ffmpeg")
-    run_ffmpeg(right, right_video, sample, "ffmpeg")
-
-    def decoded_bytes(video: Path) -> bytes:
-        return subprocess.run(
-            [
-                "ffmpeg", "-v", "error", "-i", str(video), "-frames:v", "1",
-                "-f", "rawvideo", "-pix_fmt", "yuv444p16le", "-",
-            ],
-            check=True,
-            capture_output=True,
-        ).stdout
-
-    assert decoded_bytes(left_video) != decoded_bytes(right_video)
+@pytest.mark.parametrize(("depth", "sample_type"), ((8, 2), (10, 5), (16, 11)))
+def test_direct_colorspace_preserves_bit_depth(depth, sample_type):
+    assert _colorspace(16, 16, "rgb444", depth).sample == sample_type
 
 
-def test_rgb_metric_raw_reorders_api_rgb_to_ffmpeg_gbr():
-    torch = pytest.importorskip("torch")
-    sample = Sample(
-        id="rgb-order",
-        path=Path("unused.raw"),
-        width=1,
-        height=1,
-        format="rgb444",
-        bit_depth=10,
-        tiers=("rejection",),
-    )
-    red = torch.tensor([[1]], dtype=torch.uint16)
-    green = torch.tensor([[2]], dtype=torch.uint16)
-    blue = torch.tensor([[3]], dtype=torch.uint16)
-    assert metric_raw((red, green, blue), sample) == (
-        b"\x02\x00\x03\x00\x01\x00"
-    )
 
+def test_installed_libvship_version_matches_direct_baseline():
+    library = Path("/usr/local/lib/fastvid-vship-5.0.0/libvship.so")
+    if not library.is_file():
+        pytest.skip("validated libvship unavailable")
+    assert libvship_version(library) == {
+        "major": 5, "minor": 0, "patch": 0, "backend": "CUDA",
+    }
 
 def test_sample_range_validation_is_linear_in_frame_planes():
     class FakePlane:
@@ -132,7 +98,7 @@ def test_manifest_accepts_multifile_batch_and_hashes(tmp_path: Path):
     assert len(samples[0].expected_sha256) == 2
 
 
-def test_quality_group_key_ignores_normalized_source_format():
+def test_reporting_group_key_ignores_native_source_format():
     sample = Sample(
         id="group", path=Path("unused.raw"), width=1920, height=1080,
         format="rgb444", bit_depth=10, tiers=("rejection",),
@@ -160,26 +126,33 @@ def test_consolidated_scores_map_back_to_sample_frames():
     assert results[1]["quality"]["minimum_ssimulacra2"] == 89.0
 
 
-def test_metric_segment_concatenation_preserves_frame_count(tmp_path: Path):
-    sample = Sample(
-        id="concat", path=tmp_path / "unused.raw", width=16, height=16,
-        format="gray", bit_depth=10, tiers=("rejection",),
+def test_direct_libvship_identical_and_perturbed_controls():
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA unavailable")
+    library = Path("/usr/local/lib/fastvid-vship-5.0.0/libvship.so")
+    if not library.is_file():
+        pytest.skip("validated libvship unavailable")
+    from scripts.libvship_direct import DirectVshipMetrics
+
+    source = tuple(
+        torch.full((256, 256), value, dtype=torch.uint16, device="cuda")
+        for value in (400, 500, 600)
     )
-    segments = []
-    for number, value in enumerate((100, 200)):
-        raw = tmp_path / f"segment-{number}.raw"
-        raw.write_bytes(value.to_bytes(2, "little") * (16 * 16))
-        video = tmp_path / f"segment-{number}.mkv"
-        run_ffmpeg(raw, video, sample, "ffmpeg")
-        segments.append(video)
-    output = tmp_path / "joined.mkv"
-    concatenate_metric_videos(segments, output, "ffmpeg", tmp_path)
-    probe = subprocess.run(
-        [
-            "ffprobe", "-v", "error", "-count_frames",
-            "-select_streams", "v:0", "-show_entries",
-            "stream=nb_read_frames", "-of", "default=nw=1:nk=1", str(output),
-        ],
-        check=True, capture_output=True, text=True,
+    perturbed = (
+        torch.full((256, 256), 408, dtype=torch.uint16, device="cuda"),
+        source[1].clone(), source[2].clone(),
     )
-    assert probe.stdout.strip() == "2"
+    with DirectVshipMetrics(
+        library, 256, 256, "rgb444", 10, gpu_id=0, workers=1,
+    ) as metrics:
+        identical_ssim, identical_butter = metrics.evaluate(
+            [source], [source], torch,
+        )
+        changed_ssim, changed_butter = metrics.evaluate(
+            [source], [perturbed], torch,
+        )
+    assert identical_ssim[0] > 90.0
+    assert identical_butter == [0.0]
+    assert changed_ssim[0] < identical_ssim[0]
+    assert changed_butter[0] > 0.0

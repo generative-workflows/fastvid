@@ -81,9 +81,11 @@ its own experiment before it is used to judge codec changes.
 
 ## Non-Negotiable Quality Gates
 
-Use FFVShip from [Vship](https://codeberg.org/Line-fr/Vship) for its
+Use the direct C API from [Vship](https://codeberg.org/Line-fr/Vship) for its
 GPU-accelerated SSIMULACRA2 and Butteraugli implementations. Pin the evaluated
-revision and record its build configuration.
+libvship revision, path, and build configuration. Pass original and fastvid
+roundtrip planes directly from memory; FFVShip, FFmpeg, FFMS2, media containers,
+and persisted metric intermediates are not part of canonical evaluation.
 
 For every decoded frame in every required format/depth case:
 
@@ -94,20 +96,22 @@ These are per-frame requirements. Corpus means, percentiles, or aggregate
 scores cannot hide a failing frame. Report the minimum SSIMULACRA2 score and
 maximum Butteraugli score in summaries, while retaining all per-frame results.
 
-Metric inputs must be produced by one documented, deterministic reference
-conversion path. Preserve the decoded format and depth until that conversion.
-The evaluator must also check dimensions, format metadata, frame count, decode
-success, and deterministic round trips before running perceptual metrics.
+Metric inputs are native-depth pinned-memory copies of the already-loaded
+canonical planes and the corresponding fastvid decoded planes. Describe YUV422
+as full-range BT.709 with left chroma location; describe RGB as full-range RGB
+with BT.709 transfer and primaries. Represent gray without altering samples by
+supplying its one plane as each of R, G, and B. Narrow the corpus's uint16
+container to uint8 only for declared 8-bit inputs; preserve uint16 samples for
+10-bit and 16-bit inputs.
 
-To amortize FFVShip startup and decoder/indexing cost, concatenate samples with
-identical width, height, and bit depth into one native-depth YUV444 metric
-sequence. Convert each source format through the documented path as a separate
-lossless segment before stream-copy concatenation. Invoke each perceptual metric
-once per compatible sequence, retain strict segment/frame order, and map every
-emitted score back to its original sample and frame. Codec correctness and CUDA
-timing remain per sample; batching metric calls must never turn the per-frame
-quality gates into aggregate gates. Process one compatibility group at a time so
-transient raw and lossless intermediates have bounded storage.
+Initialize persistent direct libvship handlers per resolution, format, and depth.
+Run SSIMULACRA2 and Butteraugli concurrently and allow independent handlers to
+process multiple frames in flight. Retain frame order and map every score back to
+its original sample and frame. The evaluator must check dimensions, format
+metadata, frame count, decode success, and deterministic round trips before
+running perceptual metrics. Codec correctness and CUDA timing remain per sample;
+metric parallelism must never turn the per-frame quality gates into aggregate
+gates.
 
 “Perceptually lossless” in this project means passing both gates above; it does
 not mean mathematically lossless.
