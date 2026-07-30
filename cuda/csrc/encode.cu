@@ -776,14 +776,14 @@ torch::Tensor fastvid_encode_cuda(
   const auto stream = at::cuda::getCurrentCUDAStream(device.index());
 
   const bool force_order0 = layout == 2 && (bit_depth != 10 || width < 3840);
-  auto run_analysis = [&](int32_t active_step, bool reset) {
+  auto run_analysis = [&](int32_t active_step, bool use_med, bool reset) {
     if (reset) {
       reconstructed.zero_();
       status.zero_();
     }
     predict_tiles_kernel<<<tiles.size(), 256, 0, stream>>>(
         source.data_ptr<uint16_t>(), tile_meta.data_ptr<int64_t>(), tiles.size(),
-        active_step, max_sample, layout != 0, reconstructed.data_ptr<uint16_t>(),
+        active_step, max_sample, use_med, reconstructed.data_ptr<uint16_t>(),
         folded.data_ptr<uint32_t>(), status.data_ptr<int32_t>());
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     if (!force_order0) {
@@ -809,18 +809,24 @@ torch::Tensor fastvid_encode_cuda(
     return result;
   };
 
-  auto analysis_cpu = run_analysis(step, false);
+  auto analysis_cpu = run_analysis(step, layout != 0, false);
   const auto* analysis_data = analysis_cpu.data_ptr<int64_t>();
   int64_t baseline_payload_bytes = 0;
   for (int64_t shard = 0; shard < total_shards; ++shard) {
     baseline_payload_bytes += analysis_data[shard * 8 + 3];
   }
+  const bool gray_med = layout == 0 && bit_depth == 10 && step > 1 &&
+      baseline_payload_bytes * 10 > total_samples * 3;
+  if (gray_med) {
+    analysis_cpu = run_analysis(step, true, true);
+    analysis_data = analysis_cpu.data_ptr<int64_t>();
+  }
   const bool refined_gray16 = layout == 0 && bit_depth == 16 && step > 1 &&
-      (baseline_payload_bytes < total_samples / 10 ||
+      (baseline_payload_bytes < total_samples / 5 ||
        baseline_payload_bytes > total_samples / 2);
   if (refined_gray16) {
     step = refined_gray16_step(quality);
-    analysis_cpu = run_analysis(step, true);
+    analysis_cpu = run_analysis(step, false, true);
     analysis_data = analysis_cpu.data_ptr<int64_t>();
   }
   std::vector<int64_t> tile_lengths(tiles.size(), 0);
@@ -852,7 +858,8 @@ torch::Tensor fastvid_encode_cuda(
   prefix.push_back(kBitstreamVersion);
   prefix.push_back(static_cast<uint8_t>(layout));
   prefix.push_back(static_cast<uint8_t>(quality));
-  prefix.push_back(static_cast<uint8_t>((bit_depth - 8) | (refined_gray16 ? 0x80 : 0)));
+  prefix.push_back(static_cast<uint8_t>(
+      (bit_depth - 8) | (gray_med ? 0x40 : 0) | (refined_gray16 ? 0x80 : 0)));
   put_u32(prefix, static_cast<uint32_t>(width));
   put_u32(prefix, static_cast<uint32_t>(height));
   put_u16(prefix, static_cast<uint16_t>(tile_width));

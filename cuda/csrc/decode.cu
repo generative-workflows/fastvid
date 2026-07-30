@@ -667,6 +667,7 @@ std::vector<torch::Tensor> fastvid_decode_cuda(
     int64_t step,
     int64_t max_sample,
     bool grayscale,
+    bool use_med,
     bool wavefront) {
   c10::cuda::CUDAGuard guard(encoded.device());
   auto folded = torch::empty({total_samples}, encoded.options().dtype(torch::kUInt32));
@@ -694,7 +695,7 @@ std::vector<torch::Tensor> fastvid_decode_cuda(
         tile_meta.size(0),
         static_cast<int32_t>(step),
         static_cast<int32_t>(max_sample),
-        !grayscale,
+        use_med,
         output.data_ptr<uint16_t>());
   } else {
     constexpr int threads = 256;
@@ -705,7 +706,7 @@ std::vector<torch::Tensor> fastvid_decode_cuda(
         tile_meta.size(0),
         static_cast<int32_t>(step),
         static_cast<int32_t>(max_sample),
-        !grayscale,
+        use_med,
         output.data_ptr<uint16_t>());
   }
   C10_CUDA_KERNEL_LAUNCH_CHECK();

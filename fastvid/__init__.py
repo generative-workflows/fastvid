@@ -80,7 +80,7 @@ def inspect(encoded) -> dict[str, int | str]:
         "width": width,
         "height": height,
         "format": _LAYOUT_TO_FORMAT[layout],
-        "bit_depth": (header[7] & 0x7F) + 8,
+        "bit_depth": (header[7] & 0x3F) + 8,
         "frame_count": 1,
         "metadata_bytes": 32 + tile_count * 32,
         "container_overhead_bytes": 0,

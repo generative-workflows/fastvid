@@ -23,6 +23,7 @@ std::vector<torch::Tensor> fastvid_decode_cuda(
     int64_t step,
     int64_t max_sample,
     bool grayscale,
+    bool use_med,
     bool wavefront);
 
 torch::Tensor fastvid_encode_cuda(
@@ -157,11 +158,14 @@ std::vector<torch::Tensor> decode(torch::Tensor encoded, bool wavefront) {
   const int64_t quality = bytes[6];
   TORCH_CHECK(quality >= 1 && quality <= 100, "quality is out of range");
   const bool refined_gray16 = (bytes[7] & 0x80) != 0;
-  const int64_t bit_depth = static_cast<int64_t>(bytes[7] & 0x7f) + 8;
+  const bool gray_med = (bytes[7] & 0x40) != 0;
+  const int64_t bit_depth = static_cast<int64_t>(bytes[7] & 0x3f) + 8;
   TORCH_CHECK(bit_depth == 8 || bit_depth == 10 || bit_depth == 12 || bit_depth == 16,
               "unsupported high-bit depth");
   TORCH_CHECK(!refined_gray16 || (grayscale && bit_depth == 16 && quality < 100),
               "invalid gray16 refinement flag");
+  TORCH_CHECK(!gray_med || (grayscale && bit_depth == 10 && quality < 100),
+              "invalid gray MED flag");
   const int64_t width = read_u32(bytes, size, 8);
   const int64_t height = read_u32(bytes, size, 12);
   const int64_t tile_width = read_u16(bytes, size, 16);
@@ -244,6 +248,7 @@ std::vector<torch::Tensor> decode(torch::Tensor encoded, bool wavefront) {
         step,
         max_sample,
         grayscale,
+        gray_med || !grayscale,
         wavefront);
   }
 
@@ -347,6 +352,7 @@ std::vector<torch::Tensor> decode(torch::Tensor encoded, bool wavefront) {
       step,
       max_sample,
       grayscale,
+      gray_med || !grayscale,
       wavefront);
 }
 
