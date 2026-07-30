@@ -6,3 +6,4 @@
 *.yuv
 __pycache__/
 *.pyc
+/evaluation_results/
