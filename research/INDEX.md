@@ -93,3 +93,4 @@ before entering the format.
 | [0046](0046-gpu-neural-intra-compression.md) | PILC, checkerboard context, ELIC, DLIC, RAWIC, CompressAI | GPU neural-codec throughput limits and a bounded learned entropy branch | Reviewed |
 | [0047](0047-routes-to-ten-x-intra-compression.md) | JPEG AI, PICO, wavelet LIC, spatial quality maps, LVQAC, JND optimization | Ranked neural and conventional routes from 6.2x toward 10x | Reviewed |
 | [0048](0048-corrected-butteraugli-frontier.md) | Corrected 80-nit Butteraugli canonical measurements | Supersedes metric-dependent 10x-frontier conclusions and motivates adaptive allocation | Reviewed |
+| [0049](0049-multi-generation-quantization-drift.md) | Straight quantization, JPEG XS, idempotent H.264 intra | Fixed reconstruction lattices for edit/recompression robustness | Reviewed |
