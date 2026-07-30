@@ -551,6 +551,7 @@ __global__ void reconstruct_tiles_kernel(
     int64_t tile_count,
     int32_t step,
     int32_t max_sample,
+    bool use_med,
     uint16_t* output) {
   const int64_t tile = blockIdx.x;
   if (tile >= tile_count) {
@@ -576,9 +577,21 @@ __global__ void reconstruct_tiles_kernel(
       const uint16_t left = x > 0 ? output[destination - 1] : 0;
       const uint16_t above = y > 0 ? output[destination - plane_width] : 0;
       const uint16_t upper_left = x > 0 && y > 0 ? output[destination - plane_width - 1] : 0;
-      int32_t prediction = static_cast<int32_t>(left) + static_cast<int32_t>(above) -
-          static_cast<int32_t>(upper_left);
-      prediction = max(0, min(max_sample, prediction));
+      int32_t prediction;
+      if (use_med) {
+        if (upper_left >= max(left, above)) {
+          prediction = min(left, above);
+        } else if (upper_left <= min(left, above)) {
+          prediction = max(left, above);
+        } else {
+          prediction = static_cast<int32_t>(left) + static_cast<int32_t>(above) -
+              static_cast<int32_t>(upper_left);
+        }
+      } else {
+        prediction = static_cast<int32_t>(left) + static_cast<int32_t>(above) -
+            static_cast<int32_t>(upper_left);
+        prediction = max(0, min(max_sample, prediction));
+      }
       int32_t reconstructed = prediction +
           unzigzag(folded[folded_base + y * width + x]) * step;
       reconstructed = max(0, min(max_sample, reconstructed));
@@ -594,6 +607,7 @@ __global__ void reconstruct_tiles_serial_kernel(
     int64_t tile_count,
     int32_t step,
     int32_t max_sample,
+    bool use_med,
     uint16_t* output) {
   const int64_t tile = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (tile >= tile_count) {
@@ -612,9 +626,21 @@ __global__ void reconstruct_tiles_serial_kernel(
     for (int64_t x = 0; x < width; ++x) {
       const int64_t destination = plane_base + (origin_y + y) * plane_width + origin_x + x;
       const uint16_t above = y > 0 ? output[destination - plane_width] : 0;
-      int32_t prediction = static_cast<int32_t>(left) + static_cast<int32_t>(above) -
-          static_cast<int32_t>(upper_left);
-      prediction = max(0, min(max_sample, prediction));
+      int32_t prediction;
+      if (use_med) {
+        if (upper_left >= max(left, above)) {
+          prediction = min(left, above);
+        } else if (upper_left <= min(left, above)) {
+          prediction = max(left, above);
+        } else {
+          prediction = static_cast<int32_t>(left) + static_cast<int32_t>(above) -
+              static_cast<int32_t>(upper_left);
+        }
+      } else {
+        prediction = static_cast<int32_t>(left) + static_cast<int32_t>(above) -
+            static_cast<int32_t>(upper_left);
+        prediction = max(0, min(max_sample, prediction));
+      }
       int32_t reconstructed = prediction +
           unzigzag(folded[folded_base + y * width + x]) * step;
       reconstructed = max(0, min(max_sample, reconstructed));
@@ -668,6 +694,7 @@ std::vector<torch::Tensor> fastvid_decode_cuda(
         tile_meta.size(0),
         static_cast<int32_t>(step),
         static_cast<int32_t>(max_sample),
+        !grayscale,
         output.data_ptr<uint16_t>());
   } else {
     constexpr int threads = 256;
@@ -678,6 +705,7 @@ std::vector<torch::Tensor> fastvid_decode_cuda(
         tile_meta.size(0),
         static_cast<int32_t>(step),
         static_cast<int32_t>(max_sample),
+        !grayscale,
         output.data_ptr<uint16_t>());
   }
   C10_CUDA_KERNEL_LAUNCH_CHECK();

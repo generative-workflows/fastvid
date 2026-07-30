@@ -69,14 +69,14 @@ std::vector<Tile> expected_tiles(
 }
 
 int32_t quantization_step(int64_t layout, int64_t bit_depth, int64_t quality) {
-  if (layout == 0 && bit_depth == 8) {
+  if ((layout == 0 && bit_depth == 8) || (layout == 1 && bit_depth == 8)) {
     return 1;
   }
   int32_t denominator = 6;
   if (layout == 1 && bit_depth == 10) {
     denominator = 20;
   } else if (layout == 1 && bit_depth == 16) {
-    denominator = 12;
+    denominator = 24;
   } else if (layout == 2 && bit_depth == 10) {
     denominator = 10;
   }
@@ -127,6 +127,7 @@ __global__ void predict_tiles_kernel(
     int64_t tile_count,
     int32_t step,
     int32_t max_sample,
+    bool use_med,
     uint16_t* reconstructed,
     uint32_t* folded,
     int32_t* status) {
@@ -160,9 +161,21 @@ __global__ void predict_tiles_kernel(
       const uint16_t upper_left = x > 0 && y > 0
           ? reconstructed[index - plane_width - 1]
           : 0;
-      int32_t prediction = static_cast<int32_t>(left) + static_cast<int32_t>(above) -
-          static_cast<int32_t>(upper_left);
-      prediction = max(0, min(max_sample, prediction));
+      int32_t prediction;
+      if (use_med) {
+        if (upper_left >= max(left, above)) {
+          prediction = min(left, above);
+        } else if (upper_left <= min(left, above)) {
+          prediction = max(left, above);
+        } else {
+          prediction = static_cast<int32_t>(left) + static_cast<int32_t>(above) -
+              static_cast<int32_t>(upper_left);
+        }
+      } else {
+        prediction = static_cast<int32_t>(left) + static_cast<int32_t>(above) -
+            static_cast<int32_t>(upper_left);
+        prediction = max(0, min(max_sample, prediction));
+      }
       const int32_t residual = static_cast<int32_t>(sample) - prediction;
       const int32_t magnitude = (abs(residual) + step / 2) / step;
       const int32_t quantized = residual < 0 ? -magnitude : magnitude;
@@ -760,7 +773,7 @@ torch::Tensor fastvid_encode_cuda(
 
   predict_tiles_kernel<<<tiles.size(), 256, 0, stream>>>(
       source.data_ptr<uint16_t>(), tile_meta.data_ptr<int64_t>(), tiles.size(),
-      step, max_sample, reconstructed.data_ptr<uint16_t>(), folded.data_ptr<uint32_t>(),
+      step, max_sample, layout != 0, reconstructed.data_ptr<uint16_t>(), folded.data_ptr<uint32_t>(),
       status.data_ptr<int32_t>());
   C10_CUDA_KERNEL_LAUNCH_CHECK();
   const bool force_order0 = layout == 2;
