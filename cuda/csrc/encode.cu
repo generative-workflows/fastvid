@@ -84,17 +84,6 @@ int32_t quantization_step(int64_t layout, int64_t bit_depth, int64_t quality) {
   return 1 + ((100 - quality) * scale + denominator - 1) / denominator;
 }
 
-int32_t repair_quantization_step(int64_t layout, int64_t bit_depth, int64_t quality) {
-  if (bit_depth == 8) return 1;
-  int32_t denominator = 12;
-  if (layout == 0 && bit_depth == 10) denominator = 24;
-  else if (layout == 1 && bit_depth == 10) denominator = 40;
-  else if (layout == 1 && bit_depth == 16) denominator = 24;
-  else if (layout == 2 && bit_depth == 10) denominator = 20;
-  const int32_t scale = int32_t{1} << (bit_depth - 8);
-  return 1 + ((100 - quality) * scale + denominator - 1) / denominator;
-}
-
 void put_u16(std::vector<uint8_t>& output, uint16_t value) {
   output.push_back(static_cast<uint8_t>(value));
   output.push_back(static_cast<uint8_t>(value >> 8));
@@ -136,12 +125,7 @@ __global__ void predict_tiles_kernel(
     const uint16_t* source,
     const int64_t* metadata,
     int64_t tile_count,
-    int32_t base_step,
-    int32_t fine_step,
-    int32_t coarse_step,
-    int32_t fine_activity,
-    int32_t coarse_activity,
-    uint8_t* tile_classes,
+    int32_t step,
     int32_t max_sample,
     uint16_t* reconstructed,
     uint32_t* folded,
@@ -157,38 +141,6 @@ __global__ void predict_tiles_kernel(
   const int64_t width = metadata[tile * 7 + 4];
   const int64_t height = metadata[tile * 7 + 5];
   const int64_t folded_base = metadata[tile * 7 + 6];
-
-  uint8_t tile_class = tile_classes[tile];
-  if (tile_class == 4) {
-    __shared__ unsigned long long activity_sum;
-    if (threadIdx.x == 0) activity_sum = 0;
-    __syncthreads();
-    unsigned long long local_sum = 0;
-    const int64_t samples = width * height;
-    for (int64_t i = threadIdx.x; i < samples; i += blockDim.x) {
-      const int64_t y = i / width;
-      const int64_t x = i - y * width;
-      const int64_t index = plane_base + (origin_y + y) * plane_width + origin_x + x;
-      const int32_t sample = source[index];
-      if (x + 1 < width) local_sum += abs(sample - static_cast<int32_t>(source[index + 1]));
-      if (y + 1 < height) local_sum += abs(sample - static_cast<int32_t>(source[index + plane_width]));
-    }
-    atomicAdd(&activity_sum, local_sum);
-    __syncthreads();
-    if (threadIdx.x == 0) {
-      const unsigned long long edges =
-          static_cast<unsigned long long>(height) * (width - 1) +
-          static_cast<unsigned long long>(height - 1) * width;
-      tile_classes[tile] = edges == 0 || activity_sum <
-              static_cast<unsigned long long>(fine_activity) * edges
-          ? 2
-          : (activity_sum >= static_cast<unsigned long long>(coarse_activity) * edges ? 3 : 0);
-    }
-    __syncthreads();
-    tile_class = tile_classes[tile];
-  }
-  const int32_t step = tile_class == 1 ? 1 :
-      (tile_class == 2 ? fine_step : (tile_class == 3 ? coarse_step : base_step));
 
   for (int64_t diagonal = 0; diagonal < width + height - 1; ++diagonal) {
     const int64_t diagonal_begin = diagonal - width + 1;
@@ -802,24 +754,13 @@ torch::Tensor fastvid_encode_cuda(
   auto rans_scratch = torch::empty({total_shards, 10240}, source.options().dtype(torch::kUInt8));
   auto rans_states = torch::empty({total_shards, 4}, source.options().dtype(torch::kUInt32));
   auto status = torch::zeros({1}, source.options().dtype(torch::kInt32));
-  const int32_t base_step = quantization_step(layout, bit_depth, quality);
-  const int32_t scale = int32_t{1} << (bit_depth - 8);
-  const int32_t fine_step = repair_quantization_step(layout, bit_depth, quality);
-  const int32_t coarse_step = base_step * 2 - 1;
-  const int32_t fine_activity = 2 * scale;
-  const int32_t coarse_activity = 6 * scale;
-  const uint8_t initial_class = 4;
-  auto tile_classes = torch::full(
-      {static_cast<int64_t>(tiles.size())}, initial_class,
-      source.options().dtype(torch::kUInt8));
+  const int32_t step = quantization_step(layout, bit_depth, quality);
   const int32_t max_sample = (int32_t{1} << bit_depth) - 1;
   const auto stream = at::cuda::getCurrentCUDAStream(device.index());
 
   predict_tiles_kernel<<<tiles.size(), 256, 0, stream>>>(
       source.data_ptr<uint16_t>(), tile_meta.data_ptr<int64_t>(), tiles.size(),
-      base_step, fine_step, coarse_step, fine_activity, coarse_activity,
-      tile_classes.data_ptr<uint8_t>(),
-      max_sample, reconstructed.data_ptr<uint16_t>(), folded.data_ptr<uint32_t>(),
+      step, max_sample, reconstructed.data_ptr<uint16_t>(), folded.data_ptr<uint32_t>(),
       status.data_ptr<int32_t>());
   C10_CUDA_KERNEL_LAUNCH_CHECK();
   const bool force_order0 = layout == 2;
@@ -841,7 +782,6 @@ torch::Tensor fastvid_encode_cuda(
     C10_CUDA_KERNEL_LAUNCH_CHECK();
   }
   auto analysis_cpu = analysis.cpu();
-  auto tile_classes_cpu = tile_classes.cpu();
   const int32_t host_status = status.cpu().item<int32_t>();
   TORCH_CHECK(host_status == 0, "CUDA encoder analysis failed (status ", host_status, ")");
   const auto* analysis_data = analysis_cpu.data_ptr<int64_t>();
@@ -888,7 +828,7 @@ torch::Tensor fastvid_encode_cuda(
     prefix.push_back(static_cast<uint8_t>(tile.plane));
     prefix.push_back(kEntropyParallelShards);
     prefix.push_back(kPredictFullTileClampGradient);
-    prefix.push_back(tile_classes_cpu.data_ptr<uint8_t>()[tile_index]);
+    prefix.push_back(0);
     put_u32(prefix, static_cast<uint32_t>(tile.x));
     put_u32(prefix, static_cast<uint32_t>(tile.y));
     put_u32(prefix, static_cast<uint32_t>(tile.width));
