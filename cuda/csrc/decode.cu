@@ -576,13 +576,12 @@ __global__ void reconstruct_tiles_kernel(
       const uint16_t left = x > 0 ? output[destination - 1] : 0;
       const uint16_t above = y > 0 ? output[destination - plane_width] : 0;
       const uint16_t upper_left = x > 0 && y > 0 ? output[destination - plane_width - 1] : 0;
-      const int32_t max_quantized = (max_sample + step - 1) / step;
       int32_t prediction = static_cast<int32_t>(left) + static_cast<int32_t>(above) -
           static_cast<int32_t>(upper_left);
-      prediction = max(0, min(max_quantized, prediction));
+      prediction = max(0, min(max_sample, prediction));
       int32_t reconstructed = prediction +
-          unzigzag(folded[folded_base + y * width + x]);
-      reconstructed = max(0, min(max_quantized, reconstructed));
+          unzigzag(folded[folded_base + y * width + x]) * step;
+      reconstructed = max(0, min(max_sample, reconstructed));
       output[destination] = static_cast<uint16_t>(reconstructed);
     }
     __syncthreads();
@@ -613,27 +612,16 @@ __global__ void reconstruct_tiles_serial_kernel(
     for (int64_t x = 0; x < width; ++x) {
       const int64_t destination = plane_base + (origin_y + y) * plane_width + origin_x + x;
       const uint16_t above = y > 0 ? output[destination - plane_width] : 0;
-      const int32_t max_quantized = (max_sample + step - 1) / step;
       int32_t prediction = static_cast<int32_t>(left) + static_cast<int32_t>(above) -
           static_cast<int32_t>(upper_left);
-      prediction = max(0, min(max_quantized, prediction));
+      prediction = max(0, min(max_sample, prediction));
       int32_t reconstructed = prediction +
-          unzigzag(folded[folded_base + y * width + x]);
-      reconstructed = max(0, min(max_quantized, reconstructed));
+          unzigzag(folded[folded_base + y * width + x]) * step;
+      reconstructed = max(0, min(max_sample, reconstructed));
       output[destination] = static_cast<uint16_t>(reconstructed);
       upper_left = above;
       left = static_cast<uint16_t>(reconstructed);
     }
-  }
-}
-
-__global__ void scale_quantized_kernel(
-    const uint16_t* quantized, int64_t count, int32_t step, int32_t max_sample,
-    uint16_t* output) {
-  const int64_t index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (index < count) {
-    output[index] = static_cast<uint16_t>(
-        min(max_sample, static_cast<int32_t>(quantized[index]) * step));
   }
 }
 
@@ -656,7 +644,6 @@ std::vector<torch::Tensor> fastvid_decode_cuda(
     bool wavefront) {
   c10::cuda::CUDAGuard guard(encoded.device());
   auto folded = torch::empty({total_samples}, encoded.options().dtype(torch::kUInt32));
-  auto quantized = torch::empty({total_samples}, encoded.options().dtype(torch::kUInt16));
   auto output = torch::empty({total_samples}, encoded.options().dtype(torch::kUInt16));
   auto status = torch::zeros({1}, encoded.options().dtype(torch::kInt32));
   const auto stream = at::cuda::getCurrentCUDAStream(encoded.device().index());
@@ -681,7 +668,7 @@ std::vector<torch::Tensor> fastvid_decode_cuda(
         tile_meta.size(0),
         static_cast<int32_t>(step),
         static_cast<int32_t>(max_sample),
-        quantized.data_ptr<uint16_t>());
+        output.data_ptr<uint16_t>());
   } else {
     constexpr int threads = 256;
     const int blocks = static_cast<int>((tile_meta.size(0) + threads - 1) / threads);
@@ -691,14 +678,8 @@ std::vector<torch::Tensor> fastvid_decode_cuda(
         tile_meta.size(0),
         static_cast<int32_t>(step),
         static_cast<int32_t>(max_sample),
-        quantized.data_ptr<uint16_t>());
+        output.data_ptr<uint16_t>());
   }
-  C10_CUDA_KERNEL_LAUNCH_CHECK();
-  constexpr int scale_threads = 256;
-  const int scale_blocks = static_cast<int>((total_samples + scale_threads - 1) / scale_threads);
-  scale_quantized_kernel<<<scale_blocks, scale_threads, 0, stream>>>(
-      quantized.data_ptr<uint16_t>(), total_samples, static_cast<int32_t>(step),
-      static_cast<int32_t>(max_sample), output.data_ptr<uint16_t>());
   C10_CUDA_KERNEL_LAUNCH_CHECK();
 
   const int32_t host_status = status.cpu().item<int32_t>();
