@@ -84,6 +84,10 @@ int32_t quantization_step(int64_t layout, int64_t bit_depth, int64_t quality) {
   return 1 + ((100 - quality) * scale + denominator - 1) / denominator;
 }
 
+int32_t refined_gray16_step(int64_t quality) {
+  return 1 + ((100 - quality) * 256 + 7) / 8;
+}
+
 void put_u16(std::vector<uint8_t>& output, uint16_t value) {
   output.push_back(static_cast<uint8_t>(value));
   output.push_back(static_cast<uint8_t>(value >> 8));
@@ -767,37 +771,58 @@ torch::Tensor fastvid_encode_cuda(
   auto rans_scratch = torch::empty({total_shards, 10240}, source.options().dtype(torch::kUInt8));
   auto rans_states = torch::empty({total_shards, 4}, source.options().dtype(torch::kUInt32));
   auto status = torch::zeros({1}, source.options().dtype(torch::kInt32));
-  const int32_t step = quantization_step(layout, bit_depth, quality);
+  int32_t step = quantization_step(layout, bit_depth, quality);
   const int32_t max_sample = (int32_t{1} << bit_depth) - 1;
   const auto stream = at::cuda::getCurrentCUDAStream(device.index());
 
-  predict_tiles_kernel<<<tiles.size(), 256, 0, stream>>>(
-      source.data_ptr<uint16_t>(), tile_meta.data_ptr<int64_t>(), tiles.size(),
-      step, max_sample, layout != 0, reconstructed.data_ptr<uint16_t>(), folded.data_ptr<uint32_t>(),
-      status.data_ptr<int32_t>());
-  C10_CUDA_KERNEL_LAUNCH_CHECK();
-  const bool force_order0 = layout == 2;
-  if (!force_order0) {
-    analyze_shards_kernel<<<total_shards, 128, 0, stream>>>(
-        folded.data_ptr<uint32_t>(), shard_meta.data_ptr<int64_t>(), total_shards,
-        analysis.data_ptr<int64_t>(), status.data_ptr<int32_t>(), force_order0);
+  const bool force_order0 = layout == 2 && (bit_depth != 10 || width < 3840);
+  auto run_analysis = [&](int32_t active_step, bool reset) {
+    if (reset) {
+      reconstructed.zero_();
+      status.zero_();
+    }
+    predict_tiles_kernel<<<tiles.size(), 256, 0, stream>>>(
+        source.data_ptr<uint16_t>(), tile_meta.data_ptr<int64_t>(), tiles.size(),
+        active_step, max_sample, layout != 0, reconstructed.data_ptr<uint16_t>(),
+        folded.data_ptr<uint32_t>(), status.data_ptr<int32_t>());
     C10_CUDA_KERNEL_LAUNCH_CHECK();
-  }
-  analyze_order0_shards_kernel<<<total_shards, 128, 0, stream>>>(
-      folded.data_ptr<uint32_t>(), shard_meta.data_ptr<int64_t>(), total_shards,
-      analysis.data_ptr<int64_t>(), rans_scratch.data_ptr<uint8_t>(),
-      rans_states.data_ptr<uint32_t>(), force_order0);
-  C10_CUDA_KERNEL_LAUNCH_CHECK();
-  if (force_order0) {
-    analyze_shards_kernel<<<total_shards, 128, 0, stream>>>(
+    if (!force_order0) {
+      analyze_shards_kernel<<<total_shards, 128, 0, stream>>>(
+          folded.data_ptr<uint32_t>(), shard_meta.data_ptr<int64_t>(), total_shards,
+          analysis.data_ptr<int64_t>(), status.data_ptr<int32_t>(), force_order0);
+      C10_CUDA_KERNEL_LAUNCH_CHECK();
+    }
+    analyze_order0_shards_kernel<<<total_shards, 128, 0, stream>>>(
         folded.data_ptr<uint32_t>(), shard_meta.data_ptr<int64_t>(), total_shards,
-        analysis.data_ptr<int64_t>(), status.data_ptr<int32_t>(), force_order0);
+        analysis.data_ptr<int64_t>(), rans_scratch.data_ptr<uint8_t>(),
+        rans_states.data_ptr<uint32_t>(), force_order0);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
-  }
-  auto analysis_cpu = analysis.cpu();
-  const int32_t host_status = status.cpu().item<int32_t>();
-  TORCH_CHECK(host_status == 0, "CUDA encoder analysis failed (status ", host_status, ")");
+    if (force_order0) {
+      analyze_shards_kernel<<<total_shards, 128, 0, stream>>>(
+          folded.data_ptr<uint32_t>(), shard_meta.data_ptr<int64_t>(), total_shards,
+          analysis.data_ptr<int64_t>(), status.data_ptr<int32_t>(), force_order0);
+      C10_CUDA_KERNEL_LAUNCH_CHECK();
+    }
+    auto result = analysis.cpu();
+    const int32_t host_status = status.cpu().item<int32_t>();
+    TORCH_CHECK(host_status == 0, "CUDA encoder analysis failed (status ", host_status, ")");
+    return result;
+  };
+
+  auto analysis_cpu = run_analysis(step, false);
   const auto* analysis_data = analysis_cpu.data_ptr<int64_t>();
+  int64_t baseline_payload_bytes = 0;
+  for (int64_t shard = 0; shard < total_shards; ++shard) {
+    baseline_payload_bytes += analysis_data[shard * 8 + 3];
+  }
+  const bool refined_gray16 = layout == 0 && bit_depth == 16 && step > 1 &&
+      (baseline_payload_bytes < total_samples / 10 ||
+       baseline_payload_bytes > total_samples / 2);
+  if (refined_gray16) {
+    step = refined_gray16_step(quality);
+    analysis_cpu = run_analysis(step, true);
+    analysis_data = analysis_cpu.data_ptr<int64_t>();
+  }
   std::vector<int64_t> tile_lengths(tiles.size(), 0);
   std::vector<int64_t> block_shards;
   for (int64_t shard = 0; shard < total_shards; ++shard) {
@@ -827,7 +852,7 @@ torch::Tensor fastvid_encode_cuda(
   prefix.push_back(kBitstreamVersion);
   prefix.push_back(static_cast<uint8_t>(layout));
   prefix.push_back(static_cast<uint8_t>(quality));
-  prefix.push_back(static_cast<uint8_t>(bit_depth - 8));
+  prefix.push_back(static_cast<uint8_t>((bit_depth - 8) | (refined_gray16 ? 0x80 : 0)));
   put_u32(prefix, static_cast<uint32_t>(width));
   put_u32(prefix, static_cast<uint32_t>(height));
   put_u16(prefix, static_cast<uint16_t>(tile_width));

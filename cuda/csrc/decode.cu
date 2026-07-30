@@ -688,7 +688,7 @@ std::vector<torch::Tensor> fastvid_decode_cuda(
       status.data_ptr<int32_t>());
   C10_CUDA_KERNEL_LAUNCH_CHECK();
   if (wavefront) {
-    reconstruct_tiles_kernel<<<tile_meta.size(0), 256, 0, stream>>>(
+    reconstruct_tiles_kernel<<<tile_meta.size(0), 128, 0, stream>>>(
         folded.data_ptr<uint32_t>(),
         tile_meta.data_ptr<int64_t>(),
         tile_meta.size(0),

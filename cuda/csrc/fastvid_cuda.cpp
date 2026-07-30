@@ -60,6 +60,10 @@ int64_t quantization_step(int64_t layout, int64_t bit_depth, int64_t quality) {
   return 1 + ((100 - quality) * scale + denominator - 1) / denominator;
 }
 
+int64_t refined_gray16_step(int64_t quality) {
+  return 1 + ((100 - quality) * 256 + 7) / 8;
+}
+
 uint16_t read_u16(const uint8_t* bytes, int64_t size, int64_t offset) {
   TORCH_CHECK(offset >= 0 && offset + 2 <= size, "truncated little-endian u16");
   return static_cast<uint16_t>(bytes[offset]) |
@@ -152,9 +156,12 @@ std::vector<torch::Tensor> decode(torch::Tensor encoded, bool wavefront) {
   const bool grayscale = layout == 0;
   const int64_t quality = bytes[6];
   TORCH_CHECK(quality >= 1 && quality <= 100, "quality is out of range");
-  const int64_t bit_depth = static_cast<int64_t>(bytes[7]) + 8;
+  const bool refined_gray16 = (bytes[7] & 0x80) != 0;
+  const int64_t bit_depth = static_cast<int64_t>(bytes[7] & 0x7f) + 8;
   TORCH_CHECK(bit_depth == 8 || bit_depth == 10 || bit_depth == 12 || bit_depth == 16,
               "unsupported high-bit depth");
+  TORCH_CHECK(!refined_gray16 || (grayscale && bit_depth == 16 && quality < 100),
+              "invalid gray16 refinement flag");
   const int64_t width = read_u32(bytes, size, 8);
   const int64_t height = read_u32(bytes, size, 12);
   const int64_t tile_width = read_u16(bytes, size, 16);
@@ -220,7 +227,8 @@ std::vector<torch::Tensor> decode(torch::Tensor encoded, bool wavefront) {
     }
     auto shard_meta_cuda = torch::empty(
         {geometry.total_shards, 5}, device_encoded.options().dtype(torch::kInt64));
-    const int64_t step = quantization_step(layout, bit_depth, quality);
+    const int64_t step = refined_gray16 ? refined_gray16_step(quality)
+                                        : quantization_step(layout, bit_depth, quality);
     const int64_t max_sample = (int64_t{1} << bit_depth) - 1;
     return fastvid_decode_cuda(
         device_encoded,
@@ -322,7 +330,8 @@ std::vector<torch::Tensor> decode(torch::Tensor encoded, bool wavefront) {
   auto device_encoded = encoded.is_cuda() ? encoded.contiguous() : encoded.to(torch::kCUDA);
   auto shard_meta_cuda = shard_meta_cpu.to(device_encoded.device());
   auto tile_meta_cuda = tile_meta_cpu.to(device_encoded.device());
-  const int64_t step = quantization_step(layout, bit_depth, quality);
+  const int64_t step = refined_gray16 ? refined_gray16_step(quality)
+                                      : quantization_step(layout, bit_depth, quality);
   const int64_t max_sample = (int64_t{1} << bit_depth) - 1;
   return fastvid_decode_cuda(
       device_encoded,
