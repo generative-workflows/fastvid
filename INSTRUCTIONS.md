@@ -62,17 +62,20 @@ For each codec idea:
 2. Record the baseline by running the canonical rejection tier.
 3. Make one attributable change.
 4. Run the canonical rejection tier with exactly the same settings.
-5. Reject immediately on any correctness, coverage, quality, or speed failure.
-6. If it passes and improves compression, run the canonical full tier.
-7. Accept only if the full tier passes every gate and improves total encoded
-   corpus size against the recorded baseline.
+5. Apply the **Acceptance Criteria**.
+6. If the candidate satisfies those criteria, run matching baseline and unchanged-candidate full-tier evaluations.
+7. Apply the **Acceptance Criteria** to the full-tier artifacts. Only the full-tier comparison can establish acceptance.
 8. Record the result, including failures and artifact paths, before starting
    the next experiment.
-9. Commit between experiments.
+9. Make a single commit per experiment, including all research, experiment logs, and code changes from that experiment.
+
+### Acceptance Criteria
 
 No result is valid unless it was produced by `scripts/evaluate.py`. Profilers
 and microbenchmarks may diagnose a result, but they cannot replace the
 canonical evaluator or establish acceptance.
+
+Reject any candidate that fails a correctness, coverage, determinism, or performance gate. Only when the recorded baseline is failing, a candidate may be accepted as long as it strictly reduces worst-case quality violation, introduces no new failures or regressions, and does not increase total compressed size.
 
 ## Research and Experiment Records
 
