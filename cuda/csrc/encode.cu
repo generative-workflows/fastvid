@@ -69,19 +69,7 @@ std::vector<Tile> expected_tiles(
 }
 
 int32_t quantization_step(int64_t layout, int64_t bit_depth, int64_t quality) {
-  if (layout == 0 && bit_depth == 8) {
-    return 1;
-  }
-  int32_t denominator = 6;
-  if (layout == 1 && bit_depth == 10) {
-    denominator = 20;
-  } else if (layout == 1 && bit_depth == 16) {
-    denominator = 12;
-  } else if (layout == 2 && bit_depth == 10) {
-    denominator = 10;
-  }
-  const int32_t scale = int32_t{1} << (bit_depth - 8);
-  return 1 + ((100 - quality) * scale + denominator - 1) / denominator;
+  return 1;
 }
 
 void put_u16(std::vector<uint8_t>& output, uint16_t value) {
@@ -763,7 +751,7 @@ torch::Tensor fastvid_encode_cuda(
       step, max_sample, reconstructed.data_ptr<uint16_t>(), folded.data_ptr<uint32_t>(),
       status.data_ptr<int32_t>());
   C10_CUDA_KERNEL_LAUNCH_CHECK();
-  const bool force_order0 = layout == 2;
+  const bool force_order0 = false;
   if (!force_order0) {
     analyze_shards_kernel<<<total_shards, 128, 0, stream>>>(
         folded.data_ptr<uint32_t>(), shard_meta.data_ptr<int64_t>(), total_shards,
