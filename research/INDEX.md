@@ -94,3 +94,4 @@ before entering the format.
 | [0047](0047-routes-to-ten-x-intra-compression.md) | JPEG AI, PICO, wavelet LIC, spatial quality maps, LVQAC, JND optimization | Ranked neural and conventional routes from 6.2x toward 10x | Reviewed |
 | [0048](0048-corrected-butteraugli-frontier.md) | Corrected 80-nit Butteraugli canonical measurements | Supersedes metric-dependent 10x-frontier conclusions and motivates adaptive allocation | Reviewed |
 | [0049](0049-multi-generation-quantization-drift.md) | Straight quantization, JPEG XS, idempotent H.264 intra | Fixed reconstruction lattices for edit/recompression robustness | Reviewed |
+| [0050](0050-jpeg-xs-wavelet-perceptual-allocation.md) | JPEG XS, Guetzli, JPEG AI | Shallow wavelet precinct coding and bounded perceptual allocation toward 10x | Reviewed |
