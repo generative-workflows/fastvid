@@ -141,6 +141,7 @@ __global__ void predict_tiles_kernel(
   const int64_t width = metadata[tile * 7 + 4];
   const int64_t height = metadata[tile * 7 + 5];
   const int64_t folded_base = metadata[tile * 7 + 6];
+  const int32_t max_quantized = (max_sample + step - 1) / step;
 
   for (int64_t diagonal = 0; diagonal < width + height - 1; ++diagonal) {
     const int64_t diagonal_begin = diagonal - width + 1;
@@ -162,14 +163,20 @@ __global__ void predict_tiles_kernel(
           : 0;
       int32_t prediction = static_cast<int32_t>(left) + static_cast<int32_t>(above) -
           static_cast<int32_t>(upper_left);
-      prediction = max(0, min(max_sample, prediction));
-      const int32_t residual = static_cast<int32_t>(sample) - prediction;
-      const int32_t magnitude = (abs(residual) + step / 2) / step;
-      const int32_t quantized = residual < 0 ? -magnitude : magnitude;
-      const int32_t reconstructed_value =
-          max(0, min(max_sample, prediction + quantized * step));
-      reconstructed[index] = static_cast<uint16_t>(reconstructed_value);
-      folded[folded_base + y * width + x] = zigzag(quantized);
+      prediction = max(0, min(max_quantized, prediction));
+      const int32_t base_quantized = static_cast<int32_t>(sample) / step;
+      const int32_t remainder = static_cast<int32_t>(sample) - base_quantized * step;
+      const int32_t global_x = static_cast<int32_t>(origin_x + x);
+      const int32_t global_y = static_cast<int32_t>(origin_y + y);
+      const int32_t threshold_index =
+          ((global_x & 1) << 5) | ((global_y & 1) << 4) |
+          ((global_x & 2) << 2) | ((global_y & 2) << 1) |
+          ((global_x & 4) >> 1) | ((global_y & 4) >> 2);
+      const int32_t target = min(max_quantized, base_quantized +
+          (remainder * 128 > (threshold_index * 2 + 1) * step));
+      const int32_t residual = target - prediction;
+      reconstructed[index] = static_cast<uint16_t>(target);
+      folded[folded_base + y * width + x] = zigzag(residual);
     }
     __syncthreads();
   }
