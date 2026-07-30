@@ -517,10 +517,14 @@ __global__ void decode_order0_shards_kernel(
   }
   __syncthreads();
   if (!valid) return;
-  for (int symbol = threadIdx.x; symbol < symbol_count; symbol += blockDim.x) {
+  const int warp = threadIdx.x / 32;
+  const int lane = threadIdx.x % 32;
+  for (int symbol = warp; symbol < symbol_count; symbol += blockDim.x / 32) {
     const int begin = cumulative[symbol];
     const int end = begin + frequency[symbol];
-    for (int slot = begin; slot < end; ++slot) table[slot] = static_cast<uint8_t>(symbol);
+    for (int slot = begin + lane; slot < end; slot += 32) {
+      table[slot] = static_cast<uint8_t>(symbol);
+    }
   }
   __syncthreads();
   if (threadIdx.x < 4) {

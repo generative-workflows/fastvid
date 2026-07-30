@@ -821,13 +821,29 @@ torch::Tensor fastvid_encode_cuda(
     analysis_cpu = run_analysis(step, true, true);
     analysis_data = analysis_cpu.data_ptr<int64_t>();
   }
-  const bool refined_gray16 = layout == 0 && bit_depth == 16 && step > 1 &&
-      (baseline_payload_bytes < total_samples / 5 ||
-       baseline_payload_bytes > total_samples / 2);
-  if (refined_gray16) {
-    step = refined_gray16_step(quality);
-    analysis_cpu = run_analysis(step, false, true);
-    analysis_data = analysis_cpu.data_ptr<int64_t>();
+  bool refined_gray16 = false;
+  if (layout == 0 && bit_depth == 16 && step > 1) {
+    const bool direct_refinement = baseline_payload_bytes < total_samples / 10 ||
+        baseline_payload_bytes > total_samples / 2;
+    const bool probe_refinement = !direct_refinement &&
+        baseline_payload_bytes < total_samples / 5;
+    if (direct_refinement || probe_refinement) {
+      const int32_t baseline_step = step;
+      step = refined_gray16_step(quality);
+      analysis_cpu = run_analysis(step, false, true);
+      analysis_data = analysis_cpu.data_ptr<int64_t>();
+      int64_t refined_payload_bytes = 0;
+      for (int64_t shard = 0; shard < total_shards; ++shard) {
+        refined_payload_bytes += analysis_data[shard * 8 + 3];
+      }
+      refined_gray16 = direct_refinement ||
+          refined_payload_bytes < total_samples / 10;
+      if (!refined_gray16) {
+        step = baseline_step;
+        analysis_cpu = run_analysis(step, false, true);
+        analysis_data = analysis_cpu.data_ptr<int64_t>();
+      }
+    }
   }
   std::vector<int64_t> tile_lengths(tiles.size(), 0);
   std::vector<int64_t> block_shards;
