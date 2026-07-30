@@ -77,6 +77,11 @@ canonical evaluator or establish acceptance.
 
 Reject any candidate that fails a correctness, coverage, determinism, or performance gate. Only when the recorded baseline is failing, a candidate may be accepted as long as it strictly reduces worst-case quality violation, introduces no new failures or regressions, and does not increase total compressed size.
 
+### Caching Evaluation Results
+
+Running evaluation is expensive. When a baseline hasn't changed, it's wasteful to re-run it.
+We should store evaluation results in an untracked `evaluation_results` directory, where the filename includes a checksum of the CUDA binary. When evaluating baseline results, check this cache first and skip potentially expensive runs.
+
 ## Research and Experiment Records
 
 Keep research notes in `research/`, indexed by `research/INDEX.md`. Cite open
