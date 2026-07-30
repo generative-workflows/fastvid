@@ -160,9 +160,15 @@ __global__ void predict_tiles_kernel(
       const uint16_t upper_left = x > 0 && y > 0
           ? reconstructed[index - plane_width - 1]
           : 0;
-      int32_t prediction = static_cast<int32_t>(left) + static_cast<int32_t>(above) -
-          static_cast<int32_t>(upper_left);
-      prediction = max(0, min(max_sample, prediction));
+      int32_t prediction;
+      if (upper_left >= max(left, above)) {
+        prediction = min(left, above);
+      } else if (upper_left <= min(left, above)) {
+        prediction = max(left, above);
+      } else {
+        prediction = static_cast<int32_t>(left) + static_cast<int32_t>(above) -
+            static_cast<int32_t>(upper_left);
+      }
       const int32_t residual = static_cast<int32_t>(sample) - prediction;
       const int32_t magnitude = (abs(residual) + step / 2) / step;
       const int32_t quantized = residual < 0 ? -magnitude : magnitude;
