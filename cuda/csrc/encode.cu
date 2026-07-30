@@ -69,16 +69,18 @@ std::vector<Tile> expected_tiles(
 }
 
 int32_t quantization_step(int64_t layout, int64_t bit_depth, int64_t quality) {
-  if (layout == 0 && bit_depth == 8) {
+  if (bit_depth == 8) {
     return 1;
   }
   int32_t denominator = 6;
-  if (layout == 1 && bit_depth == 10) {
-    denominator = 20;
+  if (layout == 0 && bit_depth == 10) {
+    denominator = 24;
+  } else if (layout == 1 && bit_depth == 10) {
+    denominator = 40;
   } else if (layout == 1 && bit_depth == 16) {
-    denominator = 12;
+    denominator = 24;
   } else if (layout == 2 && bit_depth == 10) {
-    denominator = 10;
+    denominator = 20;
   }
   const int32_t scale = int32_t{1} << (bit_depth - 8);
   return 1 + ((100 - quality) * scale + denominator - 1) / denominator;
@@ -141,6 +143,7 @@ __global__ void predict_tiles_kernel(
   const int64_t width = metadata[tile * 7 + 4];
   const int64_t height = metadata[tile * 7 + 5];
   const int64_t folded_base = metadata[tile * 7 + 6];
+  const int32_t max_quantized = (max_sample + step - 1) / step;
 
   for (int64_t diagonal = 0; diagonal < width + height - 1; ++diagonal) {
     const int64_t diagonal_begin = diagonal - width + 1;
@@ -162,14 +165,12 @@ __global__ void predict_tiles_kernel(
           : 0;
       int32_t prediction = static_cast<int32_t>(left) + static_cast<int32_t>(above) -
           static_cast<int32_t>(upper_left);
-      prediction = max(0, min(max_sample, prediction));
-      const int32_t residual = static_cast<int32_t>(sample) - prediction;
-      const int32_t magnitude = (abs(residual) + step / 2) / step;
-      const int32_t quantized = residual < 0 ? -magnitude : magnitude;
-      const int32_t reconstructed_value =
-          max(0, min(max_sample, prediction + quantized * step));
-      reconstructed[index] = static_cast<uint16_t>(reconstructed_value);
-      folded[folded_base + y * width + x] = zigzag(quantized);
+      prediction = max(0, min(max_quantized, prediction));
+      const int32_t target = min(max_quantized,
+          (static_cast<int32_t>(sample) + step / 2) / step);
+      const int32_t residual = target - prediction;
+      reconstructed[index] = static_cast<uint16_t>(target);
+      folded[folded_base + y * width + x] = zigzag(residual);
     }
     __syncthreads();
   }
